@@ -1,0 +1,59 @@
+# ─── Herramientas externas / dependencias (no son código del proyecto) ───
+CSpect/
+zxbasic/
+*.exe
+
+# ─── Imágenes de disco / medios grandes de emulador ───
+*.img
+*.iso
+*.vhd
+*.hdf
+*.mp4
+*.wav
+*.zip
+
+# ─── Artefactos de compilación (se regeneran) ───
+build/
+dist/
+__pycache__/
+*.pyc
+*.pyo
+*.spec
+*.fresh
+
+# ─── Juegos: no se sube ninguno (ni datos ni carpetas) ───
+Games/
+
+# ─── Ficheros generados por los exportadores (se recrean al compilar) ───
+*.loading
+*.banks
+*.csv
+*.png
+*.docx
+*.md
+*.pdf
+*.bas
+*.bin
+*.nxi
+*.nxp
+*.dsk
+*.tap
+*.nex
+*.sna
+*.scr
+# Excepciones: estos .bas son CODIGO FUENTE (plantillas de fuente), no generados
+!print42_es.bas
+!print64_es.bas
+!print42_pt.bas
+!print64_pt.bas
+# Excepcion: la musica del titulo es fuente (no generada)
+!music/**
+
+# ─── Configuración local de la máquina ───
+scriba_build.json
+
+# ─── Sistema ───
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak

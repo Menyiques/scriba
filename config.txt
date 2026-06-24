@@ -1,0 +1,31 @@
+[zxbc]
+debug_level = 0
+optimization_level = 2
+case_insensitive = false
+array_base = 0
+default_byref = false
+max_syntax_errors = 20
+string_base = 0
+memory_map = memorymap.txt
+force_asm_brackets = false
+use_basic_loader = true
+autorun = true
+output_file_type = tap
+include_path = 
+memory_check = false
+strict_bool = false
+array_check = false
+enable_break = false
+emit_backend = false
+explicit = true
+strict = true
+zxnext = false
+architecture = zx48k
+expected_warnings = 0
+hide_warning_codes = false
+opt_strategy = auto
+org = 24000
+heap_size = 1024
+headerless = false
+debug_zxbpp = false
+

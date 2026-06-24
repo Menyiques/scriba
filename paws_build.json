@@ -1,0 +1,6 @@
+{
+  "auto_tap": true,
+  "cmd_48": "zxbc --tap --BASIC --autorun --org 24000 --heap-size 1792 --array-base=0 --string-base=0 -O2 -M memory.txt \"{bas}\"",
+  "cmd_128_compile": "zxbc --org 24576 --heap-size 4096 --array-base=0 --string-base=0 -O2 -M memory.txt \"{bas}\"",
+  "cmd_128_pack": "python empaqueta128.py \"{bin}\" \"{texto}\" \"{tap}\""
+}
