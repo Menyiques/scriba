@@ -25,7 +25,8 @@ COP_EXTRA={'LETX':26,'IF':27,'JMP':28,
  'INK':29,'PAPER':30,'BORDER':31,'PAUSE':32,'CLS':33,
  'WEAR':34,'REMOVE':35,'LIT':36,'UNLIT':37,'SCORE':38,
  'TSTART':39,'TSTOP':40,'TRESET':41,
- 'OPEN':42,'CLOSE':43,'LOCK':44,'UNLOCK':45,'PUTIN':46,'TAKEOUT':47}
+ 'OPEN':42,'CLOSE':43,'LOCK':44,'UNLOCK':45,'PUTIN':46,'TAKEOUT':47,
+ 'PLAY':48}
 def enc_expr(toks):
     # toks: lista RPN como [('CONST',5),('VAR',0),('ADD',),...]  -> bytes (sin END)
     out=bytearray()
@@ -41,7 +42,7 @@ def enc_condacts(clist):
         for a in c[1:]: out.append(a & 0xFF)
     return bytes(out)
 
-def build_game_db(messages, locations, vocab, objects, responses, startloc, sysverbs, width=40, load=DB, proc_before=b'', proc_after=b'', proc_onstart=b'', title_pal=b'', has_music=False, has_title=False, hdrbuf=0, imgbuf=0, loc_slot=b'', vall=0, font_acc=b'', timers=(), llevarmax=0):
+def build_game_db(messages, locations, vocab, objects, responses, startloc, sysverbs, width=40, load=DB, proc_before=b'', proc_after=b'', proc_onstart=b'', title_pal=b'', has_music=False, has_title=False, hdrbuf=0, imgbuf=0, loc_slot=b'', vall=0, font_acc=b'', timers=(), llevarmax=0, fx=b''):
     # Tokens 128..223 (96 max); los codigos 224..239 quedan para los acentos.
     dic=txtpack.build_dict(''.join(messages),96)
     exps=txtpack.expansions(dic); ntok=len(exps)
@@ -57,15 +58,14 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
         _seen.add(_k); _dv.append((_w,_vid,_typ))
     vocab=_dv
     nloc=len(locations); nvocab=len(vocab); nobj=len(objects)
-    if nvocab>255:
+    if nvocab>65535:
         raise ValueError('Vocabulario CPC: %d palabras tras quitar duplicados '
-                         '(maximo 255). Reduce sinonimos en el vocabulario.'
-                         % nvocab)
+                         '(maximo 65535).' % nvocab)
     if nloc>255:
         raise ValueError('CPC: %d localizaciones (maximo 255).' % nloc)
     if nobj>255:
         raise ValueError('CPC: %d objetos (maximo 255).' % nobj)
-    HDR=77
+    HDR=80
     p=load+HDR
     dictidx=p; p+=ntok*2
     ddat=p; dptr=[]; dd=bytearray()
@@ -145,11 +145,13 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     objlock_a = p; p += nobj
     objin_a   = p; p += nobj
     objweight_a = p; p += nobj
+    # ── efectos de sonido FX (blob AY: [nfx][offsets][bloques]); 0 si no hay ──
+    fx_addr = p if fx else 0; p += len(fx)
     out=bytearray()
     def w16(v): out.append(v&0xFF); out.append((v>>8)&0xFF)
     w16(dictidx); w16(msgidx); w16(locidx); w16(vocaddr)          # 8
     out.append(width); out.append(ntok); w16(nmsg)               # 12
-    out.append(nloc); out.append(nvocab); out.append(startloc)   # 15
+    out.append(nloc); out.append(nvocab & 0xFF); out.append(startloc)   # 15 (nvocab byte bajo)
     out.append(sysverbs['look']); out.append(sysverbs['quit'])   # 17
     out.append(nobj)                                             # 18
     w16(objname); w16(objnoun); w16(objloc)                      # 24
@@ -175,6 +177,8 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     w16(objopen_a); w16(objlock_a); w16(objin_a)               # 74 (contenedores)
     w16(objweight_a)                                            # 76 (peso por objeto)
     out.append(llevarmax & 0xFF)                                # 77 (flag LLEVAR_MAX)
+    w16(fx_addr)                                                # 79 (blob FX por AY)
+    out.append((nvocab>>8)&0xFF)                                # 80 (nvocab byte alto)
     assert len(out)==HDR, len(out)
     for x in dptr: w16(x)
     out+=dd
@@ -207,6 +211,7 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     for o in objects: out.append(1 if o.get('locked') else 0)
     for o in objects: out.append(o.get('incont',0)&0xFF)
     for o in objects: out.append(o.get('weight',0)&0xFF)
+    out+=bytes(fx)
     return bytes(out), dict(load=load,ntok=ntok,nmsg=nmsg,nloc=nloc,nvocab=nvocab,nobj=nobj,ntimers=nt,size=len(out))
 
 ENGINE_ASM = r'''
@@ -234,7 +239,9 @@ init:   ld    hl,(DBB+0)
         ld    a,(DBB+8)
         ld    (width),a
         ld    a,(DBB+13)
-        ld    (nvocab),a
+        ld    (nvocab),a          ; nvocab byte bajo
+        ld    a,(DBB+79)
+        ld    (nvocab+1),a        ; nvocab byte alto (vocabulario 16-bit)
         ld    a,(DBB+12)
         ld    (nloc),a
         ld    a,(DBB+14)
@@ -277,6 +284,8 @@ init:   ld    hl,(DBB+0)
         ld    (objweightp),hl
         ld    a,(DBB+76)
         ld    (llevarmax),a
+        ld    hl,(DBB+77)
+        ld    (fxp),hl
         ld    a,(DBB+24)
         ld    (vget),a
         ld    a,(DBB+25)
@@ -1748,7 +1757,11 @@ upcase: cp    97
 
 vocab_lookup:
         ld    a,(nvocab)
-        ld    b,a
+        ld    c,a
+        ld    a,(nvocab+1)
+        ld    b,a             ; BC = nº de palabras (16-bit)
+        or    c
+        ret   z              ; vocabulario vacío -> sin coincidencia
         ld    hl,(vocabp)
 vl_s:   push  hl
         push  bc
@@ -1771,7 +1784,10 @@ vl_nm:  pop   bc
         pop   hl
         ld    de,6
         add   hl,de
-        djnz  vl_s
+        dec   bc
+        ld    a,b
+        or    c
+        jr    nz,vl_s
         or    a
         ret
 
@@ -1979,7 +1995,7 @@ rc_loop:
         cp    e
         jr    nc,rc_end
 rc_go:  call  getop
-        cp    48
+        cp    49
         jr    nc,rc_loop
         add   a,a
         ld    e,a
@@ -2630,6 +2646,82 @@ c_cls:  ld    a,12            ; CLS: borra la ventana de texto actual
         xor   a
         ld    (col),a
         jp    rc_loop
+; PLAY n: reproduce el efecto FX n (1-based) por el AY. Bloqueante: para cada
+; frame escribe R0/R1 (tono), R6 (ruido), R7 (mezclador) y R8 (volumen) del canal
+; A con MC SOUND REGISTER (&BD34, preserva la linea de teclado) y espera un frame
+; con MCWAIT (~50 Hz). Al acabar silencia el canal A. Datos: blob en (fxp), con
+; formato [nfx][off0..][bloques]; cada offset relativo al inicio del blob.
+c_play: call  getop           ; A = numero de efecto (1-based)
+        ld    b,a             ; B = n (preservar)
+        or    a
+        jp    z,rc_loop       ; n=0 -> nada
+        ld    hl,(fxp)
+        ld    a,h
+        or    l
+        jp    z,rc_loop       ; sin datos FX
+        ld    a,(hl)          ; nfx
+        cp    b
+        jp    c,rc_loop       ; nfx < n -> fuera de rango
+        ld    a,b
+        dec   a
+        add   a,a            ; (n-1)*2
+        ld    e,a
+        ld    d,0
+        inc   hl             ; fxp+1 (inicio tabla de offsets)
+        add   hl,de          ; -> &offset[n-1]
+        ld    e,(hl)
+        inc   hl
+        ld    d,(hl)         ; DE = offset (relativo a fxp)
+        ld    a,d
+        or    e
+        jp    z,rc_loop      ; offset 0 -> efecto no incluido
+        ld    hl,(fxp)
+        add   hl,de          ; HL -> bloque del efecto
+        ld    a,(hl)         ; nframes
+        inc   hl
+        or    a
+        jp    z,rc_loop
+        ld    b,a            ; B = contador de frames
+cpl_f:  push  bc
+        xor   a             ; reg 0 (tono lo)
+        ld    c,(hl)
+        push  hl
+        call  SNDREG
+        pop   hl
+        inc   hl
+        ld    a,1           ; reg 1 (tono hi)
+        ld    c,(hl)
+        push  hl
+        call  SNDREG
+        pop   hl
+        inc   hl
+        ld    a,6           ; reg 6 (ruido)
+        ld    c,(hl)
+        push  hl
+        call  SNDREG
+        pop   hl
+        inc   hl
+        ld    a,7           ; reg 7 (mezclador)
+        ld    c,(hl)
+        push  hl
+        call  SNDREG
+        pop   hl
+        inc   hl
+        ld    a,8           ; reg 8 (volumen canal A)
+        ld    c,(hl)
+        push  hl
+        call  SNDREG
+        pop   hl
+        inc   hl
+        push  hl
+        call  MCWAIT        ; esperar 1 frame (~1/50 s)
+        pop   hl
+        pop   bc
+        djnz  cpl_f
+        ld    a,8           ; silenciar canal A (volumen 0)
+        ld    c,0
+        call  SNDREG
+        jp    rc_loop
 CTAB:   defw c_at,c_notat,c_present,c_absent,c_carried,c_notcarr,c_zero,c_notzero,c_eq
         defw c_goto,c_message,c_mes,c_get,c_drop,c_destroy,c_create,c_place,c_set
         defw c_clear,c_let,c_plus,c_minus,c_done,c_desc,c_inven,c_newline
@@ -2638,6 +2730,7 @@ CTAB:   defw c_at,c_notat,c_present,c_absent,c_carried,c_notcarr,c_zero,c_notzer
         defw c_wear,c_remove,c_lit,c_unlit
         defw c_score,c_tstart,c_tstop,c_treset
         defw c_open,c_close,c_lock,c_unlock,c_putin,c_takeout
+        defw c_play
 
 show_title:
         ld    a,(hastitle)
@@ -2769,11 +2862,12 @@ objopensrc: defw 0
 objlocksrc: defw 0
 objinsrc: defw 0
 objweightp: defw 0
+fxp: defw 0
 llevarmax: defb 0
 widx: defb 0
 wtmp: defb 0
 width:    defb 40
-nvocab:   defb 0
+nvocab:   defw 0
 curloc:   defb 0
 nobj:     defb 0
 vlook:    defb 0
@@ -2860,6 +2954,8 @@ def assemble_engine(org=ORG, db_base=DB):
     L.append('MTABLE equ &8000')      # tabla de matrices de usuario (RAM central)
     L.append('ROMCOPY equ &8200')     # rutina de lectura de ROM reubicada (RAM alta)
     L.append('MCWAIT equ &BD19')
+    L.append('SNDQUEUE equ &BCAA')   # SOUND QUEUE (firmware): reproduce FX vía AY
+    L.append('SNDREG equ &BD34')     # MC SOUND REGISTER: A=reg, C=val (FX por AY)
     L.append('KMREAD equ &BB09')
     L.append('KLINIT equ &BCEF')      # KL INIT EVENT
     L.append('KLADDF equ &BCD7')      # KL NEW FRAME FLY (inicializa + añade el evento)

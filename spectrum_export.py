@@ -540,6 +540,16 @@ def stmt2zx(c, linea, dentro_resp):
     if cmd == 'TIMER_RESET':
         t = c.timidx.get(resto.strip(), 0)
         return [f'tcur({t}) = tdur({t})']
+    if cmd == 'PLAY':
+        # PLAY "nombre" (o PLAY n) -> reproduce el efecto FX por el AY. El
+        # reproductor (playfx) solo se inyecta si el juego usa PLAY; en 48K (sin
+        # AY) es mudo. El nombre se resuelve al índice 1-based de la lista de FX.
+        import fx_engine
+        ni = fx_engine.fx_index((c.game.get('fx') or []), resto.strip())
+        if not ni:
+            c.avisos.append(f'PLAY: efecto no encontrado {resto.strip()!r}')
+            return []
+        return [f'playfx({ni})']
     c.avisos.append(f'comando no soportado: {linea!r}')
     return ["' ?? " + translit(linea)]
 
@@ -2646,6 +2656,138 @@ def _psg_defb(stream):
     return '\n'.join(out)
 
 
+# ─── Reproductor de efectos FX por el AY (128K / Next) ───────────────────────
+# Reproduce un efecto bloqueante: para cada frame escribe R0/R1 (tono), R6 (ruido),
+# R7 (mezclador) y R8 (volumen) del canal A y espera 1/50 s con HALT (sincroniza
+# con la interrupcion de video). Al acabar silencia el canal. En 48K (sin chip AY)
+# las salidas a $FFFD/$BFFD no hacen nada: queda mudo, sin colgarse.
+# playfx(n) es FASTCALL: el numero de efecto (1-based) llega en A.
+_FX_PLAYER = '''' ---------- REPRODUCTOR DE EFECTOS FX (AY) ----------
+SUB FASTCALL playfx(n AS UBYTE)
+    asm
+        or a
+        ret z                   ; n=0 -> nada
+        ld hl, fxdata
+        ld c, (hl)              ; C = nfx (numero de ranuras)
+        cp c
+        jr z, fx_in             ; n == nfx -> valido (ultima ranura)
+        ret nc                  ; n > nfx -> fuera de rango
+fx_in:
+        dec a                   ; n-1
+        add a, a                ; (n-1)*2
+        ld e, a
+        ld d, 0
+        inc hl                  ; fxdata+1 (inicio de la tabla de offsets)
+        add hl, de              ; -> &offset[n-1]
+        ld e, (hl)
+        inc hl
+        ld d, (hl)              ; DE = offset (relativo a fxdata)
+        ld a, d
+        or e
+        ret z                   ; offset 0 -> efecto no incluido (mudo)
+        ld hl, fxdata
+        add hl, de              ; HL -> bloque del efecto
+        ld b, (hl)              ; B = nframes
+        inc hl
+        ld a, b
+        or a
+        ret z
+fx_frame:
+        push bc
+        ld bc, 0fffdh
+        xor a
+        out (c), a              ; reg 0 (tono lo)
+        ld a, (hl)
+        ld bc, 0bffdh
+        out (c), a
+        inc hl
+        ld bc, 0fffdh
+        ld a, 1
+        out (c), a              ; reg 1 (tono hi)
+        ld a, (hl)
+        ld bc, 0bffdh
+        out (c), a
+        inc hl
+        ld bc, 0fffdh
+        ld a, 6
+        out (c), a              ; reg 6 (ruido)
+        ld a, (hl)
+        ld bc, 0bffdh
+        out (c), a
+        inc hl
+        ld bc, 0fffdh
+        ld a, 7
+        out (c), a              ; reg 7 (mezclador)
+        ld a, (hl)
+        ld bc, 0bffdh
+        out (c), a
+        inc hl
+        ld bc, 0fffdh
+        ld a, 8
+        out (c), a              ; reg 8 (volumen canal A)
+        ld a, (hl)
+        ld bc, 0bffdh
+        out (c), a
+        inc hl
+        halt                    ; esperar 1/50 s
+        pop bc
+        djnz fx_frame
+        ; silenciar canal A: mezclador todo off y volumen 0
+        ld bc, 0fffdh
+        ld a, 7
+        out (c), a
+        ld bc, 0bffdh
+        ld a, 3fh
+        out (c), a
+        ld bc, 0fffdh
+        ld a, 8
+        out (c), a
+        ld bc, 0bffdh
+        xor a
+        out (c), a
+        ret
+fxdata:
+@FXDATA@
+    end asm
+END SUB
+
+'''
+
+
+def _fx_defb(blob):
+    out = []
+    for i in range(0, len(blob), 16):
+        out.append('        defb ' + ','.join(str(b) for b in blob[i:i + 16]))
+    return '\n'.join(out) if out else '        defb 0'
+
+
+def aplica_fx(src, game, clock=1773400, embed=True):
+    """Si el juego usa PLAY, inyecta el reproductor de FX (playfx) y los datos de
+    los efectos REFERENCIADOS (solo esos) en el codigo. Devuelve src sin cambios
+    si no hay FX en uso. clock: reloj del AY (Spectrum/Next = 1773400).
+    embed=False (p.ej. 48K, sin chip AY): inyecta el reproductor pero SIN datos
+    (nfx=0), para que los playfx() compilen y sean mudos sin gastar RAM."""
+    try:
+        import capabilities
+        import fx_engine
+    except Exception:
+        return src
+    used = capabilities.used_fx(game)
+    if not used:
+        return src
+    if embed:
+        blob = fx_engine.pack_ay_fx(game.get('fx', []) or [], used, clock=clock)
+        if not blob:
+            blob = bytes([0])
+    else:
+        blob = bytes([0])                  # nfx=0 -> playfx siempre retorna (mudo)
+    player = _FX_PLAYER.replace('@FXDATA@', _fx_defb(blob))
+    ancla = "' ---------- SALIDA 64 COLUMNAS CON SCROLL ----------"
+    if ancla in src:
+        return src.replace(ancla, player + ancla, 1)
+    return src + '\n' + player
+
+
 def _leer_psg(musdir):
     """Devuelve (stream_sin_cabecera, nombre) de la musica de music/, o (None,
     None). Prioridad: un .psg hecho a mano; si no hay, convierte un .mid con
@@ -2738,6 +2880,9 @@ def export_bas(game, out_path, progreso=None, modo='48k', columnas=42):
     bin_name = base + '_texto.bin'
     src, rep, bin_blob = comprime(src, nombres, c.avisos, bin_name,
                                   progreso=progreso, modo=modo)
+    # FX por AY: en 128K se embeben los efectos usados; en 48K (sin AY) solo el
+    # reproductor mudo (para que los playfx() compilen sin gastar RAM).
+    src = aplica_fx(src, game, clock=1773400, embed=(modo != '48k'))
     # carpeta de imagenes por modo: 128K -> img/Spectrum (.scr ULA), resto img/.
     _imgsub = {'128k': os.path.join('img', 'Spectrum'),
                '48k': os.path.join('img', '48')}.get(modo, 'img')

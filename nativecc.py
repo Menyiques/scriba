@@ -8,7 +8,7 @@ class Ctx:
         self.msgbase=msgbase; self.messages=[]; self.msgmap={}
         self.vars={}; self.locs={}; self.objs={}
         self.verbs={}; self.nouns={}; self.timers={}
-        self.strict=False; self.warnings=[]
+        self.strict=False; self.warnings=[]; self.fxlist=[]
     def msg(self,t):
         if t in self.msgmap: return self.msgmap[t]
         i=self.msgbase+len(self.messages); self.messages.append(t); self.msgmap[t]=i; return i
@@ -173,6 +173,12 @@ def compile_stmt(ln, up, ctx):
         return bytes([CX['PUTIN'], ctx.obj(a[1]), ctx.obj(a[2])])
     if up.startswith('TAKEOUT'):
         return bytes([CX['TAKEOUT'], ctx.obj(ln.split()[1])])
+    if up.startswith('PLAY'):
+        import fx_engine
+        idx=fx_engine.fx_index(getattr(ctx,'fxlist',[]), ln[4:].strip())
+        if not idx:
+            ctx.warnings.append('PLAY: efecto no encontrado %r'%ln[4:].strip())
+        return bytes([CX['PLAY'], idx & 0xFF])
     raise ValueError('sentencia no soportada: '+ln.split()[0])
 
 def compile_lines(lines,ctx):
@@ -307,6 +313,7 @@ def compile_game(c, sysm, width=40):
     ctx.verbs={w.upper():vid for w,vid in c.verbalias.items()}
     ctx.nouns={w.upper():nid for w,nid in c.nounalias.items()}
     ctx.timers={str(tid).upper():i for i,tid in enumerate(getattr(c,'timids',[]))}
+    ctx.fxlist=(g.get('fx') or [])      # para resolver PLAY "nombre" -> índice
     # vocabulario
     vocab=[]
     for w,vid in c.verbalias.items(): vocab.append((w, vid, 2 if vid<=6 else 0))

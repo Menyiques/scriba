@@ -46,6 +46,20 @@ def export_native(game, dsk_path, modo=2, img_dir=None):
     width = 79 if modo == 2 else 39
     spec, info = nc.compile_game(c, SYS_MSGS, width=width)
 
+    # Efectos de sonido FX (AY): se embeben SOLO los referenciados por PLAY. El
+    # reloj del AY del CPC es 1,0 MHz (los AYFX, hechos a 1,77 MHz del Spectrum,
+    # se reescalan en effect_to_ayframes para conservar el tono).
+    fx_blob = b''
+    try:
+        import capabilities
+        import fx_engine
+        _used = capabilities.used_fx(game)
+        if _used:
+            fx_blob = fx_engine.pack_ay_fx(game.get('fx', []) or [], _used,
+                                           clock=1000000)
+    except Exception:
+        fx_blob = b''
+
     org = ENGINE_ORG
     # Pantalla de titulo (Modo 0, 16 colores). Se convierte ANTES de la base de
     # datos porque su paleta de 16 tintas va DENTRO de la DB (el motor la pone al
@@ -119,7 +133,7 @@ def export_native(game, dsk_path, modo=2, img_dir=None):
             loc_slot=bytes(loc_slot), vall=spec.get('vall', 0),
             font_acc=spec.get('font_acc', b''),
             timers=spec.get('timers', ()),
-            llevarmax=spec.get('llevarmax', 255))[0]
+            llevarmax=spec.get('llevarmax', 255), fx=fx_blob)[0]
     # 1a pasada: longitud de la DB; el buffer de cabecera CAS IN va detras de la DB.
     # imgbuf se fija en &8B00 (zona de la musica, libre durante el juego) porque
     # esta FUERA de la ventana de banca &4000-&7FFF: asi sirve de buffer de

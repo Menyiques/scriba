@@ -20,7 +20,7 @@ import sys
 import copy
 
 # ─── Versión del IDE (incrementar AQUÍ cuando se pida) ──────────────────
-SCRIBA_VERSION   = '2.0'
+SCRIBA_VERSION   = '2.1'
 SCRIBA_COPYRIGHT = '(c) 2026 Menyiques Soft'
 
 try:
@@ -153,6 +153,10 @@ class SearchBar(ttk.Frame):
         text_widget.tag_configure(self.TAG_CUR,
                                    background="#e6a817", foreground="black")
 
+        # Al editar el texto, refrescar las coincidencias (sin desplazar) para que
+        # no queden apariciones "fantasma" del texto que había antes.
+        text_widget.bind("<<Modified>>", self._on_text_change, add="+")
+
         # ── Widgets de la barra ──────────────────────────────────────────
         ttk.Label(self, text=" 🔍").pack(side=tk.LEFT, padx=(4, 1))
 
@@ -196,19 +200,17 @@ class SearchBar(ttk.Frame):
 
     # ── Lógica interna ─────────────────────────────────────────────────────────
 
-    def _do_search(self):
+    def _rescan(self):
+        """Recalcula la lista de coincidencias y los resaltados a partir del texto
+        ACTUAL del widget. No toca el índice ni desplaza la vista."""
         query = self._svar.get()
         self._clear_tags()
         self._hits = []
-        self._idx  = -1
-
         if not query:
-            self._info.config(text="")
             return
-
-        tw    = self._tw
+        tw = self._tw
         nocase = not self._case_var.get()
-        pos   = "1.0"
+        pos = "1.0"
         while True:
             found = tw.search(query, pos, stopindex=tk.END, nocase=nocase)
             if not found:
@@ -218,21 +220,45 @@ class SearchBar(ttk.Frame):
             tw.tag_add(self.TAG_ALL, found, end)
             pos = end
 
-        n = len(self._hits)
-        if n == 0:
-            self._info.config(text="0 resultados")
-        else:
-            self._idx = 0
-            self._highlight_current()
+    def _do_search(self, scroll=True):
+        self._rescan()
+        if not self._hits:
+            self._idx = -1
+            self._info.config(text="0 resultados" if self._svar.get() else "")
+            return
+        self._idx = 0
+        self._highlight_current(scroll)
+
+    def _on_text_change(self, event=None):
+        """El contenido del text widget ha cambiado: recalcula las coincidencias
+        para no dejar 'fantasmas' del texto anterior. No desplaza la vista."""
+        tw = self._tw
+        try:
+            if not tw.edit_modified():
+                return
+            tw.edit_modified(False)   # rearmar el evento para próximos cambios
+        except tk.TclError:
+            return
+        if self.winfo_ismapped() and self._svar.get():
+            self._do_search(scroll=False)
 
     def _step(self, delta):
+        # Re-escanear SIEMPRE: si el texto cambió desde la última búsqueda, las
+        # posiciones viejas eran "fantasma". Así nunca navega a algo inexistente.
+        prev = self._idx
+        self._rescan()
         if not self._hits:
+            self._idx = -1
+            self._info.config(text="0 resultados" if self._svar.get() else "")
             self._entry.focus_set()
             return
-        self._idx = (self._idx + delta) % len(self._hits)
+        if prev < 0:
+            self._idx = 0
+        else:
+            self._idx = (prev + delta) % len(self._hits)
         self._highlight_current()
 
-    def _highlight_current(self):
+    def _highlight_current(self, scroll=True):
         tw = self._tw
         tw.tag_remove(self.TAG_CUR, "1.0", tk.END)
         if self._idx < 0 or not self._hits:
@@ -240,7 +266,8 @@ class SearchBar(ttk.Frame):
         s, e = self._hits[self._idx]
         tw.tag_add(self.TAG_CUR, s, e)
         tw.tag_raise(self.TAG_CUR, self.TAG_ALL)
-        tw.see(s)
+        if scroll:
+            tw.see(s)
         self._info.config(text=f"{self._idx + 1}/{len(self._hits)}")
 
     def _clear_tags(self):
@@ -329,7 +356,8 @@ class ScribaEditor:
             "condacts": {
                 "on_start": "", "before_turn": "",
                 "after_turn": "", "on_end": "", "responses": ""
-            }
+            },
+            "fx": []
         }
 
     def _unique_id(self, prefix="loc"):
@@ -763,6 +791,7 @@ class ScribaEditor:
         self._build_vocab_tab()
         self._build_vars_tab()
         self._build_timers_tab()
+        self._build_fx_tab()
         self._build_condacts_tab()
         self._build_crossref_tab()
         self._build_problems_tab()
@@ -3609,6 +3638,482 @@ class ScribaEditor:
     _CS_NONE_VOC  = '(ninguna palabra)'
     _CS_HDR       = '>>> '          # prefijo de las cabeceras de bloque
 
+    # ─── Tab: FX (efectos de sonido beeper) ─────────────────────────────────
+
+    def _build_fx_tab(self):
+        fr = ttk.Frame(self.nb)
+        self.nb.add(fr, text=' FX ')
+        self._fx_cur = -1
+        # Izquierda: lista de efectos + botones CRUD
+        left = ttk.Frame(fr)
+        left.pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=4)
+        ttk.Label(left, text='Efectos (úsalos con PLAY "nombre"):').pack(anchor=tk.W)
+        self.fx_list = tk.Listbox(left, width=24, height=16,
+                                  exportselection=False, font=self.fnt_code)
+        self.fx_list.pack(fill=tk.Y, expand=True)
+        self.fx_list.bind('<<ListboxSelect>>', lambda e: self._fx_select())
+        self.fx_list.bind('<Double-Button-1>', lambda e: self._fx_play())
+        b1 = ttk.Frame(left)
+        b1.pack(fill=tk.X, pady=(4, 0))
+        for txt, cmd in (('Nuevo', self._fx_new), ('Plantilla', self._fx_template),
+                         ('Duplicar', self._fx_dup)):
+            ttk.Button(b1, text=txt, width=8, command=cmd).pack(side=tk.LEFT, padx=1)
+        b2 = ttk.Frame(left)
+        b2.pack(fill=tk.X, pady=(2, 0))
+        for txt, cmd in (('Renombrar', self._fx_rename), ('Borrar', self._fx_del)):
+            ttk.Button(b2, text=txt, width=12, command=cmd).pack(side=tk.LEFT, padx=1)
+        b3 = ttk.Frame(left)
+        b3.pack(fill=tk.X, pady=(2, 0))
+        ttk.Button(b3, text='Importar .afx / .afb (AYFX)',
+                   command=self._fx_import).pack(side=tk.LEFT, padx=1)
+        # Derecha: bloques del efecto seleccionado
+        right = ttk.Frame(fr)
+        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self.fx_title = ttk.Label(right, text='Bloques del efecto', font=self.fnt_bold)
+        self.fx_title.pack(anchor=tk.W)
+        ttk.Label(right, text='p1=altura inicial, p2=altura final (deslizado), '
+                  'dur=duración, ruido=sí/no. Alturas 1-255, dur 1-255.',
+                  font=self.fnt_sm).pack(anchor=tk.W, pady=(0, 3))
+        cols = ('p1', 'p2', 'dur', 'ruido')
+        self.fx_blocks = ttk.Treeview(right, columns=cols, show='headings',
+                                      height=12, selectmode='browse')
+        for c, w in zip(cols, (60, 60, 60, 60)):
+            self.fx_blocks.heading(c, text=c)
+            self.fx_blocks.column(c, width=w, anchor=tk.CENTER)
+        self.fx_blocks.pack(fill=tk.BOTH, expand=True)
+        self.fx_blocks.bind('<Double-Button-1>', lambda e: self._fx_block_edit())
+        bb = ttk.Frame(right)
+        bb.pack(fill=tk.X, pady=(4, 0))
+        for txt, cmd in (('+ Bloque', self._fx_block_add),
+                         ('Editar', self._fx_block_edit),
+                         ('Eliminar', self._fx_block_del),
+                         ('▲', lambda: self._fx_block_move(-1)),
+                         ('▼', lambda: self._fx_block_move(1))):
+            ttk.Button(bb, text=txt, width=9, command=cmd).pack(side=tk.LEFT, padx=1)
+        ttk.Button(bb, text='▶ Probar', command=self._fx_play).pack(side=tk.RIGHT, padx=1)
+
+    def _fx_all(self):
+        fx = self.game.setdefault('fx', [])
+        if not isinstance(fx, list):
+            fx = []
+            self.game['fx'] = fx
+        return fx
+
+    def _load_fx_to_form(self):
+        if not hasattr(self, 'fx_list'):
+            return
+        self.fx_list.delete(0, tk.END)
+        for i, e in enumerate(self._fx_all(), 1):
+            tag = 'AY' if e.get('afx') else 'syn'
+            self.fx_list.insert(tk.END, '%2d. [%s] %s'
+                                % (i, tag, e.get('name', 'efecto')))
+        self._fx_cur = -1
+        self._fx_load_blocks()
+
+    def _fx_select(self):
+        s = self.fx_list.curselection()
+        self._fx_cur = s[0] if s else -1
+        self._fx_load_blocks()
+
+    def _fx_load_blocks(self):
+        self.fx_blocks.delete(*self.fx_blocks.get_children())
+        fx = self._fx_all()
+        if 0 <= self._fx_cur < len(fx):
+            e = fx[self._fx_cur]
+            if e.get('afx'):
+                try:
+                    import afx as _afx
+                    nfr = len(_afx.parse_afx(bytes.fromhex(e['afx'])))
+                except Exception:
+                    nfr = 0
+                self.fx_title.config(
+                    text='«%s» — efecto AYFX importado (%d frames). Se edita en '
+                    'el AY Sound FX Editor; aquí puedes probarlo y usarlo con '
+                    'PLAY "%s".' % (e.get('name', ''), nfr, e.get('name', '')))
+                return
+            self.fx_title.config(text='Bloques de «%s»' % e.get('name', ''))
+            for b in e.get('blocks', []):
+                self.fx_blocks.insert('', tk.END, values=(
+                    b.get('p1', 1), b.get('p2', b.get('p1', 1)),
+                    b.get('dur', 1), 'sí' if b.get('noise') else 'no'))
+        else:
+            self.fx_title.config(text='Bloques del efecto')
+
+    def _fx_cur_effect(self):
+        fx = self._fx_all()
+        return fx[self._fx_cur] if 0 <= self._fx_cur < len(fx) else None
+
+    def _fx_new(self):
+        fx = self._fx_all()
+        fx.append({'name': 'efecto%d' % (len(fx) + 1),
+                   'blocks': [{'p1': 120, 'p2': 120, 'dur': 5, 'noise': 0}]})
+        self.dirty = True
+        self._load_fx_to_form()
+        self.fx_list.selection_set(len(fx) - 1)
+        self._fx_select()
+
+    def _fx_template(self):
+        import fx_engine
+        names = list(fx_engine.PRESETS.keys())
+        dlg = tk.Toplevel(self.root)
+        dlg.title('Nuevo efecto desde plantilla')
+        dlg.transient(self.root)
+        dlg.grab_set()
+        ttk.Label(dlg, text='Elige una plantilla:').pack(padx=12, pady=(12, 4))
+        var = tk.StringVar(value=names[0])
+        ttk.Combobox(dlg, textvariable=var, values=names, state='readonly',
+                     width=20).pack(padx=12)
+
+        def ok():
+            import copy as _c
+            preset = _c.deepcopy(fx_engine.PRESETS[var.get()])
+            fx = self._fx_all()
+            preset['name'] = preset.get('name', var.get())
+            fx.append(preset)
+            self.dirty = True
+            dlg.destroy()
+            self._load_fx_to_form()
+            self.fx_list.selection_set(len(fx) - 1)
+            self._fx_select()
+        bf = ttk.Frame(dlg)
+        bf.pack(pady=10)
+        ttk.Button(bf, text='Crear', command=ok).pack(side=tk.LEFT, padx=3)
+        ttk.Button(bf, text='Cancelar', command=dlg.destroy).pack(side=tk.LEFT, padx=3)
+
+    def _fx_dup(self):
+        e = self._fx_cur_effect()
+        if not e:
+            return
+        import copy as _c
+        d = _c.deepcopy(e)
+        d['name'] = e.get('name', 'efecto') + '_copia'
+        fx = self._fx_all()
+        fx.insert(self._fx_cur + 1, d)
+        self.dirty = True
+        self._load_fx_to_form()
+        self.fx_list.selection_set(self._fx_cur + 1)
+        self._fx_select()
+
+    def _fx_rename(self):
+        e = self._fx_cur_effect()
+        if not e:
+            return
+        from tkinter import simpledialog
+        v = simpledialog.askstring('Renombrar efecto', 'Nombre:',
+                                   initialvalue=e.get('name', ''), parent=self.root)
+        if v:
+            e['name'] = v.strip()
+            self.dirty = True
+            cur = self._fx_cur
+            self._load_fx_to_form()
+            self.fx_list.selection_set(cur)
+            self._fx_select()
+
+    def _fx_del(self):
+        e = self._fx_cur_effect()
+        if not e:
+            return
+        if not messagebox.askyesno('Borrar efecto',
+                                   '¿Borrar «%s»?\n(Los PLAY que usen ese nombre '
+                                   'dejarán de sonar.)' % e.get('name', '')):
+            return
+        del self._fx_all()[self._fx_cur]
+        self.dirty = True
+        self._load_fx_to_form()
+
+    def _fx_block_dialog(self, init=None):
+        init = init or {'p1': 120, 'p2': 120, 'dur': 5, 'noise': 0}
+        dlg = tk.Toplevel(self.root)
+        dlg.title('Bloque de sonido')
+        dlg.transient(self.root)
+        dlg.grab_set()
+        vp1 = tk.IntVar(value=int(init.get('p1', 120)))
+        vp2 = tk.IntVar(value=int(init.get('p2', init.get('p1', 120))))
+        vd = tk.IntVar(value=int(init.get('dur', 5)))
+        vn = tk.BooleanVar(value=bool(init.get('noise', 0)))
+        g = ttk.Frame(dlg)
+        g.pack(padx=12, pady=12)
+        rows = (('Altura inicial (p1) 1-255', vp1),
+                ('Altura final (p2) 1-255', vp2),
+                ('Duración (dur) 1-255', vd))
+        for i, (lbl, var) in enumerate(rows):
+            ttk.Label(g, text=lbl).grid(row=i, column=0, sticky=tk.W, pady=2)
+            ttk.Spinbox(g, from_=1, to=255, textvariable=var,
+                        width=6).grid(row=i, column=1, padx=6)
+        ttk.Checkbutton(g, text='Ruido', variable=vn).grid(row=3, column=0,
+                                                           sticky=tk.W, pady=2)
+        res = {}
+
+        def ok():
+            res.update(p1=max(1, min(255, vp1.get())),
+                       p2=max(1, min(255, vp2.get())),
+                       dur=max(1, min(255, vd.get())),
+                       noise=1 if vn.get() else 0)
+            dlg.destroy()
+        bf = ttk.Frame(dlg)
+        bf.pack(pady=(0, 10))
+        ttk.Button(bf, text='Aceptar', command=ok).pack(side=tk.LEFT, padx=3)
+        ttk.Button(bf, text='Cancelar', command=dlg.destroy).pack(side=tk.LEFT, padx=3)
+        dlg.wait_window()
+        return res or None
+
+    def _fx_block_add(self):
+        e = self._fx_cur_effect()
+        if not e:
+            messagebox.showinfo('FX', 'Crea o selecciona un efecto primero.')
+            return
+        if e.get('afx'):
+            messagebox.showinfo('FX', 'Es un efecto AYFX importado: se edita en el '
+                                'AY Sound FX Editor de Shiru, no aquí.')
+            return
+        b = self._fx_block_dialog()
+        if b:
+            e.setdefault('blocks', []).append(b)
+            self.dirty = True
+            self._fx_load_blocks()
+
+    def _fx_block_sel(self):
+        s = self.fx_blocks.selection()
+        if not s:
+            return -1
+        return self.fx_blocks.index(s[0])
+
+    def _fx_block_edit(self):
+        e = self._fx_cur_effect()
+        i = self._fx_block_sel()
+        if not e or i < 0:
+            return
+        b = self._fx_block_dialog(e['blocks'][i])
+        if b:
+            e['blocks'][i] = b
+            self.dirty = True
+            self._fx_load_blocks()
+
+    def _fx_block_del(self):
+        e = self._fx_cur_effect()
+        i = self._fx_block_sel()
+        if not e or i < 0:
+            return
+        del e['blocks'][i]
+        self.dirty = True
+        self._fx_load_blocks()
+
+    def _fx_block_move(self, d):
+        e = self._fx_cur_effect()
+        i = self._fx_block_sel()
+        if not e or i < 0:
+            return
+        j = i + d
+        bl = e['blocks']
+        if 0 <= j < len(bl):
+            bl[i], bl[j] = bl[j], bl[i]
+            self.dirty = True
+            self._fx_load_blocks()
+            ch = self.fx_blocks.get_children()
+            if j < len(ch):
+                self.fx_blocks.selection_set(ch[j])
+
+    def _play_wav_bytes(self, data):
+        """Reproduce un WAV (bytes) por el altavoz del PC. Usa winsound si está
+        (Windows) y, si no, vuelca a un temporal y lo abre con el reproductor."""
+        try:
+            import winsound
+            winsound.PlaySound(data, winsound.SND_MEMORY | winsound.SND_ASYNC)
+            return
+        except Exception:
+            pass
+        try:
+            import tempfile
+            fp = os.path.join(tempfile.gettempdir(), 'scriba_fx.wav')
+            with open(fp, 'wb') as f:
+                f.write(data)
+            if sys.platform.startswith('win'):
+                os.startfile(fp)
+            elif sys.platform == 'darwin':
+                import subprocess
+                subprocess.Popen(['afplay', fp])
+            else:
+                import subprocess
+                subprocess.Popen(['aplay', fp])
+        except Exception as ex:
+            messagebox.showinfo('FX', 'Vista previa no disponible aquí: %s' % ex)
+
+    def _fx_wav_of(self, e):
+        """WAV (bytes) de un efecto (AYFX importado o sintetizado)."""
+        if e.get('afx'):
+            import afx as _afx
+            return _afx.render_wav(_afx.parse_afx(bytes.fromhex(e['afx'])))
+        import fx_engine
+        return fx_engine.wav_bytes(e)
+
+    def _fx_play(self):
+        e = self._fx_cur_effect()
+        if not e:
+            return
+        try:
+            data = self._fx_wav_of(e)
+        except Exception as ex:
+            messagebox.showerror('FX', 'No se pudo sintetizar: %s' % ex)
+            return
+        self._play_wav_bytes(data)
+
+    def _fx_import(self):
+        """Importa efectos del AY Sound FX Editor de Shiru (.afx único o banco
+        .afb). Abre un diálogo para OÍR cada efecto candidato y elegir SOLO los que
+        interesen: así los importados quedan numerados de forma compacta (1,2,3...)
+        y los PLAY n no dejan huecos. Quedan como efectos 'AY' (PLAY n)."""
+        paths = filedialog.askopenfilenames(
+            title='Importar efectos AYFX (.afx / .afb)',
+            filetypes=[('AYFX', '*.afx *.afb'), ('Todos', '*.*')])
+        if not paths:
+            return
+        import afx as _afx
+        # Reunir candidatos (sin añadir nada todavía).
+        cand = []      # cada uno: {'name','afx'(hex),'frames','dur'}
+        for p in paths:
+            try:
+                data = open(p, 'rb').read()
+            except Exception:
+                continue
+            base = os.path.splitext(os.path.basename(p))[0]
+            raws = (_afx.split_afb(data) if p.lower().endswith('.afb')
+                    else [data])
+            multi = len(raws) > 1
+            for k, raw in enumerate(raws):
+                fr = _afx.parse_afx(raw)
+                if not fr:
+                    continue
+                cand.append({'name': ('%s_%d' % (base, k + 1)) if multi else base,
+                             'afx': raw.hex(), 'frames': len(fr),
+                             'dur': len(fr) / 50.0})
+        if not cand:
+            messagebox.showwarning('Importar AYFX',
+                                   'No se pudo leer ningún efecto de esos archivos.')
+            return
+        self._fx_preview_dialog(cand)
+
+    _FX_OFF = '☐'      # ☐ casilla vacía
+    _FX_ON = '☑'       # ☑ casilla marcada
+
+    def _fx_preview_dialog(self, cand):
+        """Diálogo de importación. Siempre hay un sonido resaltado (blanco sobre
+        azul): moverse con ↑/↓ (o clic) cambia el resaltado y REPRODUCE ese sonido;
+        ESPACIO marca/desmarca su casilla. Solo se importan los marcados (índices
+        PLAY compactos, sin huecos)."""
+        dlg = tk.Toplevel(self.root)
+        dlg.title('Previsualizar e importar AYFX')
+        dlg.transient(self.root)
+        dlg.grab_set()
+        ttk.Label(dlg, text='↑/↓ o clic: cambia de sonido y lo reproduce.  '
+                  'ESPACIO: marca/desmarca.  Solo se importan los marcados.',
+                  wraplength=460, justify=tk.LEFT,
+                  foreground='#556677').pack(anchor=tk.W, padx=10, pady=(10, 4))
+        mid = ttk.Frame(dlg)
+        mid.pack(fill=tk.BOTH, expand=True, padx=10)
+        sb = ttk.Scrollbar(mid, orient=tk.VERTICAL)
+        tv = ttk.Treeview(mid, columns=('chk', 'desc'), show='headings',
+                          height=14, selectmode='browse', yscrollcommand=sb.set)
+        tv.heading('chk', text='✓')
+        tv.column('chk', width=34, anchor=tk.CENTER, stretch=False)
+        tv.heading('desc', text='Efecto')
+        tv.column('desc', width=380, anchor=tk.W)
+        sb.config(command=tv.yview)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        tv.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        ids = []
+        checked = set()                         # iids marcados (por defecto ninguno)
+        for c in cand:
+            iid = tv.insert('', tk.END, values=(
+                self._FX_OFF, '%s   %d frames · %.2fs'
+                % (c['name'], c['frames'], c['dur'])))
+            ids.append(iid)
+
+        info = tk.StringVar(value='')
+        armed = [False]      # evita reproducir en la selección inicial
+
+        def _upd():
+            info.set('%d de %d marcados' % (len(checked), len(cand)))
+
+        def _cur():
+            s = tv.selection()
+            return s[0] if s else (tv.focus() or (ids[0] if ids else None))
+
+        def _play(iid):
+            try:
+                self._play_wav_bytes(self._fx_wav_of(cand[ids.index(iid)]))
+            except Exception as ex:
+                messagebox.showerror('FX', 'No se pudo reproducir: %s' % ex,
+                                     parent=dlg)
+
+        def _on_select(_e=None):
+            if not armed[0]:
+                return
+            iid = _cur()
+            if iid:
+                _play(iid)
+        tv.bind('<<TreeviewSelect>>', _on_select)
+
+        def _toggle(_e=None):
+            iid = _cur()
+            if not iid:
+                return 'break'
+            if iid in checked:
+                checked.discard(iid); tv.set(iid, 'chk', self._FX_OFF)
+            else:
+                checked.add(iid); tv.set(iid, 'chk', self._FX_ON)
+            _upd()
+            return 'break'                       # no usar el espacio para otra cosa
+        tv.bind('<space>', _toggle)
+
+        def _all():
+            checked.clear(); checked.update(ids)
+            for iid in ids:
+                tv.set(iid, 'chk', self._FX_ON)
+            _upd()
+
+        def _none():
+            checked.clear()
+            for iid in ids:
+                tv.set(iid, 'chk', self._FX_OFF)
+            _upd()
+
+        def _do_import():
+            sel = [i for i, iid in enumerate(ids) if iid in checked]
+            if not sel:
+                messagebox.showinfo('Importar AYFX',
+                                    'No has marcado ningún efecto.', parent=dlg)
+                return
+            fx = self._fx_all()
+            for i in sel:
+                c = cand[i]
+                fx.append({'name': c['name'], 'afx': c['afx']})
+            dlg.destroy()
+            self.dirty = True
+            self._load_fx_to_form()
+            self.fx_list.selection_set(len(fx) - 1)
+            self._fx_select()
+            messagebox.showinfo('Importar AYFX',
+                                'Importados %d efecto(s).' % len(sel))
+
+        bb = ttk.Frame(dlg)
+        bb.pack(fill=tk.X, padx=10, pady=8)
+        ttk.Button(bb, text='Marcar todo', command=_all).pack(side=tk.LEFT)
+        ttk.Button(bb, text='Desmarcar', command=_none).pack(side=tk.LEFT, padx=4)
+        ttk.Label(bb, textvariable=info, foreground='#7c93ad').pack(side=tk.LEFT,
+                                                                    padx=10)
+        ttk.Button(bb, text='Cancelar', command=dlg.destroy).pack(side=tk.RIGHT)
+        ttk.Button(bb, text='Importar marcados',
+                   command=_do_import).pack(side=tk.RIGHT, padx=4)
+        _upd()
+        # Resaltar el primero y dar el foco al teclado; armar la reproducción tras
+        # asentarse la selección inicial (para no sonar nada al abrir).
+        if ids:
+            tv.selection_set(ids[0]); tv.focus(ids[0])
+        tv.focus_set()
+        dlg.after(200, lambda: armed.__setitem__(0, True))
+        dlg.bind('<Escape>', lambda e: dlg.destroy())
+
     def _build_crossref_tab(self):
         fr = ttk.Frame(self.nb)
         self.nb.add(fr, text=self._CS_TAB_TEXT)
@@ -3986,6 +4491,7 @@ class ScribaEditor:
         self._load_vars_to_form()
         self._load_timers_to_form()
         self._load_condacts_to_form()
+        self._load_fx_to_form()
         self._reset_detalle_forms()
         self._crossref_refresh_combos()
         self._crossref_rebuild()
@@ -4025,6 +4531,13 @@ class ScribaEditor:
         if self.dirty and not messagebox.askyesno(
                 'Sin guardar', 'Hay cambios sin guardar. Continuar?'):
             return
+        # Juego en blanco: cerrar el probador si estaba abierto (no hay nada
+        # que jugar todavía).
+        if self._interp_win is not None:
+            try:
+                self._interp_win.close()
+            except Exception:
+                pass
         self.game      = self._empty_game()
         self.positions = {}
         self.sel       = None
@@ -4071,6 +4584,14 @@ class ScribaEditor:
                            str(len(self.game.get('locations',{}))) + ' locs, ' +
                            str(len(self.game.get('objects',{}))) + ' objetos')
         self._run_validation()
+        # Si el probador de juegos está abierto, reinícialo con el juego recién
+        # cargado (nuevo intérprete, salida/histórico/snapshot limpios).
+        if self._interp_win is not None:
+            try:
+                if self._interp_win.win.winfo_exists():
+                    self._interp_win._restart()
+            except Exception:
+                pass
 
     def _restore_positions(self, editor_data):
         """Restaura posiciones guardadas en '_editor'; si no hay, usa BFS.
@@ -4853,49 +5374,53 @@ class ScribaEditor:
             return ''
 
     def _export_windows(self):
-        """Exporta el juego a un .exe de Windows: reproductor de ventana con las
-        imágenes originales (img/Original). La ventana es redimensionable y el
-        texto se ajusta solo a su ancho (sin columnas fijas). Empaqueta con
-        PyInstaller (vía build_game_exe.py) sin más acción: el .exe queda en
-        <juego>/dist/Windows/. Requiere Python con PyInstaller, pyyaml y pillow
-        instalados en el sistema."""
+        """Exporta el juego a un PAQUETE PORTABLE de Windows: copia el reproductor
+        ScribaPlayer.exe junto al juego (game.yaml + img/Original) en
+        <juego>/dist/Windows/<Título>/ y lo comprime en un .zip. NO compila nada:
+        ni quien exporta ni quien juega necesitan instalar nada. ScribaPlayer.exe
+        se compila UNA sola vez (build_scribaplayer.bat) y viaja junto a Scriba.exe."""
         if not self.game.get('locations'):
             messagebox.showinfo('Exportar', 'Abre o crea un juego primero.')
             return
         if not self.filepath:
             messagebox.showinfo('Exportar', 'Guarda el juego (.yaml) primero.')
             return
-        # Empaquetar el estado vigente: vuelca el juego al .yaml antes de compilar.
         try:
             self._write(self.filepath)
         except Exception:
             pass
 
         import shutil
-        import subprocess
+        import json as _json
         import threading
-        frozen = getattr(sys, 'frozen', False)
-        src_dir = (getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
-                   if frozen else os.path.dirname(os.path.abspath(__file__)))
-        build_script = os.path.join(src_dir, 'build_game_exe.py')
-        # Python con el que lanzar PyInstaller (el .exe congelado no puede; busca
-        # uno del sistema).
-        py = (shutil.which('python') or shutil.which('py')) if frozen \
-            else sys.executable
-        if not py or not os.path.isfile(build_script):
+        import zipfile
+        import re as _re
+        # Localizar el reproductor portable (junto a Scriba.exe, su carpeta padre,
+        # o el código fuente / dist).
+        here = (os.path.dirname(sys.executable) if getattr(sys, 'frozen', False)
+                else os.path.dirname(os.path.abspath(__file__)))
+        cand = [os.path.join(here, 'ScribaPlayer.exe'),
+                os.path.join(os.path.dirname(here), 'ScribaPlayer.exe'),
+                os.path.join(here, 'dist', 'ScribaPlayer.exe')]
+        player_exe = next((c for c in cand if os.path.isfile(c)), None)
+        if not player_exe:
             messagebox.showerror(
                 'Exportar para Windows',
-                'Necesito Python con PyInstaller instalado en el sistema.\n\n'
-                'Instálalo una vez con:\n'
-                '    pip install pyinstaller pyyaml pillow')
+                'No encuentro ScribaPlayer.exe (el reproductor portable).\n\n'
+                'Se compila UNA sola vez con build_scribaplayer.bat y se deja '
+                'junto a Scriba.exe. Después, exportar a Windows no necesita '
+                'instalar nada (ni tú ni el jugador).')
             return
 
         yaml_path = self.filepath
         game_dir = os.path.dirname(os.path.abspath(yaml_path))
+        title = (self.game.get('metadata', {}).get('title')
+                 or os.path.splitext(os.path.basename(yaml_path))[0])
+        safe = _re.sub(r'[^\w .\-]+', '', title).strip() or 'Aventura'
         distdir = os.path.join(game_dir, 'dist', 'Windows')
-        cmd = [py, build_script, yaml_path]
+        outdir = os.path.join(distdir, safe)
+        zip_path = os.path.join(distdir, safe + '_windows.zip')
 
-        # Ventana de progreso (barra indeterminada; PyInstaller no informa de %).
         win = tk.Toplevel(self.root)
         win.title('Exportando para Windows')
         win.transient(self.root)
@@ -4903,9 +5428,7 @@ class ScribaEditor:
         win.resizable(False, False)
         win.protocol('WM_DELETE_WINDOW', lambda: None)
         ttk.Label(win, justify=tk.LEFT, width=46, anchor=tk.W,
-                  text=('Generando el .exe con PyInstaller…\n'
-                        'Puede tardar un minuto la primera vez.')).pack(
-            padx=16, pady=(14, 8))
+                  text='Preparando el paquete portable…').pack(padx=16, pady=(14, 8))
         bar = ttk.Progressbar(win, length=320, mode='indeterminate')
         bar.pack(padx=16, pady=(0, 14))
         bar.start(12)
@@ -4917,21 +5440,36 @@ class ScribaEditor:
         win.geometry(f'+{max(0, px)}+{max(0, py_)}')
 
         def trabajo():
+            err = None
             try:
-                r = subprocess.run(cmd, capture_output=True, text=True,
-                                   timeout=1800)
-                log = (r.stdout or '') + (r.stderr or '')
-                ok = (r.returncode == 0)
+                if os.path.isdir(outdir):
+                    shutil.rmtree(outdir, ignore_errors=True)
+                os.makedirs(outdir, exist_ok=True)
+                shutil.copy2(player_exe, os.path.join(outdir, safe + '.exe'))
+                shutil.copy2(yaml_path, os.path.join(outdir, 'game.yaml'))
+                with open(os.path.join(outdir, 'player_cfg.json'), 'w',
+                          encoding='utf-8') as f:
+                    _json.dump({'game': 'game.yaml', 'title': title}, f,
+                               ensure_ascii=False)
+                orig = os.path.join(game_dir, 'img', 'Original')
+                if os.path.isdir(orig):
+                    dst = os.path.join(outdir, 'img', 'Original')
+                    os.makedirs(dst, exist_ok=True)
+                    for fn in os.listdir(orig):
+                        if fn.lower().endswith(('.png', '.jpg', '.jpeg',
+                                                '.gif', '.bmp')):
+                            shutil.copy2(os.path.join(orig, fn),
+                                         os.path.join(dst, fn))
+                if os.path.isfile(zip_path):
+                    os.remove(zip_path)
+                with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
+                    for root, _d, files in os.walk(outdir):
+                        for fn in files:
+                            fp = os.path.join(root, fn)
+                            arc = os.path.join(safe, os.path.relpath(fp, outdir))
+                            z.write(fp, arc)
             except Exception as e:
-                log, ok = str(e), False
-            exe = None
-            if os.path.isdir(distdir):
-                exes = [f for f in os.listdir(distdir)
-                        if f.lower().endswith('.exe')]
-                if exes:
-                    exe = os.path.join(distdir, max(
-                        exes, key=lambda f: os.path.getmtime(
-                            os.path.join(distdir, f))))
+                err = str(e)
 
             def _fin():
                 try:
@@ -4939,17 +5477,20 @@ class ScribaEditor:
                 except Exception:
                     pass
                 win.destroy()
-                if ok and exe and os.path.isfile(exe):
-                    self.sv_status.set('Exportado a Windows: ' + exe)
-                    if messagebox.askyesno(
-                            'Exportar para Windows',
-                            'Listo:\n%s\n\n¿Abrir la carpeta?' % exe):
-                        self._open_folder(distdir)
-                else:
+                if err:
                     self.sv_status.set('Error al exportar a Windows')
                     messagebox.showerror(
                         'Exportar para Windows',
-                        'No se pudo generar el .exe.\n\n' + (log or '')[-1800:])
+                        'No se pudo crear el paquete portable.\n\n' + err)
+                else:
+                    self.sv_status.set('Exportado a Windows: ' + outdir)
+                    if messagebox.askyesno(
+                            'Exportar para Windows',
+                            'Paquete portable creado (no necesita instalar nada):\n\n'
+                            'Carpeta: %s\nZIP para compartir: %s\n\n'
+                            'El jugador descomprime y ejecuta %s.exe.\n\n'
+                            '¿Abrir la carpeta?' % (outdir, zip_path, safe)):
+                        self._open_folder(distdir)
             self.root.after(0, _fin)
 
         threading.Thread(target=trabajo, daemon=True).start()
@@ -5672,6 +6213,7 @@ class InterpreterWindow:
         self.frame       = parent_frame   # Frame embebido en el editor
         self.history     = []
         self.history_pos = -1
+        self._snap       = None   # snapshot del estado del juego en memoria
         # Debug
         self._debug_mode  = False
         self._step_event  = threading.Event()
@@ -5691,8 +6233,12 @@ class InterpreterWindow:
             b.pack(side=tk.LEFT, padx=2)
             return b
         tbtn('Reiniciar', self._restart)
-        tbtn('💾 Hist.', self._save_history, bg='#1e3a2a')
-        tbtn('▶ Script', self._replay_script, bg='#2a2a4a')
+        tbtn('✎ Editar', self._edit_history, bg='#2a2a4a')
+        tbtn('💾 Save', self._save_history, bg='#1e3a2a')
+        tbtn('📂 Load', self._replay_script, bg='#2a2a4a')
+        tbtn('📸 Snapshot', self._snapshot, bg='#3a3a1a')
+        self.btn_recall = tbtn('↩ Recall Snap', self._recall_snap, bg='#3a3a1a')
+        self.btn_recall.config(state=tk.DISABLED)   # solo activo si hay snapshot
         tbtn('✕', self.close, bg='#3a1a1a')
         self.lbl_loc = tk.Label(tb, text='Loc: --', bg='#0d1b2a', fg='#7090cc',
                                  font=self.editor.fnt_sm)
@@ -5904,9 +6450,58 @@ class InterpreterWindow:
         self.entry.config(state=tk.NORMAL)
         self.interp = PAWSInterpreter(copy.deepcopy(self.editor.game))
         self.interp.confirm_quit = lambda: True
+        # Reiniciar también el histórico/walkthrough: cada partida empieza limpia
+        # (antes se acumulaban los comandos de sesiones anteriores).
+        self.history = []
+        self.history_pos = -1
+        self._snap = None                       # el snapshot pertenece a la sesión
+        try:
+            self.btn_recall.config(state=tk.DISABLED)
+        except Exception:
+            pass
         self.editor.highlight_player_loc(None)
         self.editor.clear_condact_highlight()
         self._start()
+
+    def _snapshot(self):
+        """Guarda en memoria la situación actual del juego (variables, objetos,
+        timers, localización y turno) para poder volver a ella con Recall Snap."""
+        i = self.interp
+        if i is None:
+            return
+        import copy
+        self._snap = {
+            'variables': copy.deepcopy(i.variables),
+            'objects': copy.deepcopy(i.objects),
+            'timers': copy.deepcopy(i.timers),
+            'player_location': i.player_location,
+            'turns': i.turns,
+            'last_command': i.last_command,
+            'running': i.running,
+        }
+        self.btn_recall.config(state=tk.NORMAL)
+        self._write('[Snapshot guardado (turno %d)]' % i.turns + chr(10), 'special')
+
+    def _recall_snap(self):
+        """Recupera el juego al último snapshot guardado en memoria."""
+        if not self._snap:
+            return
+        import copy
+        i = self.interp
+        s = self._snap
+        i.variables = copy.deepcopy(s['variables'])
+        i.objects = copy.deepcopy(s['objects'])
+        i.timers = copy.deepcopy(s['timers'])
+        i.player_location = s['player_location']
+        i.turns = s['turns']
+        i.last_command = s['last_command']
+        i.running = s.get('running', True)
+        self.entry.config(state=tk.NORMAL)
+        self._write(chr(10) + '[Partida recuperada al último snapshot]'
+                    + chr(10), 'special')
+        self._run_captured(i.describe_location, tag='loc')
+        self._update_status()
+        self.entry.focus_set()
 
     def _submit(self):
         text = self.ivar.get().strip()
@@ -6046,7 +6641,105 @@ class InterpreterWindow:
         self.editor.highlight_player_loc(loc)
         self._update_vars_panel()
 
-    # ── Walkthroughs: guardar historial y reproducir scripts ────────────────
+    # ── Walkthroughs: editar, guardar historial y reproducir scripts ─────────
+
+    def _edit_history(self):
+        """Editor del walkthrough actual: permite eliminar pasos (p. ej. el último),
+        editarlos y reordenarlos antes de guardar."""
+        if not self.history:
+            messagebox.showinfo('Walkthrough vacío',
+                                'Aún no has tecleado ningún comando.')
+            return
+        from tkinter import simpledialog
+        win = tk.Toplevel(self.editor.root)
+        win.title('Editar walkthrough actual')
+        win.transient(self.editor.root)
+        win.grab_set()
+        tmp = list(self.history)
+        tk.Label(win, text='Pasos del walkthrough (elimina, reordena o edita; '
+                 'doble clic para editar):').pack(anchor=tk.W, padx=10, pady=(10, 4))
+        body = tk.Frame(win)
+        body.pack(fill=tk.BOTH, expand=True, padx=10)
+        lb = tk.Listbox(body, width=52, height=16, activestyle='dotbox',
+                        font=self.editor.fnt_code)
+        sb = ttk.Scrollbar(body, command=lb.yview)
+        lb.configure(yscrollcommand=sb.set)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        lb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        def refill(sel=None):
+            lb.delete(0, tk.END)
+            for i, c in enumerate(tmp, 1):
+                lb.insert(tk.END, '%3d.  %s' % (i, c))
+            if sel is not None and 0 <= sel < len(tmp):
+                lb.selection_set(sel)
+                lb.activate(sel)
+                lb.see(sel)
+
+        def cur():
+            s = lb.curselection()
+            return s[0] if s else None
+
+        def del_sel():
+            i = cur()
+            if i is None:
+                return
+            del tmp[i]
+            refill(min(i, len(tmp) - 1))
+
+        def del_last():
+            if tmp:
+                tmp.pop()
+                refill(len(tmp) - 1)
+
+        def move(d):
+            i = cur()
+            if i is None:
+                return
+            j = i + d
+            if 0 <= j < len(tmp):
+                tmp[i], tmp[j] = tmp[j], tmp[i]
+                refill(j)
+
+        def edit_line():
+            i = cur()
+            if i is None:
+                return
+            v = simpledialog.askstring('Editar paso', 'Comando:',
+                                       initialvalue=tmp[i], parent=win)
+            if v is not None:
+                tmp[i] = v.strip()
+                refill(i)
+
+        def clear_all():
+            if messagebox.askyesno('Vaciar', '¿Eliminar todos los pasos?',
+                                   parent=win):
+                tmp.clear()
+                refill()
+
+        lb.bind('<Double-Button-1>', lambda e: edit_line())
+        refill(len(tmp) - 1)
+        bf1 = tk.Frame(win)
+        bf1.pack(fill=tk.X, padx=10, pady=(6, 2))
+        for txt, cmd in (('Eliminar último', del_last),
+                         ('Eliminar selección', del_sel),
+                         ('Editar…', edit_line),
+                         ('▲ Subir', lambda: move(-1)),
+                         ('▼ Bajar', lambda: move(1)),
+                         ('Vaciar', clear_all)):
+            tk.Button(bf1, text=txt, command=cmd).pack(side=tk.LEFT, padx=2)
+        bf2 = tk.Frame(win)
+        bf2.pack(fill=tk.X, padx=10, pady=(4, 10))
+
+        def accept():
+            self.history = list(tmp)
+            self.history_pos = -1
+            self._write('[Walkthrough editado: %d pasos]' % len(self.history)
+                        + chr(10), 'special')
+            win.destroy()
+        ttk.Button(bf2, text='Aceptar', command=accept).pack(side=tk.RIGHT, padx=2)
+        ttk.Button(bf2, text='Cancelar',
+                   command=win.destroy).pack(side=tk.RIGHT, padx=2)
 
     def _save_history(self):
         """Guarda los comandos tecleados en esta sesión como walkthrough."""

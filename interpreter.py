@@ -392,6 +392,9 @@ class PAWSBasic:
                      'FLASH', 'INVERSE', 'CLS'):
             pass   # comandos ZX BASIC literales: solo en la exportacion a Spectrum
 
+        elif cmd == 'PLAY':
+            interp.play_fx(rest.strip())   # efecto de sonido (FX)
+
         elif cmd in ('GET', 'DROP', 'LIT', 'UNLIT', 'OPEN', 'CLOSE',
                      'LOCK', 'UNLOCK', 'DESTROY', 'WEAR', 'REMOVE'):
             interp.execute_action({"action": cmd, "args": [rest.strip()]})
@@ -408,6 +411,34 @@ class PAWSBasic:
             print(f"[BASIC: comando desconocido '{cmd}']")
 
 class PAWSInterpreter:
+    def play_fx(self, n):
+        """Reproduce el efecto de sonido referenciado por PLAY (nombre entre
+        comillas o número, 1-based) como vista previa (WAV). En Windows suena; en
+        otros sistemas o sin audio, se ignora en silencio."""
+        fx = self.game.get('fx') or []
+        try:
+            import fx_engine
+            idx = fx_engine.fx_index(fx, n) - 1
+        except Exception:
+            try:
+                idx = int(n) - 1
+            except (TypeError, ValueError):
+                return
+        if not (0 <= idx < len(fx)):
+            return
+        try:
+            import winsound
+            e = fx[idx]
+            if e.get('afx'):
+                import afx as _afx
+                data = _afx.render_wav(_afx.parse_afx(bytes.fromhex(e['afx'])))
+            else:
+                import fx_engine
+                data = fx_engine.wav_bytes(e)
+            winsound.PlaySound(data, winsound.SND_MEMORY | winsound.SND_ASYNC)
+        except Exception:
+            pass
+
     def __init__(self, game: dict):
         self.game = game
         self.meta = game.get("metadata", {})

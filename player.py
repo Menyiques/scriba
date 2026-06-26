@@ -40,10 +40,18 @@ def _frozen_base():
 def cargar_config(argv):
     """Resuelve (game_dict, img_dir, titulo) según el modo.
 
-    Empaquetado: lee player_cfg.json + el .yaml + img/Original del bundle.
-    Suelto: argv[1] = ruta al .yaml."""
+    Empaquetado, dos variantes:
+      • PORTABLE: el juego (game.yaml + player_cfg.json + img/Original) está en la
+        MISMA carpeta que el .exe. Lo usa ScribaPlayer.exe (reproductor genérico).
+      • EMBEBIDO: el juego viaja dentro del .exe (bundle _MEIPASS).
+    Suelto (desde código): argv[1] = ruta al .yaml."""
     base = _frozen_base()
     if base:
+        # Portable: ¿hay datos de juego junto al ejecutable?
+        exedir = os.path.dirname(sys.executable)
+        if (os.path.isfile(os.path.join(exedir, 'player_cfg.json'))
+                or os.path.isfile(os.path.join(exedir, 'game.yaml'))):
+            base = exedir
         cfg_path = os.path.join(base, 'player_cfg.json')
         cfg = {}
         if os.path.isfile(cfg_path):

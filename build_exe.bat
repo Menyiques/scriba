@@ -18,7 +18,7 @@ python -m PyInstaller --noconfirm --onefile --windowed --name %SNAME% ^
   --add-data "print42_pt.bas;." ^
   --add-data "print64_pt.bas;." ^
   --add-data "scriba_logo.png;." ^
-  --add-data "Scriba manual v2.0.pdf;." ^
+  --add-data "Scriba manual v2.1.pdf;." ^
   --add-data "player.py;." ^
   --add-data "build_game_exe.py;." ^
   --add-data "interpreter.py;." ^
@@ -47,6 +47,8 @@ python -m PyInstaller --noconfirm --onefile --windowed --name %SNAME% ^
   --hidden-import cpc_nativo ^
   --hidden-import paws_lang ^
   --hidden-import capabilities ^
+  --hidden-import fx_engine ^
+  --hidden-import afx ^
   editor.py
 
 REM  Copia el .exe versionado a Scriba.exe para que Scriba.exe sea SIEMPRE la

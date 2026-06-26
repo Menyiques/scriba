@@ -36,6 +36,7 @@ CONDACTS = {
     'PUTIN', 'TAKEOUT', 'OPEN', 'CLOSE', 'LOCK', 'UNLOCK', 'WEAR', 'REMOVE',
     'LIT', 'UNLIT', 'ADDSCORE', 'SCORE', 'DESC', 'LOOK', 'INVEN',
     'TIMER_START', 'TIMER_STOP', 'TIMER_RESET',
+    'PLAY',
     'END', 'MATCH', 'QUIT',
     # particulares de hardware (pantalla/sonido): no rompen la paridad lógica
     'INK', 'PAPER', 'BORDER', 'PAUSE', 'CLS', 'BRIGHT', 'BEEP', 'SOUND',
@@ -74,6 +75,8 @@ CAPS = {
         'features': set(FEATURES),
     },
     'spectrum': {
+        # PLAY (FX por AY) implementado en 128K/Next (v2.0). En 48K no hay chip AY:
+        # el reproductor se inyecta mudo (no rompe la lógica; solo no suena).
         'condacts': set(CONDACTS),
         'predicates': set(PREDICATES),
         'features': set(FEATURES),     # incluye peso desde v2.0
@@ -82,7 +85,8 @@ CAPS = {
         # Motor nativo Z80 (v2.0): paridad de logica completa (incluido NOUN2 con
         # parser de dos nombres). Solo difiere en hardware: sonido (BEEP/SOUND) y
         # atributos de pantalla no portados (BRIGHT/FLASH/INVERSE).
-        'condacts': set(CONDACTS) - {'BRIGHT', 'BEEP', 'SOUND', 'FLASH', 'INVERSE'},
+        'condacts': set(CONDACTS) - {'BRIGHT', 'BEEP', 'SOUND', 'FLASH',
+                                     'INVERSE'},
         'predicates': set(PREDICATES),
         'features': set(FEATURES),
     },
@@ -166,6 +170,34 @@ def scan_game(game):
     if game.get('timers'):
         feats.add('timers')
     return {'condacts': used_c, 'predicates': used_p, 'features': feats}
+
+
+# PLAY como condact (inicio de línea o tras THEN), con nombre entre comillas
+# (PLAY "explosion") o número (PLAY 1). Se exige que sea condact para no casar un
+# PLAY que aparezca DENTRO de un texto (p. ej. MESSAGE "...PLAY 9...").
+_PLAY = re.compile(r'(?:^|\bTHEN\s+)PLAY\s+("[^"]*"|\'[^\']*\'|\d+)', re.I)
+
+
+def used_fx(game):
+    """Devuelve el conjunto de números de efecto (1-based) referenciados por
+    PLAY (por nombre o número) en cualquier script. La exportación retro embebe
+    SOLO estos (los demás no se suben al TAP/DSK; ocupar RAM con FX que nadie
+    dispara no tiene sentido)."""
+    try:
+        import fx_engine
+    except Exception:
+        fx_engine = None
+    fx = game.get('fx', []) or []
+    used = set()
+    for sc in _scripts(game):
+        for line in str(sc).split('\n'):
+            for m in _PLAY.finditer(line.strip()):
+                arg = m.group(1)
+                idx = fx_engine.fx_index(fx, arg) if fx_engine else (
+                    int(arg) if arg.isdigit() else 0)
+                if idx:
+                    used.add(idx)
+    return used
 
 
 def unsupported(game, target):

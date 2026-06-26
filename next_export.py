@@ -614,6 +614,9 @@ def export_bas(game, out_path, progreso=None, columnas=42, modo='tap'):
     src, rep, bin_blob = sx.comprime(src, nombres, c.avisos, bin_name,
                                      progreso=progreso, modo=cmode)
 
+    # FX por AY (Next siempre tiene AY): embebe los efectos referenciados por PLAY.
+    src = sx.aplica_fx(src, game, clock=1773400, embed=True)
+
     locs_con_img = _locs_con_imagen(c, outdir)
     # banco "negro" (blank.nxi = 16K de ceros): locs sin imagen / oscuridad
     datadir = os.path.join(outdir, 'data')
