@@ -75,8 +75,8 @@ CAPS = {
         'features': set(FEATURES),
     },
     'spectrum': {
-        # PLAY (FX por AY) implementado en 128K/Next (v2.0). En 48K no hay chip AY:
-        # el reproductor se inyecta mudo (no rompe la lógica; solo no suena).
+        # PLAY (FX por AY): funciona en 128K. En 48K no hay chip AY y en Next está
+        # desactivado (pendiente de rediseño con datos en banco) -> ahí queda mudo.
         'condacts': set(CONDACTS),
         'predicates': set(PREDICATES),
         'features': set(FEATURES),     # incluye peso desde v2.0

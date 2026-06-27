@@ -42,7 +42,7 @@ def enc_condacts(clist):
         for a in c[1:]: out.append(a & 0xFF)
     return bytes(out)
 
-def build_game_db(messages, locations, vocab, objects, responses, startloc, sysverbs, width=40, load=DB, proc_before=b'', proc_after=b'', proc_onstart=b'', title_pal=b'', has_music=False, has_title=False, hdrbuf=0, imgbuf=0, loc_slot=b'', vall=0, font_acc=b'', timers=(), llevarmax=0, fx=b''):
+def build_game_db(messages, locations, vocab, objects, responses, startloc, sysverbs, width=40, load=DB, proc_before=b'', proc_after=b'', proc_onstart=b'', title_pal=b'', has_music=False, has_title=False, hdrbuf=0, imgbuf=0, loc_slot=b'', vall=0, font_acc=b'', timers=(), llevarmax=0, fx=b'', exit_names=None):
     # Tokens 128..223 (96 max); los codigos 224..239 quedan para los acentos.
     dic=txtpack.build_dict(''.join(messages),96)
     exps=txtpack.expansions(dic); ntok=len(exps)
@@ -111,7 +111,7 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     # Nombres de salida igual que en la version de Spectrum (spectrum_export):
     # letra unica para los puntos cardinales y "Subir"/"Bajar" para arriba/abajo.
     # Los vids de direccion son fijos 1..6 = N, S, E, O, arriba, abajo.
-    vid_name = {1: 'N', 2: 'S', 3: 'E', 4: 'O', 5: 'Subir', 6: 'Bajar'}
+    vid_name = exit_names if exit_names else {1: 'N', 2: 'S', 3: 'E', 4: 'O', 5: 'Subir', 6: 'Bajar'}
     maxvid = max(vid_name) if vid_name else 0
     nvname = maxvid + 1
     vnameidx_addr = p; p += nvname*2

@@ -20,7 +20,7 @@ import sys
 import copy
 
 # ─── Versión del IDE (incrementar AQUÍ cuando se pida) ──────────────────
-SCRIBA_VERSION   = '2.1'
+SCRIBA_VERSION   = '2.2'
 SCRIBA_COPYRIGHT = '(c) 2026 Menyiques Soft'
 
 try:
@@ -4830,9 +4830,11 @@ class ScribaEditor:
         else:
             root = d
         try:
-            subs = [('img', 'Original'), ('img', 'Spectrum'), ('music',)]
+            # dist es UNA sola carpeta (todos los .tap/.dsk/.zip juntos, con el
+            # nombre {juego}_{plataforma}_{idioma}); temp sí va por compilación.
+            subs = [('img', 'Original'), ('img', 'Spectrum'), ('music',), ('dist',)]
             for tgt in ('48', '128', 'Next'):       # un subnivel por compilacion
-                subs += [('temp', tgt), ('dist', tgt)]
+                subs += [('temp', tgt)]
             for sub in subs:
                 os.makedirs(os.path.join(root, *sub), exist_ok=True)
         except Exception as e:
@@ -5007,16 +5009,30 @@ class ScribaEditor:
         return d                                                    # layout antiguo
 
     def _dirs_salida(self, d):
-        """A partir de la carpeta del .bas (d) devuelve (raiz, dist_dir). El .tap
-        va a <raiz>/dist/<target> (mismo subnivel que temp/<target>)."""
+        """A partir de la carpeta del .bas (d) devuelve (raiz, dist_dir). Todos los
+        ficheros de distribución van juntos a <raiz>/dist (sin subcarpeta por
+        plataforma); el nombre lleva la plataforma (ver _dist_name)."""
         if os.path.basename(os.path.dirname(d)).lower() == 'temp':  # temp/<target>
-            target = os.path.basename(d)
             raiz = os.path.dirname(os.path.dirname(d))
-            return raiz, os.path.join(raiz, 'dist', target)
+            return raiz, os.path.join(raiz, 'dist')
         if os.path.basename(d).lower() == 'temp':                   # temp
             raiz = os.path.dirname(d)
             return raiz, os.path.join(raiz, 'dist')
         return d, d                                                 # layout antiguo
+
+    def _dist_name(self, base, plataforma, ext):
+        """Nombre de distribución: {juego}_{plataforma}_{idioma}.{ext}.
+        'base' es el nombre del .bas/.dsk (p.ej. 'apolo11_en'); se le quita el
+        sufijo de idioma si lo lleva y se usa metadata['language'] (es/en/pt)."""
+        lng = str((self.game.get('metadata') or {}).get('language') or 'es').strip().lower()
+        lang = ('pt' if lng.startswith(('pt', 'por'))
+                else 'en' if lng.startswith('en') else 'es')
+        juego = base
+        for suf in ('_es', '_en', '_pt', '_pt-pt', '_por'):
+            if juego.lower().endswith(suf):
+                juego = juego[:-len(suf)]
+                break
+        return '%s_%s_%s.%s' % (juego, plataforma, lang, ext)
 
     def _dir_juego(self, sub):
         """Subcarpeta <raiz>/<sub> del juego, creandola si falta (o None)."""
@@ -5124,7 +5140,8 @@ class ScribaEditor:
         # el .tap final va a <raiz>/dist/<target> (o junto al .bas en el antiguo)
         raiz, dist = self._dirs_salida(d)
         os.makedirs(dist, exist_ok=True)
-        tap_path = os.path.join(dist, base + '.tap')
+        plat = '128kb' if modo == '128k' else '48kb'
+        tap_path = os.path.join(dist, self._dist_name(base, plat, 'tap'))
         tap_rel = os.path.relpath(tap_path, d)
         # carpeta zxbasic ABSOLUTA (el .bas se compila en <juego>/temp).
         zxdir = self._zxbasic_dir(cfg)
@@ -5271,7 +5288,7 @@ class ScribaEditor:
         if not path:
             messagebox.showinfo('Exportar', 'Guarda el juego (.yaml) primero para '
                                 'crear su carpeta. El .bas irá a temp\\<target>\\ y '
-                                'el .tap a dist\\<target>\\.')
+                                'el .tap a dist\\ (nombre {juego}_{plataforma}_{idioma}).')
             return
         try:
             here = os.path.dirname(os.path.abspath(__file__))
@@ -5417,9 +5434,12 @@ class ScribaEditor:
         title = (self.game.get('metadata', {}).get('title')
                  or os.path.splitext(os.path.basename(yaml_path))[0])
         safe = _re.sub(r'[^\w .\-]+', '', title).strip() or 'Aventura'
-        distdir = os.path.join(game_dir, 'dist', 'Windows')
-        outdir = os.path.join(distdir, safe)
-        zip_path = os.path.join(distdir, safe + '_windows.zip')
+        base = os.path.splitext(os.path.basename(yaml_path))[0]
+        zip_name = self._dist_name(base, 'windows', 'zip')   # {juego}_windows_{idioma}.zip
+        stem = zip_name[:-4]
+        distdir = os.path.join(game_dir, 'dist')             # todo junto en dist/
+        outdir = os.path.join(distdir, stem)                 # carpeta ejecutable portable
+        zip_path = os.path.join(distdir, zip_name)
 
         win = tk.Toplevel(self.root)
         win.title('Exportando para Windows')
@@ -5599,13 +5619,13 @@ class ScribaEditor:
         if not self.filepath:
             messagebox.showinfo('Exportar', 'Guarda el juego (.yaml) primero.')
             return
-        # Automatico, como las demas plataformas: <raiz>/dist/CPC/<nombre>.dsk
-        distdir = self._dir_juego(os.path.join('dist', 'CPC'))
+        # Automatico, como las demas plataformas: <raiz>/dist/{juego}_cpc_{idioma}.dsk
+        distdir = self._dir_juego('dist')
         if not distdir:
             messagebox.showinfo('Exportar', 'Guarda el juego (.yaml) primero.')
             return
         name = os.path.splitext(os.path.basename(self.filepath))[0]
-        path = os.path.join(distdir, name + '.dsk')
+        path = os.path.join(distdir, self._dist_name(name, 'cpc', 'dsk'))
         try:
             here = os.path.dirname(os.path.abspath(__file__))
             if here not in sys.path:
@@ -5764,7 +5784,7 @@ class ScribaEditor:
         if not path:
             messagebox.showinfo('Exportar', 'Guarda el juego (.yaml) primero para '
                                 'crear su carpeta. El .bas irá a temp\\Next\\ y el '
-                                '.tap a dist\\Next\\.')
+                                '.tap a dist\\ (nombre {juego}_next_{idioma}).')
             return
         game = copy.deepcopy(self.game)
         game.pop('_editor', None)
@@ -5999,11 +6019,11 @@ class ScribaEditor:
         base = os.path.splitext(os.path.basename(bas_path))[0]
         bin_name = base + '.bin'
         texto_name = base + '_texto.bin'
-        tap_name = base + '.tap'
         # intermedios (.bin, _texto.bin, .banks, .loading, data/) en temp = d;
-        # el .tap final va a <raiz>/dist/<target> (o junto al .bas en el antiguo).
+        # el .tap final va a <raiz>/dist con nombre {juego}_next_{idioma}.tap.
         raiz, dist = self._dirs_salida(d)
         os.makedirs(dist, exist_ok=True)
+        tap_name = self._dist_name(base, 'next', 'tap')
         tap_path = os.path.join(dist, tap_name)
         bin_path = os.path.join(d, bin_name)
         texto_path = os.path.join(d, texto_name)
@@ -6031,12 +6051,22 @@ class ScribaEditor:
                        '<Scriba>/zxbasic/ (zxbc.exe, o zxbc.py + python/) o '
                        'configura una carpeta valida en Compilacion → Next].')
             return '\n'.join(log), False, tap_path
+        # Heap: 2 KB solo si el juego usa FX (el reproductor + datos van al final del
+        # binario y la RAM de Next va muy justa; bajar el heap libera ~2 KB para que
+        # quepan). Sin FX se deja 4 KB (más holgura para cadenas).
+        try:
+            with open(os.path.join(d, base + '.bas'), encoding='latin-1') as _f:
+                _usa_fx = 'playfx' in _f.read()
+        except OSError:
+            _usa_fx = False
+        heapsz = '2048' if _usa_fx else '4096'
         if cb:
-            cb(93, 'Compilando ZX BASIC (zxbc, org %d, %d bancos)…'
-               % (org, n_banks))
+            cb(93, 'Compilando ZX BASIC (zxbc, org %d, %d bancos, heap %s)…'
+               % (org, n_banks, heapsz))
         cmd = zxbc_base + ['--arch', 'zxnext', '-O2', '--org', str(org),
-                           '--heap-size', '4096', '--array-base=0',
-                           '--string-base=0', '-o', bin_name, base + '.bas']
+                           '--heap-size', heapsz, '--array-base=0',
+                           '--string-base=0', '-M', 'memory_next.txt',
+                           '-o', bin_name, base + '.bas']
         log.append('$ ' + ' '.join(cmd))
         try:
             r = subprocess.run(cmd, cwd=d, capture_output=True, text=True,

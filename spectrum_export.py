@@ -541,9 +541,11 @@ def stmt2zx(c, linea, dentro_resp):
         t = c.timidx.get(resto.strip(), 0)
         return [f'tcur({t}) = tdur({t})']
     if cmd == 'PLAY':
-        # PLAY "nombre" (o PLAY n) -> reproduce el efecto FX por el AY. El
-        # reproductor (playfx) solo se inyecta si el juego usa PLAY; en 48K (sin
-        # AY) es mudo. El nombre se resuelve al índice 1-based de la lista de FX.
+        # FX por AY: activo SOLO si el target lo soporta (c.fx_enabled). En 128K
+        # funciona; en 48K (sin AY) y en Next está desactivado -> PLAY mudo. En PC
+        # y CPC el FX va por otras rutas. El nombre se resuelve al índice 1-based.
+        if not getattr(c, 'fx_enabled', False):
+            return []
         import fx_engine
         ni = fx_engine.fx_index((c.game.get('fx') or []), resto.strip())
         if not ni:
@@ -2761,12 +2763,17 @@ def _fx_defb(blob):
     return '\n'.join(out) if out else '        defb 0'
 
 
-def aplica_fx(src, game, clock=1773400, embed=True):
+def aplica_fx(src, game, clock=1773400, embed=True, enabled=False):
     """Si el juego usa PLAY, inyecta el reproductor de FX (playfx) y los datos de
     los efectos REFERENCIADOS (solo esos) en el codigo. Devuelve src sin cambios
-    si no hay FX en uso. clock: reloj del AY (Spectrum/Next = 1773400).
-    embed=False (p.ej. 48K, sin chip AY): inyecta el reproductor pero SIN datos
-    (nfx=0), para que los playfx() compilen y sean mudos sin gastar RAM."""
+    si no hay FX en uso o si el target no tiene FX (enabled=False).
+
+    FX retro habilitado SOLO en 128K (enabled=True). En 48K (sin AY) y en Next
+    queda desactivado: el 48K no tiene chip AY, y en Next el binario + datos del
+    FX se sale de la RAM antes de los bancos y corrompe la carga (pendiente de
+    rediseño: datos del FX en banco paginado)."""
+    if not enabled:
+        return src
     try:
         import capabilities
         import fx_engine
@@ -2782,10 +2789,14 @@ def aplica_fx(src, game, clock=1773400, embed=True):
     else:
         blob = bytes([0])                  # nfx=0 -> playfx siempre retorna (mudo)
     player = _FX_PLAYER.replace('@FXDATA@', _fx_defb(blob))
-    ancla = "' ---------- SALIDA 64 COLUMNAS CON SCROLL ----------"
-    if ancla in src:
-        return src.replace(ancla, player + ancla, 1)
-    return src + '\n' + player
+    # IMPORTANTE: se añade al FINAL del programa, NO en medio. Inyectarlo antes de
+    # una rutina desplazaría hacia arriba todo lo que va detrás; en Next hay
+    # rutinas que DEBEN quedar bajo $C000 (Layer 2, paletas, paginación) y ese
+    # desplazamiento las cruzaría por encima de $C000, donde se paginan los bancos
+    # -> al cargar un banco desaparecen y el juego se corrompe / "Integer out of
+    # range". Al ir al final, playfx queda en la zona alta (banco 0) y como solo se
+    # llama durante el juego (sin paginación en curso), funciona sin desplazar nada.
+    return src.rstrip() + '\n\n' + player
 
 
 def _leer_psg(musdir):
@@ -2855,6 +2866,7 @@ def export_bas(game, out_path, progreso=None, modo='48k', columnas=42):
     _lang = (game.get('metadata', {}).get('language') or 'es').strip().lower()
     _PT_LANG = _lang.startswith('pt') or _lang.startswith('por')
     c = recolecta(game)
+    c.fx_enabled = (modo == '128k')      # FX por AY solo en 128K (48K no tiene AY)
     _p(5, 'Generando motor y datos...')
     L = genera_fuente(c)
     genera_fuente2(c, L)
@@ -2880,9 +2892,9 @@ def export_bas(game, out_path, progreso=None, modo='48k', columnas=42):
     bin_name = base + '_texto.bin'
     src, rep, bin_blob = comprime(src, nombres, c.avisos, bin_name,
                                   progreso=progreso, modo=modo)
-    # FX por AY: en 128K se embeben los efectos usados; en 48K (sin AY) solo el
-    # reproductor mudo (para que los playfx() compilen sin gastar RAM).
-    src = aplica_fx(src, game, clock=1773400, embed=(modo != '48k'))
+    # FX por AY: SOLO en 128K (en 48K no hay chip AY y PLAY queda mudo, sin inyectar
+    # nada). El reproductor se añade al final del programa, sin desplazar rutinas.
+    src = aplica_fx(src, game, clock=1773400, embed=True, enabled=(modo == '128k'))
     # carpeta de imagenes por modo: 128K -> img/Spectrum (.scr ULA), resto img/.
     _imgsub = {'128k': os.path.join('img', 'Spectrum'),
                '48k': os.path.join('img', '48')}.get(modo, 'img')

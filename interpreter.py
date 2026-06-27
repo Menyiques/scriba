@@ -33,6 +33,91 @@ DIR_NAMES = {
     'O': 'Oeste', 'U': 'Arriba', 'D': 'Abajo'
 }
 
+# Nombres de dirección por idioma (para la lista "Salidas:").
+DIR_NAMES_L = {
+    'es': {'N': 'Norte', 'S': 'Sur', 'E': 'Este', 'O': 'Oeste', 'U': 'Arriba', 'D': 'Abajo'},
+    'en': {'N': 'North', 'S': 'South', 'E': 'East', 'O': 'West', 'U': 'Up', 'D': 'Down'},
+    'pt': {'N': 'Norte', 'S': 'Sul', 'E': 'Este', 'O': 'Oeste', 'U': 'Acima', 'D': 'Abaixo'},
+}
+
+# Mensajes del sistema del INTÉRPRETE de PC por idioma (es/en/pt). El idioma sale
+# de metadata['language']; metadata['mensajes'][id] (catálogo compartido) tiene
+# prioridad si existe, así una traducción personalizada del editor vale también en
+# PC. Placeholders: {o} objeto, {p} puntos, {max} máximo, {c} contenido, {k} llave,
+# {dirs} salidas.
+MSGS = {
+    'no_entiendo_ayuda': ("No entiendo eso. Escribe AYUDA para ver los comandos.",
+                          "I don't understand that. Type HELP for the commands.",
+                          "Não percebo isso. Escreve AJUDA para ver os comandos."),
+    'no_hacer':       ("No puedes hacer eso.", "You can't do that.", "Não podes fazer isso."),
+    'no_direccion':   ("No puedes ir en esa dirección.", "You can't go that way.", "Não podes ir nessa direção."),
+    'pasa_tiempo':    ("Pasa el tiempo...", "Time passes...", "O tempo passa..."),
+    'oscuro_total':   ("Está completamente oscuro. No puedes ver nada.",
+                       "It's completely dark. You can't see anything.",
+                       "Está completamente escuro. Não consegues ver nada."),
+    'oscuro_ver':     ("Está demasiado oscuro para ver nada.", "It's too dark to see anything.", "Está escuro demais para ver."),
+    'oscuro_hay':     ("Está demasiado oscuro para ver qué hay.", "It's too dark to see what's here.", "Está escuro demais para ver o que há."),
+    'no_especial':    ("No ves nada especial.", "You see nothing special.", "Não vês nada de especial."),
+    'no_ves_eso':     ("No ves eso aquí.", "You don't see that here.", "Não vês isso aqui."),
+    'aqui_hay':       ("Aquí hay {o}.", "There is {o} here.", "Aqui está {o}."),
+    'salidas':        ("Salidas: {dirs}", "Exits: {dirs}", "Saídas: {dirs}"),
+    'sin_salidas':    ("No hay salidas visibles.", "There are no visible exits.", "Não há saídas visíveis."),
+    'no_llevas_nada': ("No llevas nada.", "You aren't carrying anything.", "Não levas nada."),
+    'llevas_cab':     ("Llevas:", "You are carrying:", "Levas:"),
+    'contiene_inline':("(contiene: {c})", "(contains: {c})", "(contém: {c})"),
+    'puesto_cab':     ("Llevas puesto:", "You are wearing:", "Vestes:"),
+    'peso_inv':       ("Peso: {p}/{m}", "Weight: {p}/{m}", "Peso: {p}/{m}"),
+    'ya_llevas':      ("Ya llevas {o}.", "You already have {o}.", "Já levas {o}."),
+    'no_coger':       ("No puedes coger eso.", "You can't take that.", "Não podes apanhar isso."),
+    'no_cabe_peso':   ("No puedes cargar tanto peso.", "You can't carry that much.", "Não podes carregar tanto peso."),
+    'peso_max':       ("Llevas demasiado peso.", "You're carrying too much weight.", "Levas peso demais."),
+    'coges':          ("Coges {o}.", "You take {o}.", "Apanhas {o}."),
+    'nada_coger':     ("No ves nada que puedas coger aquí.", "You see nothing you can take here.", "Não vês nada que possas apanhar aqui."),
+    'que_coger':      ("¿Qué quieres coger?", "What do you want to take?", "O que queres apanhar?"),
+    'dejas':          ("Dejas {o}.", "You drop {o}.", "Largas {o}."),
+    'nada_dejar':     ("No llevas nada que dejar.", "You have nothing to drop.", "Não levas nada para largar."),
+    'que_dejar':      ("¿Qué quieres dejar?", "What do you want to drop?", "O que queres largar?"),
+    'no_llevas_eso':  ("No llevas eso.", "You aren't carrying that.", "Não levas isso."),
+    'contiene':       ("Contiene: {c}", "Contains: {c}", "Contém: {c}"),
+    'vacio':          ("Está vacío.", "It's empty.", "Está vazio."),
+    'que_poner':      ("¿Qué quieres ponerte?", "What do you want to wear?", "O que queres vestir?"),
+    'no_inventario':  ("No llevas eso o no está en tu inventario.", "You don't have that in your inventory.", "Não tens isso no teu inventário."),
+    'no_ponerte':     ("No puedes ponerte {o}.", "You can't wear {o}.", "Não podes vestir {o}."),
+    'te_pones':       ("Te pones {o}.", "You put on {o}.", "Vestes {o}."),
+    'que_quitar':     ("¿Qué quieres quitarte?", "What do you want to take off?", "O que queres tirar?"),
+    'no_puesto':      ("No llevas puesto eso.", "You aren't wearing that.", "Não tens isso vestido."),
+    'te_quitas':      ("Te quitas {o}.", "You take off {o}.", "Tiras {o}."),
+    'que_abrir':      ("¿Qué quieres abrir?", "What do you want to open?", "O que queres abrir?"),
+    'no_abrir':       ("No puedes abrir {o}.", "You can't open {o}.", "Não podes abrir {o}."),
+    'ya_abierto':     ("Ya está abierto.", "It's already open.", "Já está aberto."),
+    'abres_con':      ("Abres {o} con {k}.", "You open {o} with {k}.", "Abres {o} com {k}."),
+    'cerrado_llave':  ("Está cerrado con llave.", "It's locked.", "Está trancado."),
+    'abres':          ("Abres {o}.", "You open {o}.", "Abres {o}."),
+    'dentro_hay':     ("Dentro hay: {c}.", "Inside there is: {c}.", "Lá dentro há: {c}."),
+    'que_cerrar':     ("¿Qué quieres cerrar?", "What do you want to close?", "O que queres fechar?"),
+    'no_cerrar':      ("No puedes cerrar {o}.", "You can't close {o}.", "Não podes fechar {o}."),
+    'ya_cerrado':     ("Ya está cerrado.", "It's already closed.", "Já está fechado."),
+    'cierras':        ("Cierras {o}.", "You close {o}.", "Fechas {o}."),
+    'que_meter':      ("¿Qué quieres meter?", "What do you want to put?", "O que queres pôr?"),
+    'donde_meter':    ("¿Dónde quieres meterlo?", "Where do you want to put it?", "Onde queres pô-lo?"),
+    'primero_coger':  ("Primero tienes que coger {o}.", "You need to take {o} first.", "Primeiro tens de apanhar {o}."),
+    'no_meter_si':    ("No puedes meter algo dentro de sí mismo.", "You can't put something inside itself.", "Não podes pôr algo dentro de si mesmo."),
+    'no_contenedor_p':("No puedes meter nada en {o}.", "You can't put anything in {o}.", "Não podes pôr nada em {o}."),
+    'cont_cerrado':   ("{o} está cerrado.", "{o} is closed.", "{o} está fechado."),
+    'no_cabe':        ("No cabe en {o}.", "It doesn't fit in {o}.", "Não cabe em {o}."),
+    'metes':          ("Metes {o} en {c}.", "You put {o} in {c}.", "Pões {o} em {c}."),
+    'que_sacar':      ("¿Qué quieres sacar?", "What do you want to take out?", "O que queres tirar?"),
+    'no_dentro':      ("No está en ningún contenedor.", "It's not in any container.", "Não está em nenhum recipiente."),
+    'peso_sacar':     ("Llevarías demasiado peso.", "You'd be carrying too much.", "Ficarias com peso demais."),
+    'sacas':          ("Sacas {o} de {c}.", "You take {o} out of {c}.", "Tiras {o} de {c}."),
+    'puntos_mas':     ("[+{n} puntos]", "[+{n} points]", "[+{n} pontos]"),
+    'puntuacion':     ("Puntuación: {p}/{max}", "Score: {p}/{max}", "Pontuação: {p}/{max}"),
+    'fin_juego':      ("FIN DEL JUEGO - Puntuación: {p}/{max}", "GAME OVER - Score: {p}/{max}", "FIM DO JOGO - Pontuação: {p}/{max}"),
+    'abandonar':      ("¿Seguro que quieres abandonar la aventura? (s/n)", "Are you sure you want to quit the adventure? (y/n)", "Tens a certeza que queres abandonar a aventura? (s/n)"),
+    'hasta_luego':    ("¡Hasta luego!", "See you later!", "Até logo!"),
+    'fin_aventura':   ("¡Hasta la próxima aventura!", "Until the next adventure!", "Até à próxima aventura!"),
+}
+
 # Verbos de dirección (completos y truncados a 5) → forma canónica corta.
 # Se usa tanto al construir el vocabulario como al casar responses legacy.
 DIR_VERB_CANON = {
@@ -357,7 +442,7 @@ class PAWSBasic:
             try:
                 n = int(rest.strip())
                 interp.variables['PUNTOS'] = interp.variables.get('PUNTOS', 0) + n
-                print(f'[+{n} puntos]')
+                print(self.interp._t('puntos_mas', n=n))
             except ValueError:
                 pass
 
@@ -439,9 +524,36 @@ class PAWSInterpreter:
         except Exception:
             pass
 
+    def _t(self, mid, **subs):
+        """Mensaje de sistema localizado. Prioridad: override del autor
+        (metadata['mensajes'][mid], catálogo compartido) > tabla del idioma del
+        juego (MSGS) > español. Sustituye los placeholders {x} por subs."""
+        ov = (self.meta.get('mensajes') or {})
+        txt = ov.get(mid)
+        if not txt:
+            row = MSGS.get(mid)
+            if row:
+                idx = {'en': 1, 'pt': 2}.get(self._lang, 0)
+                txt = row[idx] if idx < len(row) else row[0]
+            else:
+                txt = ''
+        txt = str(txt)
+        if '{max}' in txt:
+            txt = txt.replace('{max}', str(self.meta.get('max_score', 0) or 0))
+        for k, v in subs.items():
+            txt = txt.replace('{' + k + '}', str(v))
+        return txt
+
+    def _dir_name(self, d):
+        """Nombre de la dirección 'd' (N/S/E/O/U/D) en el idioma del juego."""
+        return DIR_NAMES_L.get(self._lang, DIR_NAMES_L['es']).get(d, d)
+
     def __init__(self, game: dict):
         self.game = game
         self.meta = game.get("metadata", {})
+        _lng = str(self.meta.get('language') or 'es').strip().lower()
+        self._lang = ('pt' if _lng.startswith(('pt', 'por'))
+                      else 'en' if _lng.startswith('en') else 'es')
         self.variables = dict(game.get("variables", {}))
         self.locations = game.get("locations", {})
         self.objects = {}
@@ -805,12 +917,12 @@ class PAWSInterpreter:
             obj = self.objects.get(obj_id, {})
             if obj and obj.get("location") not in ("INVEN", "PUESTO"):
                 if "fixed" in obj.get("attributes", []):
-                    print("No puedes coger eso.")
+                    print(self._t('no_coger'))
                 else:
                     new_weight = self.recalc_weight() + self.get_object_weight(obj_id)
                     max_w = self.variables.get("LLEVAR_MAX", 50)
                     if new_weight > max_w:
-                        print("Llevas demasiado peso.")
+                        print(self._t('peso_max'))
                     else:
                         obj["location"] = "INVEN"
                         self.recalc_weight()
@@ -891,12 +1003,12 @@ class PAWSInterpreter:
 
         elif action == "ADDSCORE":
             self.variables["PUNTOS"] = self.variables.get("PUNTOS", 0) + int(args[0])
-            print(f"[+{args[0]} puntos]")
+            print(self._t('puntos_mas', n=args[0]))
 
         elif action == "SCORE":
             pts = self.variables.get("PUNTOS", 0)
             max_pts = self.meta.get("max_score", 0)
-            print(f"Puntuación: {pts}/{max_pts}")
+            print(self._t('puntuacion', p=pts))
 
         elif action == "DESC":
             self.describe_location()
@@ -968,7 +1080,7 @@ class PAWSInterpreter:
             pts = self.variables.get("PUNTOS", 0)
             max_pts = self.meta.get("max_score", 0)
             print(f"\n{'='*50}")
-            print(f"FIN DEL JUEGO - Puntuación: {pts}/{max_pts}")
+            print(self._t('fin_juego', p=pts))
             print(f"{'='*50}")
             self.running = False
 
@@ -976,7 +1088,7 @@ class PAWSInterpreter:
             self.running = False
 
         elif action == "WAIT":
-            print("Pasa el tiempo...")
+            print(self._t('pasa_tiempo'))
 
         elif action == "IF_NOT":
             cond = action_def.get("condition", {})
@@ -1050,7 +1162,7 @@ class PAWSInterpreter:
 
         dest = exits.get(dir_canon)
         if not dest:
-            print("No puedes ir en esa dirección.")
+            print(self._t('no_direccion'))
             return
 
         self.player_location = dest
@@ -1072,7 +1184,7 @@ class PAWSInterpreter:
         print(f"\n{loc.get('name', 'Lugar desconocido')}")
 
         if self.location_is_dark():
-            print("Está completamente oscuro. No puedes ver nada.")
+            print(self._t('oscuro_total'))
             return
 
         desc = loc.get("description", "")
@@ -1097,7 +1209,7 @@ class PAWSInterpreter:
                    obj.get("location") == self._initial_locs.get(oid):
                     msg = obj["initial_message"]
                 else:
-                    msg = f"Aquí hay {obj.get('name', oid)}."
+                    msg = self._t('aqui_hay', o=obj.get('name', oid))
                 visible_obj_msgs.append(msg)
         if visible_obj_msgs:
             print()
@@ -1106,21 +1218,21 @@ class PAWSInterpreter:
 
         # Salidas
         exits = loc.get("exits", {})
-        available = [DIR_NAMES[d] for d, dest in exits.items() if dest]
+        available = [self._dir_name(d) for d, dest in exits.items() if dest]
         if available:
-            print(f"\nSalidas: {', '.join(available)}")
+            print("\n" + self._t('salidas', dirs=', '.join(available)))
         else:
-            print("\nNo hay salidas visibles.")
+            print("\n" + self._t('sin_salidas'))
 
     def show_inventory(self):
         inventory = self.get_inventory()
         worn = self.get_worn_objects()
 
         if not inventory and not worn:
-            print("No llevas nada.")
+            print(self._t('no_llevas_nada'))
             return
 
-        print("Llevas:")
+        print(self._t('llevas_cab'))
         for oid in inventory:
             obj = self.objects.get(oid, {})
             line = f"  - {obj.get('name', oid)}"
@@ -1129,18 +1241,18 @@ class PAWSInterpreter:
                        for cid, co in self.objects.items()
                        if co.get("location") == oid]
             if contents:
-                line += f" (contiene: {', '.join(contents)})"
+                line += " " + self._t('contiene_inline', c=', '.join(contents))
             print(line)
 
         if worn:
-            print("Llevas puesto:")
+            print(self._t('puesto_cab'))
             for oid in worn:
                 obj = self.objects.get(oid, {})
                 print(f"  - {obj.get('name', oid)}")
 
         peso = self.variables.get("PESO_ACT", 0)
         max_peso = self.variables.get("LLEVAR_MAX", 50)
-        print(f"Peso: {peso}/{max_peso}")
+        print(self._t('peso_inv', p=peso, m=max_peso))
 
     # ─── TIMERS ──────────────────────────────────────────────────────────────
 
@@ -1206,19 +1318,19 @@ class PAWSInterpreter:
         """Lógica COGER del intérprete para un objeto ya resuelto."""
         obj = self.objects.get(obj_id, {})
         if obj.get("location") in ("INVEN", "PUESTO"):
-            print(f"Ya llevas {obj.get('name', obj_id)}.")
+            print(self._t('ya_llevas', o=obj.get('name', obj_id)))
             return
         if "fixed" in obj.get("attributes", []):
-            print("No puedes coger eso.")
+            print(self._t('no_coger'))
             return
         new_w = self.recalc_weight() + self.get_object_weight(obj_id)
         max_w = self.variables.get("LLEVAR_MAX", 50)
         if new_w > max_w:
-            print(f"No puedes cargar tanto peso.")
+            print(self._t('no_cabe_peso'))
             return
         obj["location"] = "INVEN"
         self.recalc_weight()
-        print(f"Coges {obj.get('name', obj_id)}.")
+        print(self._t('coges', o=obj.get('name', obj_id)))
 
     def take_all(self):
         """
@@ -1228,7 +1340,7 @@ class PAWSInterpreter:
         (p. ej. un GET con ADDSCORE en un bloque ON COGER).
         """
         if self.location_is_dark():
-            print("Está demasiado oscuro para ver qué hay.")
+            print(self._t('oscuro_hay'))
             return
         # Candidatos: objetos sueltos en la sala + contenido de los
         # contenedores ABIERTOS presentes en la sala
@@ -1241,7 +1353,7 @@ class PAWSInterpreter:
                 if o.get("location") in holders
                 and "fixed" not in o.get("attributes", [])]
         if not oids:
-            print("No ves nada que puedas coger aquí.")
+            print(self._t('nada_coger'))
             return
         for oid in oids:
             if not self.running:
@@ -1270,7 +1382,7 @@ class PAWSInterpreter:
         obj["location"] = self.player_location
         obj["worn"] = False
         self.recalc_weight()
-        print(f"Dejas {obj.get('name', obj_id)}.")
+        print(self._t('dejas', o=obj.get('name', obj_id)))
 
     def drop_all(self):
         """
@@ -1280,7 +1392,7 @@ class PAWSInterpreter:
         """
         oids = self.get_inventory()
         if not oids:
-            print("No llevas nada que dejar.")
+            print(self._t('nada_dejar'))
             return
         for oid in oids:
             if not self.running:
@@ -1318,101 +1430,101 @@ class PAWSInterpreter:
 
         if verb == "EXAMI":
             if self.location_is_dark():
-                print("Está demasiado oscuro para ver nada.")
+                print(self._t('oscuro_ver'))
                 return True
             if noun1:
                 obj_id = self.find_object_by_noun(noun1)
                 if obj_id:
                     obj = self.objects.get(obj_id, {})
-                    print(obj.get("description", "No ves nada especial."))
+                    print(obj.get("description") or self._t('no_especial'))
                     # Si es contenedor abierto, mostrar contenido
                     if obj.get("container") and obj.get("open"):
                         contents = [self.objects[cid].get("name", cid)
                                    for cid, co in self.objects.items()
                                    if co.get("location") == obj_id]
                         if contents:
-                            print(f"Contiene: {', '.join(contents)}")
+                            print(self._t('contiene', c=', '.join(contents)))
                         else:
-                            print("Está vacío.")
+                            print(self._t('vacio'))
                 else:
-                    print("No ves eso aquí.")
+                    print(self._t('no_ves_eso'))
             else:
                 self.describe_location()
             return True
 
         if verb == "COGER":
             if not noun1:
-                print("¿Qué quieres coger?")
+                print(self._t('que_coger'))
                 return True
             if noun1 == "TODO":
                 self.take_all()
                 return True
             obj_id = self.find_object_by_noun(noun1)
             if not obj_id:
-                print("No ves eso aquí.")
+                print(self._t('no_ves_eso'))
                 return True
             self._builtin_take(obj_id)
             return True
 
         if verb == "DEJAR":
             if not noun1:
-                print("¿Qué quieres dejar?")
+                print(self._t('que_dejar'))
                 return True
             if noun1 == "TODO":
                 self.drop_all()
                 return True
             obj_id = self.find_object_by_noun(noun1, accessible_only=False)
             if not obj_id or self.objects.get(obj_id, {}).get("location") not in ("INVEN", "PUESTO"):
-                print("No llevas eso.")
+                print(self._t('no_llevas_eso'))
                 return True
             self._builtin_drop(obj_id)
             return True
 
         if verb == "PONER":
             if not noun1:
-                print("¿Qué quieres ponerte?")
+                print(self._t('que_poner'))
                 return True
             obj_id = self.find_object_by_noun(noun1, accessible_only=False)
             if not obj_id or self.objects.get(obj_id, {}).get("location") != "INVEN":
-                print("No llevas eso o no está en tu inventario.")
+                print(self._t('no_inventario'))
                 return True
             obj = self.objects.get(obj_id, {})
             if not obj.get("wearable"):
-                print(f"No puedes ponerte {obj.get('name', obj_id)}.")
+                print(self._t('no_ponerte', o=obj.get('name', obj_id)))
                 return True
             obj["location"] = "PUESTO"
             obj["worn"] = True
-            print(f"Te pones {obj.get('name', obj_id)}.")
+            print(self._t('te_pones', o=obj.get('name', obj_id)))
             return True
 
         if verb == "QUITA":
             if not noun1:
-                print("¿Qué quieres quitarte?")
+                print(self._t('que_quitar'))
                 return True
             obj_id = self.find_object_by_noun(noun1, accessible_only=False)
             obj = self.objects.get(obj_id, {}) if obj_id else {}
             if not obj_id or obj.get("location") != "PUESTO":
-                print("No llevas puesto eso.")
+                print(self._t('no_puesto'))
                 return True
             obj["location"] = "INVEN"
             obj["worn"] = False
-            print(f"Te quitas {obj.get('name', obj_id)}.")
+            print(self._t('te_quitas', o=obj.get('name', obj_id)))
             return True
 
         if verb == "ABRIR":
             if not noun1:
-                print("¿Qué quieres abrir?")
+                print(self._t('que_abrir'))
                 return True
             obj_id = self.find_object_by_noun(noun1)
             if not obj_id:
-                print("No ves eso aquí.")
+                print(self._t('no_ves_eso'))
                 return True
             obj = self.objects.get(obj_id, {})
             if not obj.get("openable"):
-                print(f"No puedes abrir {obj.get('name', obj_id)}.")
+                print(self._t('no_abrir', o=obj.get('name', obj_id)))
                 return True
             if obj.get("open"):
-                print("Ya está abierto.")
+                print(self._t('ya_abierto'))
                 return True
             if obj.get("locked"):
                 key_id = obj.get("key")
@@ -1420,71 +1532,71 @@ class PAWSInterpreter:
                 if key_id and key.get("location") in ("INVEN", "PUESTO"):
                     obj["locked"] = False
                     obj["open"] = True
-                    print(f"Abres {obj.get('name', obj_id)} con "
-                          f"{key.get('name', key_id)}.")
+                    print(self._t('abres_con', o=obj.get('name', obj_id),
+                                  k=key.get('name', key_id)))
                 else:
-                    print("Está cerrado con llave.")
+                    print(self._t('cerrado_llave'))
                 return True
             obj["open"] = True
-            print(f"Abres {obj.get('name', obj_id)}.")
+            print(self._t('abres', o=obj.get('name', obj_id)))
             if obj.get("container"):
                 contents = [self.objects[cid].get("name", cid)
                             for cid, co in self.objects.items()
                             if co.get("location") == obj_id]
                 if contents:
-                    print(f"Dentro hay: {', '.join(contents)}.")
+                    print(self._t('dentro_hay', c=', '.join(contents)))
             return True
 
         if verb == "CERRA":
             if not noun1:
-                print("¿Qué quieres cerrar?")
+                print(self._t('que_cerrar'))
                 return True
             obj_id = self.find_object_by_noun(noun1)
             if not obj_id:
-                print("No ves eso aquí.")
+                print(self._t('no_ves_eso'))
                 return True
             obj = self.objects.get(obj_id, {})
             if not obj.get("openable"):
-                print(f"No puedes cerrar {obj.get('name', obj_id)}.")
+                print(self._t('no_cerrar', o=obj.get('name', obj_id)))
                 return True
             if not obj.get("open"):
-                print("Ya está cerrado.")
+                print(self._t('ya_cerrado'))
                 return True
             obj["open"] = False
-            print(f"Cierras {obj.get('name', obj_id)}.")
+            print(self._t('cierras', o=obj.get('name', obj_id)))
             return True
 
         if verb == "METER":
             # METER obj1 EN obj2 (genérico; las responses tienen prioridad)
             if not noun1:
-                print("¿Qué quieres meter?")
+                print(self._t('que_meter'))
                 return True
             if not noun2:
-                print("¿Dónde quieres meterlo?")
+                print(self._t('donde_meter'))
                 return True
             obj_id = self.find_object_by_noun(noun1, accessible_only=True)
             if not obj_id:
-                print("No ves eso aquí.")
+                print(self._t('no_ves_eso'))
                 return True
             obj = self.objects.get(obj_id, {})
             if obj.get("location") not in ("INVEN", "PUESTO"):
-                print(f"Primero tienes que coger {obj.get('name', obj_id)}.")
+                print(self._t('primero_coger', o=obj.get('name', obj_id)))
                 return True
             container_id = self.find_object_by_noun(noun2, accessible_only=True)
             if not container_id:
-                print("No ves eso aquí.")
+                print(self._t('no_ves_eso'))
                 return True
             if container_id == obj_id:
-                print("No puedes meter algo dentro de sí mismo.")
+                print(self._t('no_meter_si'))
                 return True
             container = self.objects.get(container_id, {})
             if not container.get("container"):
-                print(f"No puedes meter nada en "
-                      f"{container.get('name', container_id)}.")
+                print(self._t('no_contenedor_p',
+                              o=container.get('name', container_id)))
                 return True
             if container.get("openable") and not container.get("open"):
-                print(f"{container.get('name', container_id).capitalize()} "
-                      f"está cerrado.")
+                print(self._t('cont_cerrado',
+                              o=container.get('name', container_id).capitalize()))
                 return True
             cap = container.get("capacity", 0)
             if cap > 0:
@@ -1492,29 +1604,29 @@ class PAWSInterpreter:
                                  for cid, co in self.objects.items()
                                  if co.get("location") == container_id)
                 if contents_w + self.get_object_weight(obj_id) > cap:
-                    print(f"No cabe en {container.get('name', container_id)}.")
+                    print(self._t('no_cabe', o=container.get('name', container_id)))
                     return True
             obj["location"] = container_id
             obj["worn"] = False
             self.recalc_weight()
-            print(f"Metes {obj.get('name', obj_id)} en "
-                  f"{container.get('name', container_id)}.")
+            print(self._t('metes', o=obj.get('name', obj_id),
+                          c=container.get('name', container_id)))
             return True
 
         if verb == "SACAR":
             if not noun1:
-                print("¿Qué quieres sacar?")
+                print(self._t('que_sacar'))
                 return True
             # Buscar el objeto dentro de algún contenedor
             obj_id = self.find_object_by_noun(noun1, accessible_only=True)
             if not obj_id:
-                print("No ves eso aquí.")
+                print(self._t('no_ves_eso'))
                 return True
             obj = self.objects.get(obj_id, {})
             container_id = obj.get("location")
             container = self.objects.get(container_id, {}) if container_id else {}
             if not container.get("container"):
-                print(f"No está en ningún contenedor.")
+                print(self._t('no_dentro'))
                 return True
             # Mover provisionalmente y validar contra el peso real: si el
             # contenedor ya lo llevaba el jugador, el peso total no cambia.
@@ -1523,15 +1635,16 @@ class PAWSInterpreter:
             if self.recalc_weight() > self.variables.get("LLEVAR_MAX", 50):
                 obj["location"] = prev_loc
                 self.recalc_weight()
-                print("Llevarías demasiado peso.")
+                print(self._t('peso_sacar'))
                 return True
-            print(f"Sacas {obj.get('name', obj_id)} de {container.get('name', container_id)}.")
+            print(self._t('sacas', o=obj.get('name', obj_id),
+                          c=container.get('name', container_id)))
             return True
 
         if verb == "PUNT":
             pts = self.variables.get("PUNTOS", 0)
             max_pts = self.meta.get("max_score", 0)
-            print(f"Puntuación: {pts}/{max_pts}")
+            print(self._t('puntuacion', p=pts))
             return True
 
         if verb == "SALIR":
@@ -1549,7 +1662,7 @@ class PAWSInterpreter:
             if not interactive:
                 self.running = False
                 return True
-            print("¿Seguro que quieres abandonar la aventura? (s/n)")
+            print(self._t('abandonar'))
             try:
                 resp = input("> ").strip().lower()
             except (EOFError, KeyboardInterrupt):
@@ -1589,7 +1702,7 @@ class PAWSInterpreter:
                 print()
                 raw = input("> ").strip()
             except (EOFError, KeyboardInterrupt):
-                print("\n¡Hasta luego!")
+                print("\n" + self._t('hasta_luego'))
                 break
 
             if not raw:
@@ -1607,7 +1720,7 @@ class PAWSInterpreter:
             verb, noun1, noun2 = self.parse(raw)
 
             if not verb:
-                print("No entiendo eso. Escribe AYUDA para ver los comandos.")
+                print(self._t('no_entiendo_ayuda'))
                 # El turno cuenta igualmente: before_turn ya corrió, así que
                 # timers y after_turn también deben correr (antes se saltaban
                 # y el reloj de misión se congelaba con entradas no válidas).
@@ -1636,7 +1749,7 @@ class PAWSInterpreter:
                     handled = self.handle_builtin(verb, noun1, noun2)
 
                 if not handled:
-                    print("No puedes hacer eso.")
+                    print(self._t('no_hacer'))
 
             if not self.running:
                 break
@@ -1647,7 +1760,7 @@ class PAWSInterpreter:
             # CONDACTS after_turn
             self.execute_condact_blocks(self.condacts.get("after_turn", []))
 
-        print("\n¡Hasta la próxima aventura!")
+        print("\n" + self._t('fin_aventura'))
 
 
 # ─── CARGA DE ARCHIVO ────────────────────────────────────────────────────────

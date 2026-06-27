@@ -569,6 +569,7 @@ def export_bas(game, out_path, progreso=None, columnas=42, modo='tap'):
     _lang = (game.get('metadata', {}).get('language') or 'es').strip().lower()
     sx._PT_LANG = _lang.startswith('pt') or _lang.startswith('por')
     c = sx.recolecta(game)
+    c.fx_enabled = True      # FX por AY en Next (prueba con heap reducido a 2 KB)
     _p(62, 'Generando motor ZX BASIC...')
     L = sx.genera_fuente(c)
     sx.genera_fuente2(c, L)
@@ -615,7 +616,7 @@ def export_bas(game, out_path, progreso=None, columnas=42, modo='tap'):
                                      progreso=progreso, modo=cmode)
 
     # FX por AY (Next siempre tiene AY): embebe los efectos referenciados por PLAY.
-    src = sx.aplica_fx(src, game, clock=1773400, embed=True)
+    src = sx.aplica_fx(src, game, clock=1773400, embed=True, enabled=True)
 
     locs_con_img = _locs_con_imagen(c, outdir)
     # banco "negro" (blank.nxi = 16K de ceros): locs sin imagen / oscuridad

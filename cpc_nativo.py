@@ -21,6 +21,44 @@ SYS_MSGS = [
     "Esta completamente oscuro. No puedes ver nada.", "Puntuacion: ",
     "Llevas demasiado peso.",
 ]
+
+
+def _sys_msgs_y_salidas(meta):
+    """Construye los mensajes de sistema y los nombres de salida del motor CPC
+    desde metadata['mensajes'] (el MISMO catálogo que Spectrum/Next, mensajes.py),
+    para que las traducciones del editor valgan también en CPC. El CPC imprime
+    prefijo + valor (p. ej. "Coges " + objeto), así que de las plantillas con
+    placeholder se toma solo el prefijo. Devuelve (lista SYS_MSGS, dict salidas)."""
+    import re
+    try:
+        import mensajes
+        defs = mensajes.defaults()
+    except Exception:
+        return list(SYS_MSGS), None
+    ov = (meta or {}).get('mensajes') or {}
+
+    def t(mid):
+        return str(ov.get(mid) or defs.get(mid) or '')
+
+    def prefix(mid):
+        s = t(mid)
+        m = re.search(r'\{[a-z]+\}', s)
+        if m:                         # plantilla "Coges {o}." -> "Coges "
+            return s[:m.start()]
+        s = s.rstrip()                # etiqueta "Salidas:" -> "Salidas: "
+        if not s.endswith(':'):
+            s += ':'
+        return s + ' '
+
+    msgs = [
+        t('no_direccion'), prefix('salidas'), t('no_entiendo'), prefix('aqui_hay'),
+        prefix('coges'), prefix('dejas'), t('no_ves_eso'), t('no_llevas_eso'),
+        prefix('llevas_cab'), t('no_llevas_nada'), t('no_coger'),
+        t('oscuro_total'), prefix('puntuacion'), t('peso_max'),
+    ]
+    salidas = {1: t('dir_n').strip(), 2: t('dir_s').strip(), 3: t('dir_e').strip(),
+               4: t('dir_o').strip(), 5: t('dir_u').strip(), 6: t('dir_d').strip()}
+    return msgs, salidas
 ENGINE_ORG = 0x1200          # direccion de carga del motor + DB
 
 # Musica del titulo: el reproductor se engancha a la interrupcion de frame con
@@ -44,7 +82,9 @@ def export_native(game, dsk_path, modo=2, img_dir=None):
     # completo, su salto chocaria con el del firmware (lineas en blanco y texto
     # revuelto). Dejando 1 columna de margen, el firmware nunca auto-salta.
     width = 79 if modo == 2 else 39
-    spec, info = nc.compile_game(c, SYS_MSGS, width=width)
+    # Mensajes de sistema y nombres de salida localizados (metadata['mensajes']).
+    sys_msgs, exit_names = _sys_msgs_y_salidas(game.get('metadata'))
+    spec, info = nc.compile_game(c, sys_msgs, width=width)
 
     # Efectos de sonido FX (AY): se embeben SOLO los referenciados por PLAY. El
     # reloj del AY del CPC es 1,0 MHz (los AYFX, hechos a 1,77 MHz del Spectrum,
@@ -133,7 +173,8 @@ def export_native(game, dsk_path, modo=2, img_dir=None):
             loc_slot=bytes(loc_slot), vall=spec.get('vall', 0),
             font_acc=spec.get('font_acc', b''),
             timers=spec.get('timers', ()),
-            llevarmax=spec.get('llevarmax', 255), fx=fx_blob)[0]
+            llevarmax=spec.get('llevarmax', 255), fx=fx_blob,
+            exit_names=exit_names)[0]
     # 1a pasada: longitud de la DB; el buffer de cabecera CAS IN va detras de la DB.
     # imgbuf se fija en &8B00 (zona de la musica, libre durante el juego) porque
     # esta FUERA de la ventana de banca &4000-&7FFF: asi sirve de buffer de

@@ -36,6 +36,7 @@ CATALOGO = [
     # ── coger / dejar ──
     ('ya_llevas',       "Ya lo llevas.",                            {}, "Coger algo que ya llevas"),
     ('no_coger',        "No puedes coger eso.",                     {}, "Objeto no cogible"),
+    ('peso_max',        "Llevas demasiado peso.",                   {}, "Coger algo que supera el limite de peso"),
     ('coges',           "Coges {o}.",          {'o': 'onomW$(i)'},     "Coger con exito (X = objeto)"),
     ('no_lo_llevas',    "No lo llevas.",                            {}, "Dejar algo que no llevas"),
     ('dejas',           "Dejas {o}.",          {'o': 'onomW$(i)'},     "Dejar con exito"),
@@ -70,6 +71,14 @@ CATALOGO = [
     ('abandona',        "Abandonas la aventura.",                   {}, "Comando FIN/QUIT"),
     ('puntuacion',      "Puntuacion: {p}/{max}",        {'p': 'STR$(VvPUNTOS)'}, "Mostrar puntuacion"),
     ('fin_juego',       "== FIN DEL JUEGO - Puntuacion: {p}/{max} ==", {'p': 'STR$(VvPUNTOS)'}, "Mensaje de fin de juego"),
+    # ── salidas (la linea "Salidas: N S E ...") ──
+    ('salidas',         "Salidas:",                                 {}, "Etiqueta de la lista de salidas (ingles: Exits:)"),
+    ('dir_n',           " N",                                       {}, "Salida Norte (conserva el espacio inicial)"),
+    ('dir_s',           " S",                                       {}, "Salida Sur"),
+    ('dir_e',           " E",                                       {}, "Salida Este"),
+    ('dir_o',           " O",                                       {}, "Salida Oeste (ingles: ' W' con su espacio)"),
+    ('dir_u',           " Subir",                                   {}, "Salida Arriba (ingles: ' Up')"),
+    ('dir_d',           " Bajar",                                   {}, "Salida Abajo (ingles: ' Down')"),
     # ── pantalla de carga (solo Next; va en el cargador BASIC, fuente de la ROM) ──
     ('cargando',        "CARGANDO...",                              {}, "Pantalla de carga (solo Next; mayusculas sin tildes)"),
 ]
@@ -116,9 +125,13 @@ def aplica(src, overrides, max_score, translit):
         custom = overrides.get(mid)
         if not custom or str(custom) == defecto:
             continue
-        viejo = 'pw(' + _expr(defecto, ph, max_score, lambda s: s) + ')'
-        nuevo = 'pw(' + _expr(str(custom), ph, max_score, translit) + ')'
-        if viejo in src:
-            src = src.replace(viejo, nuevo)
-            n += 1
+        viejo_expr = _expr(defecto, ph, max_score, lambda s: s)
+        nuevo_expr = _expr(str(custom), ph, max_score, translit)
+        # El motor imprime con pw(...) (con salto) o pri(...) (sin salto: "Salidas:"
+        # y los nombres de salida). Se prueban ambas formas; solo una existe.
+        for pfx in ('pw(', 'pri('):
+            viejo = pfx + viejo_expr + ')'
+            if viejo in src:
+                src = src.replace(viejo, pfx + nuevo_expr + ')')
+                n += 1
     return src, n
