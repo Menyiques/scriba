@@ -68,6 +68,7 @@ CATALOGO = [
     ('metes',           "Metes {o}.",          {'o': 'onomW$(o)'},     "Meter en contenedor"),
     ('sacas',           "Sacas {o}.",          {'o': 'onomW$(o)'},     "Sacar de contenedor"),
     # ── puntuacion / fin ──
+    ('puntos_mas',      "[+{n} puntos]",       {'n': 'STR$(n)'},       "Aviso al sumar puntos (ADDSCORE)"),
     ('abandona',        "Abandonas la aventura.",                   {}, "Comando FIN/QUIT"),
     ('puntuacion',      "Puntuacion: {p}/{max}",        {'p': 'STR$(VvPUNTOS)'}, "Mostrar puntuacion"),
     ('fin_juego',       "== FIN DEL JUEGO - Puntuacion: {p}/{max} ==", {'p': 'STR$(VvPUNTOS)'}, "Mensaje de fin de juego"),

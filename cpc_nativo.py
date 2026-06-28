@@ -56,6 +56,13 @@ def _sys_msgs_y_salidas(meta):
         prefix('llevas_cab'), t('no_llevas_nada'), t('no_coger'),
         t('oscuro_total'), prefix('puntuacion'), t('peso_max'),
     ]
+    # SSCOREP / SSCORES: "[+{n} puntos]" partido en prefijo y sufijo (ADDSCORE).
+    pm = t('puntos_mas') or '[+{n} puntos]'
+    mm = re.search(r'\{[a-z]+\}', pm)
+    if mm:
+        msgs += [pm[:mm.start()], pm[mm.end():]]
+    else:
+        msgs += [pm, '']
     salidas = {1: t('dir_n').strip(), 2: t('dir_s').strip(), 3: t('dir_e').strip(),
                4: t('dir_o').strip(), 5: t('dir_u').strip(), 6: t('dir_d').strip()}
     return msgs, salidas

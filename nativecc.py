@@ -120,7 +120,8 @@ def compile_stmt(ln, up, ctx):
     if up.startswith('ADDSCORE'):
         try: n=int(ln.split()[1])
         except: n=1
-        return bytes([COP['PLUS'], ctx.var('PUNTOS'), n&0xFF])
+        # suma n a PUNTOS y muestra "[+n puntos]" (c_addscore en el motor).
+        return bytes([ge.COP_EXTRA['ADDSCORE'], ctx.var('PUNTOS'), n&0xFF])
     if up.startswith('MATCH') or up.startswith('END'): return bytes([COP['DONE']])
     # --- comandos de pantalla/tiempo: equivalentes CPC en el motor nativo ---
     # Color Spectrum (0-7) -> color firmware CPC mas parecido (versiones vivas).

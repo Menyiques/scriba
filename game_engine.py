@@ -7,7 +7,9 @@ ORG=0x4000; DB=0x8000; TXT=0xBB5A; KMWAIT=0xBB06
 SCANTGO=0; SEXITS=1; SNOUND=2; SSEE=3; STAKE=4; SDROP=5
 SNOTHERE=6; SNOTCARR=7; SINVEN=8; SEMPTY=9; SNOTAKE=10; SDARK=11; SSCORE=12
 SHEAVY=13
-NSYS=14
+SSCOREP=14                       # prefijo de "+N puntos" (ADDSCORE)
+SSCORES=15                       # sufijo de "+N puntos"
+NSYS=16
 CARRIED=255
 NOWHERE=254
 WORN=253                         # objeto puesto (sentinel en OBJLOC); CARRIED incluye WORN
@@ -26,7 +28,7 @@ COP_EXTRA={'LETX':26,'IF':27,'JMP':28,
  'WEAR':34,'REMOVE':35,'LIT':36,'UNLIT':37,'SCORE':38,
  'TSTART':39,'TSTOP':40,'TRESET':41,
  'OPEN':42,'CLOSE':43,'LOCK':44,'UNLOCK':45,'PUTIN':46,'TAKEOUT':47,
- 'PLAY':48}
+ 'PLAY':48,'ADDSCORE':49}
 def enc_expr(toks):
     # toks: lista RPN como [('CONST',5),('VAR',0),('ADD',),...]  -> bytes (sin END)
     out=bytearray()
@@ -1995,7 +1997,7 @@ rc_loop:
         cp    e
         jr    nc,rc_end
 rc_go:  call  getop
-        cp    49
+        cp    50
         jr    nc,rc_loop
         add   a,a
         ld    e,a
@@ -2722,6 +2724,28 @@ cpl_f:  push  bc
         ld    c,0
         call  SNDREG
         jp    rc_loop
+; ADDSCORE: suma n al flag PUNTOS y muestra "[+n puntos]" (prefijo+num+sufijo).
+; Operandos: índice del flag PUNTOS y n.
+c_addscore:
+        call  getop          ; índice del flag PUNTOS
+        ld    (ctmp),a
+        call  getop          ; n
+        ld    c,a
+        ld    a,(ctmp)
+        call  flag_addr      ; HL -> flag
+        ld    a,c
+        add   a,(hl)
+        ld    (hl),a         ; flag += n
+        ld    a,c
+        push  af
+        ld    de,SSCOREP     ; prefijo "[+"
+        call  print_msg
+        pop   af
+        call  print_dec      ; n
+        ld    de,SSCORES     ; sufijo " puntos]"
+        call  print_msg
+        call  newline
+        jp    rc_loop
 CTAB:   defw c_at,c_notat,c_present,c_absent,c_carried,c_notcarr,c_zero,c_notzero,c_eq
         defw c_goto,c_message,c_mes,c_get,c_drop,c_destroy,c_create,c_place,c_set
         defw c_clear,c_let,c_plus,c_minus,c_done,c_desc,c_inven,c_newline
@@ -2730,7 +2754,7 @@ CTAB:   defw c_at,c_notat,c_present,c_absent,c_carried,c_notcarr,c_zero,c_notzer
         defw c_wear,c_remove,c_lit,c_unlit
         defw c_score,c_tstart,c_tstop,c_treset
         defw c_open,c_close,c_lock,c_unlock,c_putin,c_takeout
-        defw c_play
+        defw c_play,c_addscore
 
 show_title:
         ld    a,(hastitle)
@@ -2981,6 +3005,8 @@ def assemble_engine(org=ORG, db_base=DB):
     L.append('SDARK equ %d'%SDARK)
     L.append('SSCORE equ %d'%SSCORE)
     L.append('SHEAVY equ %d'%SHEAVY)
+    L.append('SSCOREP equ %d'%SSCOREP)
+    L.append('SSCORES equ %d'%SSCORES)
     L.append('CARRIED equ %d'%CARRIED)
     L.append('NOWHERE equ %d'%NOWHERE)
     L.append('WORN equ %d'%WORN)
