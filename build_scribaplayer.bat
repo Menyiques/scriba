@@ -15,6 +15,7 @@ REM ============================================================
 python -m PyInstaller --noconfirm --onefile --windowed --name ScribaPlayer ^
   --hidden-import interpreter ^
   --hidden-import paws_lang ^
+  --hidden-import vocab_base ^
   --hidden-import fx_engine ^
   --hidden-import afx ^
   --hidden-import yaml ^

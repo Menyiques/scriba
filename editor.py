@@ -20,7 +20,7 @@ import sys
 import copy
 
 # ─── Versión del IDE (incrementar AQUÍ cuando se pida) ──────────────────
-SCRIBA_VERSION   = '2.2'
+SCRIBA_VERSION   = '2.3'
 SCRIBA_COPYRIGHT = '(c) 2026 Menyiques Soft'
 
 try:
@@ -855,6 +855,8 @@ class ScribaEditor:
                    command=self._apply_meta).pack(side=tk.LEFT, padx=(8, 4))
         ttk.Button(mbtn, text="Mensajes del sistema…",
                    command=self._dialog_mensajes).pack(side=tk.LEFT, padx=4)
+        ttk.Button(mbtn, text="Verbos/preposiciones…",
+                   command=self._dialog_vocab_base).pack(side=tk.LEFT, padx=4)
         # ── preview de la imagen de menú/título (según la plataforma elegida) ──
         mfr = ttk.Frame(fr)
         mfr.grid(row=0, column=2, rowspan=len(fields) + 2, sticky=tk.N,
@@ -3174,6 +3176,110 @@ class ScribaEditor:
         bf.pack(pady=8)
         ttk.Button(bf, text='Aplicar', command=aplicar).pack(side=tk.LEFT, padx=4)
         ttk.Button(bf, text='Restaurar por defecto',
+                   command=restaurar).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bf, text='Cancelar', command=cerrar).pack(side=tk.LEFT, padx=4)
+        win.protocol('WM_DELETE_WINDOW', cerrar)
+
+    def _dialog_vocab_base(self):
+        """Editor de los verbos, direcciones y preposiciones DE SERIE del motor.
+        Se precargan con los del idioma del juego (vocab_base); lo que cambies se
+        guarda en metadata['vocab_base'] y lo usan los 4 intérpretes."""
+        if not self.game.get('locations'):
+            messagebox.showinfo('Vocabulario', 'Abre o crea un juego primero.')
+            return
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+            if here not in sys.path:
+                sys.path.insert(0, here)
+            import importlib
+            import vocab_base
+            if not getattr(sys, 'frozen', False):
+                importlib.reload(vocab_base)
+        except Exception as e:
+            messagebox.showerror('Vocabulario', 'No se pudo cargar vocab_base.py:\n%s' % e)
+            return
+        meta = self.game.get('metadata') or {}
+        lang = vocab_base.norm_lang(meta.get('language'))
+        ov = meta.get('vocab_base') or {}
+
+        win = tk.Toplevel(self.root)
+        win.title('Verbos y preposiciones del sistema')
+        win.transient(self.root)
+        win.grab_set()
+        ttk.Label(win, foreground='#667788', justify=tk.LEFT, wraplength=660,
+                  text='Sinónimos de serie para el idioma del juego (%s). Sepáralos '
+                       'por comas. Lo que dejes igual al idioma no se guarda; lo que '
+                       'cambies vale para PC, 128K, Next y CPC. El primer sinónimo es '
+                       'el que se muestra como nombre.' % lang.upper()
+                  ).pack(anchor=tk.W, padx=10, pady=(10, 4))
+        cont = ttk.Frame(win)
+        cont.pack(fill=tk.BOTH, expand=True, padx=6)
+        canvas = tk.Canvas(cont, width=700, height=470, highlightthickness=0)
+        sb = ttk.Scrollbar(cont, orient=tk.VERTICAL, command=canvas.yview)
+        inner = ttk.Frame(canvas)
+        inner.bind('<Configure>',
+                   lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.create_window((0, 0), window=inner, anchor='nw')
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.bind_all('<MouseWheel>',
+                        lambda e: canvas.yview_scroll(int(-e.delta / 120), 'units'))
+
+        grupos = [('Verbos', 'verbs', vocab_base.VERBS),
+                  ('Direcciones', 'dirs', vocab_base.DIRS),
+                  ('Preposiciones', 'preps', vocab_base.PREPS)]
+        ents = {}        # (grupo, canon) -> (Entry, [default_idioma])
+        row = 0
+        for titulo, key, table in grupos:
+            ttk.Label(inner, text=titulo, font=self.fnt_bold).grid(
+                row=row, column=0, columnspan=2, sticky=tk.W, padx=6, pady=(8, 2))
+            row += 1
+            base = vocab_base._group(table, lang, None)          # default del idioma
+            cur = vocab_base._group(table, lang, ov.get(key))    # con override
+            for canon in table:
+                ttk.Label(inner, text=vocab_base.LABELS.get(canon, canon),
+                          width=20, anchor=tk.W).grid(row=row, column=0,
+                                                      sticky=tk.W, padx=6, pady=1)
+                e = tk.Entry(inner, width=52, font=self.fnt_ui)
+                e.insert(0, ', '.join(cur[canon]))
+                e.grid(row=row, column=1, sticky=tk.EW, padx=6, pady=1)
+                ents[(key, canon)] = (e, base[canon])
+                row += 1
+        inner.columnconfigure(1, weight=1)
+
+        def aplicar():
+            res = {'verbs': {}, 'dirs': {}, 'preps': {}}
+            for (key, canon), (e, default_syns) in ents.items():
+                words = [w.strip() for w in e.get().replace(';', ',').split(',')
+                         if w.strip()]
+                if words != list(default_syns):   # difiere del idioma -> guardar
+                    res[key][canon] = words
+            vb = {k: v for k, v in res.items() if v}
+            m = self.game.setdefault('metadata', {})
+            if vb:
+                m['vocab_base'] = vb
+            else:
+                m.pop('vocab_base', None)
+            self.dirty = True
+            n = sum(len(v) for v in vb.values())
+            self.sv_status.set('Vocabulario del sistema: %d personalizados' % n)
+            canvas.unbind_all('<MouseWheel>')
+            win.destroy()
+
+        def restaurar():
+            for (key, canon), (e, default_syns) in ents.items():
+                e.delete(0, tk.END)
+                e.insert(0, ', '.join(default_syns))
+
+        def cerrar():
+            canvas.unbind_all('<MouseWheel>')
+            win.destroy()
+
+        bf = ttk.Frame(win)
+        bf.pack(pady=8)
+        ttk.Button(bf, text='Aplicar', command=aplicar).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bf, text='Restaurar idioma',
                    command=restaurar).pack(side=tk.LEFT, padx=4)
         ttk.Button(bf, text='Cancelar', command=cerrar).pack(side=tk.LEFT, padx=4)
         win.protocol('WM_DELETE_WINDOW', cerrar)
@@ -6838,127 +6944,4 @@ class InterpreterWindow:
     def _hist_up(self, event):
         if self.history:
             self.history_pos = min(self.history_pos + 1, len(self.history) - 1)
-            self.ivar.set(self.history[-(self.history_pos + 1)])
-
-    def _hist_down(self, event):
-        if self.history_pos > 0:
-            self.history_pos -= 1
-            self.ivar.set(self.history[-(self.history_pos + 1)])
-        else:
-            self.history_pos = -1
-            self.ivar.set('')
-
-    def close(self):
-        # Liberar el hilo del turno si estaba pausado en el debugger
-        self._debug_mode = False
-        self._cont_mode  = True
-        self._step_event.set()
-        self.editor.highlight_player_loc(None)
-        self.editor.clear_condact_highlight()
-        self.editor._interp_win = None
-        placeholder = self.editor._interp_placeholder
-        for w in self.frame.winfo_children():
-            if w is not placeholder:
-                w.destroy()
-        placeholder.pack(expand=True)
-        h = self.editor._right_pw.winfo_height()
-        self.editor._right_pw.sash_place(0, 0, h - 4)
-
-    def _set_step_buttons(self, active):
-        state = tk.NORMAL if active else tk.DISABLED
-        self.btn_step.config(state=state)
-        self.btn_cont.config(state=state)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# ENTRY POINT
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def _resource_path(name):
-    """Ruta de un recurso, válida también en el .exe de PyInstaller."""
-    base = getattr(sys, '_MEIPASS', None) or os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base, name)
-
-
-def _show_splash(root):
-    """Pantalla de bienvenida de Scriba (logo + lema). Se cierra sola a los
-    ~2,5 s o al pulsar. Si no encuentra scriba_logo.png muestra el texto."""
-    try:
-        sp = tk.Toplevel(root)
-        sp.withdraw()                      # oculta mientras se posiciona
-        sp.configure(bg='white', highlightthickness=1,
-                     highlightbackground='#1f3a5f')
-        img = None
-        try:
-            p = None
-            for _n in ('scriba_logo.png', 'scriba_logo.PNG', 'scriba-logo.png',
-                       'scriba-logo.PNG', 'logo.png'):
-                _c = _resource_path(_n)
-                if os.path.isfile(_c) and os.path.getsize(_c) > 0:
-                    p = _c
-                    break
-            if p:
-                img = tk.PhotoImage(file=p)
-                f = max(1, (img.width() + 299) // 300)   # objetivo ~300 px ancho
-                if f > 1:
-                    img = img.subsample(f, f)
-        except Exception:
-            img = None
-        if img is not None:
-            lbl = tk.Label(sp, image=img, bg='white')
-            lbl.image = img                              # referencia viva
-            lbl.pack(padx=30, pady=(24, 2))
-        else:
-            tk.Label(sp, text='SCRIBA', bg='white', fg='#1f3a5f',
-                     font=('Helvetica', 44, 'bold')).pack(padx=70, pady=(46, 2))
-        tk.Label(sp, text='Multiplatform Adventure Writing System',
-                 bg='white', fg='#2e6da4',
-                 font=('Helvetica', 12)).pack(padx=24, pady=(0, 6))
-        tk.Label(sp, text='Version ' + SCRIBA_VERSION + '     ' + SCRIBA_COPYRIGHT,
-                 bg='white', fg='#8090a0',
-                 font=('Helvetica', 9)).pack(padx=24, pady=(0, 22))
-        sp.update_idletasks()
-        w, h = sp.winfo_reqwidth(), sp.winfo_reqheight()
-        # Centrar sobre la ventana principal si ya tiene geometría; si no, pantalla
-        try:
-            root.update_idletasks()
-            rw, rh = root.winfo_width(), root.winfo_height()
-            rx, ry = root.winfo_rootx(), root.winfo_rooty()
-        except Exception:
-            rw = rh = 0
-        if rw > 1 and rh > 1 and (rx or ry):
-            x, y = rx + (rw - w) // 2, ry + (rh - h) // 2
-        else:
-            x = (sp.winfo_screenwidth() - w) // 2
-            y = (sp.winfo_screenheight() - h) // 2
-        x, y = max(0, x), max(0, y)
-        sp.geometry('%dx%d+%d+%d' % (w, h, x, y))
-        sp.overrideredirect(True)              # tras fijar geometría (Windows)
-        sp.deiconify()
-        sp.geometry('+%d+%d' % (x, y))         # reafirmar posición
-        sp.after(10, lambda: sp.geometry('+%d+%d' % (x, y)))
-        try:
-            sp.attributes('-topmost', True)
-        except Exception:
-            pass
-
-        def _close():
-            try:
-                sp.destroy()
-            except Exception:
-                pass
-        sp.bind('<Button-1>', lambda e: _close())
-        sp.after(2500, _close)
-        sp.update()
-        return sp
-    except Exception:
-        return None
-
-
-if __name__ == '__main__':
-    root = tk.Tk()
-    initial = sys.argv[1] if len(sys.argv) > 1 else None
-    app = ScribaEditor(root, initial_file=initial)
-    root.update_idletasks()          # la ventana ya tiene tamaño/posición
-    _show_splash(root)               # splash centrada sobre la ventana
-    root.mainloop()
+  

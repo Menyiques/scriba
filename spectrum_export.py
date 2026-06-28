@@ -257,24 +257,19 @@ def recolecta(game):
     # verbos: direcciones 1..6 + resto desde 10
     c.verbid = {'N': 1, 'S': 2, 'E': 3, 'O': 4, 'U': 5, 'D': 6}
     vid = 10
-    DIRCANON = {'NORTE': 'N', 'SUR': 'S', 'ESTE': 'E', 'OESTE': 'O',
-                'ARRIB': 'U', 'ABAJO': 'D', 'SUBIR': 'U', 'BAJAR': 'D',
-                'NORTH': 'N', 'SOUTH': 'S', 'EAST': 'E', 'WEST': 'O',
-                'UP': 'U', 'DOWN': 'D'}
-    builtins = {
-        'EXAMI': ['exami', 'mirar', 'mira', 'ver', 'obser'],
-        'COGER': ['coger', 'coge', 'tomar', 'toma', 'agarr', 'recog'],
-        'DEJAR': ['dejar', 'deja', 'solta', 'suelt'],
-        'PONER': ['poner', 'ponte', 'vesti', 'equip'],
-        'QUITA': ['quita', 'desve'],
-        'METER': ['meter', 'mete', 'intro'],
-        'SACAR': ['sacar', 'saca'],
-        'INVEN': ['inven', 'inv', 'i', 'llevo'],
-        'PUNT':  ['punto', 'puntu', 'score'],
-        'SALIR': ['salir', 'quit', 'exit'],
-        'ABRIR': ['abrir', 'abre'],
-        'CERRA': ['cerra', 'cierr'],
-    }
+    # Verbos/direcciones de serie desde vocab_base (idioma del juego + overrides
+    # del autor en metadata['vocab_base']). Fuente única compartida con el PC.
+    import vocab_base
+    _meta = game.get('metadata') or {}
+    _lang = _meta.get('language')
+    _vov = _meta.get('vocab_base') or {}
+    _dirs = vocab_base.dirs(_lang, _vov)        # {N: [palabras], ...}
+    DIRCANON = {}
+    for _canon, _syns in _dirs.items():
+        for _s in _syns:
+            DIRCANON[translit(_s[:5]).upper()] = _canon
+    builtins = {canon: list(syns)
+                for canon, syns in vocab_base.verbs(_lang, _vov).items()}
     c.verbalias = {}
     todos = dict(builtins)
     for vkey, aliases in (game.get('vocabulary', {}).get('verbs') or {}).items():
@@ -296,12 +291,11 @@ def recolecta(game):
             a5 = translit(a[:5]).upper()
             mapped = DIRCANON.get(a5)
             c.verbalias[a5] = c.verbid[mapped] if mapped else i
-    # direcciones en claro
-    for w, d in [('NORTE', 'N'), ('SUR', 'S'), ('ESTE', 'E'), ('OESTE', 'O'),
-                 ('N', 'N'), ('S', 'S'), ('E', 'E'), ('O', 'O'), ('W', 'O'),
-                 ('U', 'U'), ('D', 'D'), ('ARRIB', 'U'), ('ABAJO', 'D'),
-                 ('SUBIR', 'U'), ('BAJAR', 'D'), ('SUBE', 'U'), ('BAJA', 'D')]:
-        c.verbalias[w] = c.verbid[d]
+    # direcciones en claro (desde vocab_base; incluye N/S/E/O/U/D canónicos)
+    for _canon, _syns in _dirs.items():
+        c.verbalias[_canon] = c.verbid[_canon]
+        for _s in _syns:
+            c.verbalias[translit(_s[:5]).upper()] = c.verbid[_canon]
 
     # variables del juego
     c.vars = {}

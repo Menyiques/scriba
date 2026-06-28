@@ -593,28 +593,39 @@ class PAWSInterpreter:
         vocab = self.game.get("vocabulary", {})
         self.vocab_lookup = {}
 
-        # Inyectar vocabulario predefinido. NOTA: el vocabulario del juego se
-        # carga DESPUÉS, por lo que puede sobreescribir estos builtins a
-        # propósito (la última asignación a vocab_lookup gana).
-        for bkey, baliases in BUILTIN_VERBS.items():
-            canonical = bkey[:5].upper()
-            for alias in baliases:
+        # Vocabulario de SERIE desde vocab_base (idioma del juego + overrides del
+        # autor en metadata['vocab_base']). Fuente única compartida con el motor
+        # retro. El vocabulario del juego se carga DESPUÉS y puede sobreescribirlo.
+        import vocab_base
+        meta = self.game.get('metadata') or {}
+        _lang = meta.get('language')
+        _ov = meta.get('vocab_base') or {}
+        vb_verbs = vocab_base.verbs(_lang, _ov)
+        vb_dirs = vocab_base.dirs(_lang, _ov)
+        vb_preps = vocab_base.preps(_lang, _ov)
+
+        for canonical, syns in vb_verbs.items():
+            for alias in syns:
                 self.vocab_lookup[alias[:5].upper()] = ("VERB", canonical)
             self.vocab_lookup[canonical] = ("VERB", canonical)
-
-        for bkey, baliases in BUILTIN_PREPS.items():
-            canonical = bkey[:5].upper()
-            for alias in baliases:
+        for canonical, syns in vb_preps.items():
+            for alias in syns:
                 self.vocab_lookup[alias[:5].upper()] = ("PREP", canonical)
             self.vocab_lookup[canonical] = ("PREP", canonical)
+        # Direcciones de serie como verbos (N/S/E/O/U/D) + mapa palabra->canónico.
+        dir_verb_map = {}
+        for canonical, syns in vb_dirs.items():
+            self.vocab_lookup[canonical] = ("VERB", canonical)
+            for alias in syns:
+                w5 = alias[:5].upper()
+                self.vocab_lookup[w5] = ("VERB", canonical)
+                dir_verb_map[w5] = canonical
+        self._dir_words = dict(dir_verb_map)
 
         # Palabra especial TODO ("COGER TODO") — integrada en el intérprete.
         # El vocabulario del juego se carga después y puede redefinirla.
         for alias in ('todo', 'all'):
             self.vocab_lookup[alias[:5].upper()] = ("NOUN", "TODO")
-
-        # Mapa de verbos de dirección a forma canónica corta
-        dir_verb_map = DIR_VERB_CANON
 
         for verb_key, aliases in vocab.get("verbs", {}).items():
             raw_canonical = verb_key[:5].upper()
@@ -683,12 +694,10 @@ class PAWSInterpreter:
                     # Las preposiciones separan noun1 de noun2
                     prep_seen = True
 
-        # Dirección como verbo
+        # Dirección como verbo (primer término): según el vocabulario del idioma.
         dir_key = words[0][:5]
-        for d_alias, d_canon in DIRECTIONS.items():
-            if dir_key == d_alias[:5]:
-                verb = d_canon
-                break
+        if dir_key in getattr(self, '_dir_words', {}):
+            verb = self._dir_words[dir_key]
 
         nouns_found = nouns_before + nouns_after
         if nouns_found:
