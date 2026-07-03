@@ -6944,4 +6944,127 @@ class InterpreterWindow:
     def _hist_up(self, event):
         if self.history:
             self.history_pos = min(self.history_pos + 1, len(self.history) - 1)
-  
+            self.ivar.set(self.history[-(self.history_pos + 1)])
+
+    def _hist_down(self, event):
+        if self.history_pos > 0:
+            self.history_pos -= 1
+            self.ivar.set(self.history[-(self.history_pos + 1)])
+        else:
+            self.history_pos = -1
+            self.ivar.set('')
+
+    def close(self):
+        # Liberar el hilo del turno si estaba pausado en el debugger
+        self._debug_mode = False
+        self._cont_mode  = True
+        self._step_event.set()
+        self.editor.highlight_player_loc(None)
+        self.editor.clear_condact_highlight()
+        self.editor._interp_win = None
+        placeholder = self.editor._interp_placeholder
+        for w in self.frame.winfo_children():
+            if w is not placeholder:
+                w.destroy()
+        placeholder.pack(expand=True)
+        h = self.editor._right_pw.winfo_height()
+        self.editor._right_pw.sash_place(0, 0, h - 4)
+
+    def _set_step_buttons(self, active):
+        state = tk.NORMAL if active else tk.DISABLED
+        self.btn_step.config(state=state)
+        self.btn_cont.config(state=state)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ENTRY POINT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _resource_path(name):
+    """Ruta de un recurso, válida también en el .exe de PyInstaller."""
+    base = getattr(sys, '_MEIPASS', None) or os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, name)
+
+
+def _show_splash(root):
+    """Pantalla de bienvenida de Scriba (logo + lema). Se cierra sola a los
+    ~2,5 s o al pulsar. Si no encuentra scriba_logo.png muestra el texto."""
+    try:
+        sp = tk.Toplevel(root)
+        sp.withdraw()                      # oculta mientras se posiciona
+        sp.configure(bg='white', highlightthickness=1,
+                     highlightbackground='#1f3a5f')
+        img = None
+        try:
+            p = None
+            for _n in ('scriba_logo.png', 'scriba_logo.PNG', 'scriba-logo.png',
+                       'scriba-logo.PNG', 'logo.png'):
+                _c = _resource_path(_n)
+                if os.path.isfile(_c) and os.path.getsize(_c) > 0:
+                    p = _c
+                    break
+            if p:
+                img = tk.PhotoImage(file=p)
+                f = max(1, (img.width() + 299) // 300)   # objetivo ~300 px ancho
+                if f > 1:
+                    img = img.subsample(f, f)
+        except Exception:
+            img = None
+        if img is not None:
+            lbl = tk.Label(sp, image=img, bg='white')
+            lbl.image = img                              # referencia viva
+            lbl.pack(padx=30, pady=(24, 2))
+        else:
+            tk.Label(sp, text='SCRIBA', bg='white', fg='#1f3a5f',
+                     font=('Helvetica', 44, 'bold')).pack(padx=70, pady=(46, 2))
+        tk.Label(sp, text='Multiplatform Adventure Writing System',
+                 bg='white', fg='#2e6da4',
+                 font=('Helvetica', 12)).pack(padx=24, pady=(0, 6))
+        tk.Label(sp, text='Version ' + SCRIBA_VERSION + '     ' + SCRIBA_COPYRIGHT,
+                 bg='white', fg='#8090a0',
+                 font=('Helvetica', 9)).pack(padx=24, pady=(0, 22))
+        sp.update_idletasks()
+        w, h = sp.winfo_reqwidth(), sp.winfo_reqheight()
+        # Centrar sobre la ventana principal si ya tiene geometría; si no, pantalla
+        try:
+            root.update_idletasks()
+            rw, rh = root.winfo_width(), root.winfo_height()
+            rx, ry = root.winfo_rootx(), root.winfo_rooty()
+        except Exception:
+            rw = rh = 0
+        if rw > 1 and rh > 1 and (rx or ry):
+            x, y = rx + (rw - w) // 2, ry + (rh - h) // 2
+        else:
+            x = (sp.winfo_screenwidth() - w) // 2
+            y = (sp.winfo_screenheight() - h) // 2
+        x, y = max(0, x), max(0, y)
+        sp.geometry('%dx%d+%d+%d' % (w, h, x, y))
+        sp.overrideredirect(True)              # tras fijar geometría (Windows)
+        sp.deiconify()
+        sp.geometry('+%d+%d' % (x, y))         # reafirmar posición
+        sp.after(10, lambda: sp.geometry('+%d+%d' % (x, y)))
+        try:
+            sp.attributes('-topmost', True)
+        except Exception:
+            pass
+
+        def _close():
+            try:
+                sp.destroy()
+            except Exception:
+                pass
+        sp.bind('<Button-1>', lambda e: _close())
+        sp.after(2500, _close)
+        sp.update()
+        return sp
+    except Exception:
+        return None
+
+
+if __name__ == '__main__':
+    root = tk.Tk()
+    initial = sys.argv[1] if len(sys.argv) > 1 else None
+    app = ScribaEditor(root, initial_file=initial)
+    root.update_idletasks()          # la ventana ya tiene tamaño/posición
+    _show_splash(root)               # splash centrada sobre la ventana
+    root.mainloop()

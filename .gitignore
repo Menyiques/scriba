@@ -57,3 +57,7 @@ scriba_build.json
 Thumbs.db
 *.tmp
 *.bak
+
+# changelog (se sube aunque *.md este ignorado)
+!NOVEDADES.md
+*.odt

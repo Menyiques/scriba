@@ -981,10 +981,13 @@ def genera_fuente2(c, L):
         for p in parrafos(d):
             L.append(f'        pw({q(p)})')
     if primero:
-        L.append('    IF 0 THEN')
-    L.append('    ELSE')
-    L.append('        pw("No ves nada especial.")')
-    L.append('    END IF')
+        # Ningún objeto tiene descripción de examen: sin IF (Boriel no admite
+        # THEN vacío); siempre el mensaje genérico.
+        L.append('    pw("No ves nada especial.")')
+    else:
+        L.append('    ELSE')
+        L.append('        pw("No ves nada especial.")')
+        L.append('    END IF')
     L.append('END SUB')
     L.append('')
 
