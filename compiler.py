@@ -121,6 +121,7 @@ def validate_script(name: str, script, game: dict, errors: list, warnings: list)
     locations = game.get("locations", {})
     timers    = game.get("timers", {})
     if_depth = on_depth = 0
+    prev_was_on = False
 
     for raw in lines:
         code = raw.strip()
@@ -156,7 +157,10 @@ def validate_script(name: str, script, game: dict, errors: list, warnings: list)
                 errors.append(f"{name}: ENDIF sin IF")
                 if_depth = 0
         elif cmd == 'ON':
-            on_depth += 1
+            # Varias cabeceras ON consecutivas comparten un cuerpo y un solo
+            # ENDON: solo abren nivel en la primera del grupo.
+            if not prev_was_on:
+                on_depth += 1
         elif cmd == 'ENDON':
             on_depth -= 1
             if on_depth < 0:
@@ -175,13 +179,17 @@ def validate_script(name: str, script, game: dict, errors: list, warnings: list)
             if not _resolves_to_object(tokens[1], objects):
                 warnings.append(f"{name}: {cmd} '{tokens[1]}' no es un objeto conocido")
             dest = tokens[2]
-            if dest not in locations and dest not in ("INVEN", "PUESTO", "NADA") \
+            if dest not in locations \
+               and dest.upper() not in ("@INVEN", "@ONME", "@NOWHERE",
+                                        "INVEN", "PUESTO", "NADA") \
                and dest not in objects:
                 errors.append(f"{name}: destino '{dest}' de {cmd} no existe")
         elif cmd in ('PUTIN', 'TAKEOUT') and len(tokens) > 2:
             for a in tokens[1:3]:
                 if not _resolves_to_object(a, objects):
                     warnings.append(f"{name}: {cmd} '{a}' no es un objeto conocido")
+
+        prev_was_on = (cmd == 'ON')
 
     if if_depth:
         errors.append(f"{name}: {if_depth} IF sin ENDIF")

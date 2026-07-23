@@ -162,6 +162,56 @@ BUILTIN_PREPS = {
     'sin':    ['sin'],
 }
 
+
+def _corta5(lst):
+    """Recorta cada palabra a 5 letras y quita duplicados (como vocab_base/motor)."""
+    out, vistos = [], set()
+    for w in lst:
+        w5 = str(w)[:5]
+        k = w5.lower()
+        if k in vistos:
+            continue
+        vistos.add(k)
+        out.append(w5)
+    return out
+
+
+# Claves Y sinónimos de serie recortados a 5 letras (inventario->inven,
+# agarrar->agarr, observar->obser...), igual que hace el motor al compilar; asi
+# lo que ve el editor coincide. Si dos claves colisionan al recortar, se fusionan
+# sus sinónimos.
+def _corta5_dict(d):
+    out = {}
+    for k, v in d.items():
+        k5 = str(k)[:5]
+        out[k5] = _corta5(out.get(k5, []) + list(v))
+    return out
+
+BUILTIN_VERBS = _corta5_dict(BUILTIN_VERBS)
+BUILTIN_PREPS = _corta5_dict(BUILTIN_PREPS)
+
+# Variables de sistema. En el YAML/editor van con prefijo '_' (como el resto),
+# pero el motor interno las usa por su nombre fijo sin prefijo. norm_var() le
+# quita el '_' inicial SOLO a estas cuatro (el export ZX ya hace lo mismo al
+# eliminar los no-alfanuméricos en _vname).
+_SYS_VARS = ('PUNTOS', 'TURNOS', 'LLEVAR_MAX', 'PESO_ACT')
+
+def norm_var(name):
+    n = str(name)
+    if n[:1] == '_' and n[1:].upper() in _SYS_VARS:
+        return n[1:].upper()
+    return n
+
+# Ubicaciones especiales (forma que escribe el autor) -> forma interna del motor.
+# Únicas válidas: @INVEN, @ONME, @NOWHERE.
+_SPECIAL_LOC = {'@INVEN': 'INVEN', '@ONME': 'PUESTO', '@NOWHERE': 'NADA'}
+
+def norm_loc(loc):
+    """Ubicación especial escrita con @ (@INVEN/@ONME/@NOWHERE) -> forma interna.
+    Insensible a mayúsculas. Localizaciones reales (@loc) y contenedores (#obj) se
+    dejan intactos (con su caja original)."""
+    return _SPECIAL_LOC.get(str(loc).upper(), loc)
+
 # ─── LENGUAJE BASIC PARA CONDACTS ────────────────────────────────────────────
 
 class PAWSBasic:
@@ -308,12 +358,34 @@ class PAWSBasic:
             self.pos += 1
     # ── ON / ENDON / MATCH ──────────────────────────────────────────────────
 
+    def _canon_slot(self, slot):
+        """Normaliza los tokens de un hueco ON a la forma canónica de 5 letras
+        que produce el parser (p.ej. 'puerta'->'PUERT', 'norte'->'N'), igual que
+        el motor compilado. '*' y '_' se dejan intactos. Sin esto, un token de
+        más de 5 letras (como 'puerta') nunca casaría con el canónico 'PUERT'."""
+        if slot in ('*', '_'):
+            return slot
+        vl = getattr(self.interp, 'vocab_lookup', {}) or {}
+        objs = getattr(self.interp, 'objects', {}) or {}
+        id_ci = {oid.upper(): oid for oid in objs}
+        out = []
+        for tok in slot:
+            # ID de objeto (empieza por '#'): se resuelve a su Noun canónico,
+            # de modo que 'ON cavar #arena' equivale a 'ON cavar arena'.
+            if tok.startswith('#') and tok in id_ci:
+                out.append((objs[id_ci[tok]].get('noun') or '')[:5].upper())
+                continue
+            c5 = tok[:5].upper()
+            entry = vl.get(c5)
+            out.append(entry[1] if entry else c5)
+        return out
+
     def _eval_on_match(self, line):
         """¿El bloque ON casa con el verbo/nombres del turno? Cada hueco admite
         palabra, * (cualquiera), _ (ninguno) o alternativas (A OR B)."""
         rest = line.split(None, 1)
         rest = rest[1] if len(rest) > 1 else ''
-        s = paws_lang.parse_on(rest)
+        s = [self._canon_slot(x) for x in paws_lang.parse_on(rest)]
         return (paws_lang.on_slot_matches(s[0], self._current_verb) and
                 paws_lang.on_slot_matches(s[1], self._current_noun1) and
                 paws_lang.on_slot_matches(s[2], self._current_noun2))
@@ -323,8 +395,25 @@ class PAWSBasic:
         Ejecuta un bloque ON verbo [nombre1 [nombre2]] ... ENDON.
         Cada hueco: palabra, * (cualquiera), _ (ninguno) o (A OR B) alternativas.
         MATCH dentro del bloque detiene el script (handled).
+
+        Se admiten VARIAS cabeceras ON consecutivas compartiendo un mismo cuerpo:
+            ON abrir _puerta _llave
+            ON usar _llave _puerta
+              ... cuerpo ...
+            ENDON
+        El cuerpo se ejecuta si casa CUALQUIERA de las cabeceras (OR).
         """
-        if self._eval_on_match(line):
+        matched = self._eval_on_match(line)
+        # Consumir cabeceras ON consecutivas adicionales (comparten cuerpo).
+        while self.pos < len(self.lines) and \
+                self.lines[self.pos].upper().strip().startswith('ON '):
+            hdr = self.lines[self.pos]
+            self.pos += 1
+            m = self._eval_on_match(hdr)
+            if self.pre_exec_hook:
+                self.pre_exec_hook(hdr, m)
+            matched = matched or m
+        if matched:
             self._run_block()                    # ejecuta cuerpo hasta ENDON
             if self.pos < len(self.lines) and self.lines[self.pos].upper().strip() == 'ENDON':
                 self.pos += 1                    # consume ENDON
@@ -369,6 +458,18 @@ class PAWSBasic:
             return pattern == '*' or self._current_noun2 == pattern
         return self.interp.check_condition({"condition": name, "args": args})
 
+    def _getvar(self, n):
+        """Resuelve un identificador en una expresión: '#objeto.propiedad' lee la
+        propiedad; '#objeto' suelto, '@loc' e INVEN/PUESTO/NADA se devuelven como
+        su id (para comparar con #obj.isat); el resto es una variable."""
+        if not n:
+            return 0
+        if n[0] == '#':
+            return self.interp.obj_prop(n) if '.' in n else n
+        if n[0] == '@':
+            return norm_loc(n)   # @INVEN/@ONME/@NOWHERE -> forma interna; @loc intacto
+        return self.interp.variables.get(norm_var(n), 0)
+
     def _eval_condition(self, cond_str):
         """Evalúa una condición con el parser compartido (paws_lang):
         AND/OR/NOT, paréntesis, comparaciones con expresiones aritméticas
@@ -377,7 +478,7 @@ class PAWSBasic:
         try:
             return paws_lang.eval_condition(
                 paws_lang.parse_condition(cond_str),
-                lambda n: self.interp.variables.get(n, 0),
+                self._getvar,
                 self._predicate)
         except paws_lang.ParseError as e:
             print(f"[Error de sintaxis en condición '{cond_str}': {e}]")
@@ -392,7 +493,7 @@ class PAWSBasic:
         try:
             return paws_lang.eval_expr(
                 paws_lang.parse_expr(expr),
-                lambda n: self.interp.variables.get(n, 0))
+                self._getvar)
         except paws_lang.ParseError as e:
             print(f"[Error de sintaxis en expresión '{expr}': {e}]")
             return 0
@@ -436,7 +537,12 @@ class PAWSBasic:
         elif cmd == 'LET':
             if '=' in rest:
                 lhs, rhs = rest.split('=', 1)
-                interp.variables[lhs.strip()] = self._eval_expr(rhs)
+                lhs = lhs.strip()
+                val = self._eval_expr(rhs)
+                if lhs.startswith('#'):        # LET #objeto.propiedad = valor
+                    interp.set_obj_prop(lhs, val)
+                else:
+                    interp.variables[norm_var(lhs)] = val
 
         elif cmd == 'ADDSCORE':
             try:
@@ -554,7 +660,8 @@ class PAWSInterpreter:
         _lng = str(self.meta.get('language') or 'es').strip().lower()
         self._lang = ('pt' if _lng.startswith(('pt', 'por'))
                       else 'en' if _lng.startswith('en') else 'es')
-        self.variables = dict(game.get("variables", {}))
+        self.variables = {norm_var(k): v
+                          for k, v in (game.get("variables", {}) or {}).items()}
         self.locations = game.get("locations", {})
         self.objects = {}
         self.timers = {}
@@ -571,6 +678,8 @@ class PAWSInterpreter:
         # Copiar objetos con estado mutable
         for obj_id, obj_data in game.get("objects", {}).items():
             self.objects[obj_id] = dict(obj_data)
+            # normaliza ubicaciones especiales @INVEN/@ONME/@NOWHERE -> interno
+            self.objects[obj_id]["location"] = norm_loc(self.objects[obj_id].get("location"))
 
         # Copiar timers con estado mutable
         for tim_id, tim_data in game.get("timers", {}).items():
@@ -638,6 +747,14 @@ class PAWSInterpreter:
                 self.vocab_lookup[w5] = ("VERB", mapped if mapped else canonical)
             # El propio key
             self.vocab_lookup[raw_canonical] = ("VERB", canonical)
+
+        # Nombre de cada OBJETO autorregistrado (como hace el motor): así el
+        # jugador puede referirse al objeto por su noun aunque NO exista una
+        # entrada en vocabulary.nouns. Esa entrada queda solo para sinónimos.
+        for _oid, _obj in self.objects.items():
+            n5 = (_obj.get("noun") or "")[:5].upper()
+            if n5:
+                self.vocab_lookup.setdefault(n5, ("NOUN", n5))
 
         for noun_key, aliases in vocab.get("nouns", {}).items():
             canonical = noun_key[:5].upper()
@@ -733,6 +850,57 @@ class PAWSInterpreter:
             return arg
         return self.find_object_by_noun(arg, accessible_only=False) or arg
 
+    def obj_prop(self, ref: str) -> int:
+        """Lee '#objeto.propiedad' como entero (0/1 para banderas). Propiedades:
+        open, locked, lit, openable, wearable, light_source (o light), fixed,
+        weight, carried. Devuelve 0 si el objeto o la propiedad no existen."""
+        base, _sep, prop = str(ref).partition('.')
+        prop = prop.lower()
+        obj = self.objects.get(self.resolve_obj(base), {})
+        if not obj:
+            return 0
+        if prop in ('open', 'locked', 'lit', 'openable', 'wearable', 'container'):
+            return 1 if obj.get(prop) else 0
+        if prop in ('light', 'light_source'):
+            return 1 if obj.get('light_source') else 0
+        if prop == 'fixed':
+            return 1 if 'fixed' in (obj.get('attributes') or []) else 0
+        if prop == 'carried':
+            return 1 if obj.get('location') in ('INVEN', 'PUESTO') else 0
+        if prop == 'worn':
+            return 1 if obj.get('location') == 'PUESTO' or obj.get('worn') else 0
+        if prop == 'present':
+            loc = obj.get('location', 'NADA')
+            return 1 if loc in ('INVEN', 'PUESTO') or loc == self.player_location else 0
+        if prop == 'weight':
+            return int(obj.get('weight') or 0)
+        if prop in ('isat', 'loc', 'location'):
+            # ubicación actual del objeto (para comparar: #obj.isat = @loc / INVEN / #cont)
+            return obj.get('location')
+        return 0
+
+    def set_obj_prop(self, ref, value):
+        """Asigna '#objeto.propiedad = valor'. Solo las propiedades con estado
+        propio: open, locked, lit, openable, wearable, light_source, fixed, weight.
+        carried/worn/present dependen de la ubicación (usa GET/DROP/WEAR...)."""
+        base, _sep, prop = str(ref).partition('.')
+        prop = prop.lower()
+        obj = self.objects.get(self.resolve_obj(base))
+        if obj is None:
+            return
+        v = int(value)
+        if prop in ('open', 'locked', 'lit', 'openable', 'wearable'):
+            obj[prop] = bool(v)
+        elif prop in ('light', 'light_source'):
+            obj['light_source'] = bool(v)
+        elif prop == 'weight':
+            obj['weight'] = v
+        elif prop == 'fixed':
+            attrs = [a for a in (obj.get('attributes') or []) if a != 'fixed']
+            if v:
+                attrs.append('fixed')
+            obj['attributes'] = attrs
+
     def find_object_by_noun(self, noun5: str, accessible_only: bool = True) -> str:
         """Busca el ID de objeto por su noun canónico. Prioriza inventario/sala."""
         candidates = []
@@ -824,55 +992,10 @@ class PAWSInterpreter:
             return self.player_location == args[0]
         elif condition == "NOTAT":
             return self.player_location != args[0]
-        elif condition == "PRESENT":
-            obj_id = self.resolve_obj(args[0])
-            obj = self.objects.get(obj_id, {})
-            loc = obj.get("location", "NADA")
-            return loc in ("INVEN", "PUESTO") or loc == self.player_location
-        elif condition == "ABSENT":
-            obj_id = self.resolve_obj(args[0])
-            obj = self.objects.get(obj_id, {})
-            loc = obj.get("location", "NADA")
-            return loc not in ("INVEN", "PUESTO") and loc != self.player_location
-        elif condition == "CARRIED":
-            obj_id = self.resolve_obj(args[0])
-            obj = self.objects.get(obj_id, {})
-            return obj.get("location", "") in ("INVEN", "PUESTO")
-        elif condition == "NOTCARR":
-            obj_id = self.resolve_obj(args[0])
-            obj = self.objects.get(obj_id, {})
-            return obj.get("location", "") not in ("INVEN", "PUESTO")
-        elif condition == "WORN":
-            obj_id = self.resolve_obj(args[0])
-            obj = self.objects.get(obj_id, {})
-            return obj.get("location") == "PUESTO" or obj.get("worn", False)
-        elif condition == "NOTWORN":
-            return not self.check_condition({"condition": "WORN", "args": args})
-        elif condition == "ISAT":
-            # args[1] puede ser una localización, un id de objeto (contenedor)
-            # o un noun de objeto. Las localizaciones tienen prioridad.
-            obj_id = self.resolve_obj(args[0])
-            target = args[1] if args[1] in self.locations else self.resolve_obj(args[1])
-            obj = self.objects.get(obj_id, {})
-            return obj.get("location") == target
-        elif condition == "ZERO":
-            return self.variables.get(args[0], 0) == 0
-        elif condition == "NOTZERO":
-            return self.variables.get(args[0], 0) != 0
-        elif condition == "EQ":
-            return self.variables.get(args[0], 0) == int(args[1])
-        elif condition == "GT":
-            return self.variables.get(args[0], 0) > int(args[1])
-        elif condition == "LT":
-            return self.variables.get(args[0], 0) < int(args[1])
         elif condition == "CHANCE":
             return random.randint(1, 100) <= int(args[0])
         elif condition == "DARK":
             return self.location_is_dark()
-        elif condition == "HASOBJOPEN":
-            obj_id = self.resolve_obj(args[0])
-            obj = self.objects.get(obj_id, {})
-            return obj.get("open", False)
         elif condition == "TIMER":
             tim_id, val = args[0], int(args[1])
             timer = self.timers.get(tim_id, {})
@@ -960,7 +1083,7 @@ class PAWSInterpreter:
 
         elif action == "PUT":
             obj_id = self.resolve_obj(args[0])
-            loc_id = args[1]
+            loc_id = norm_loc(args[1])
             obj = self.objects.get(obj_id, {})
             if obj:
                 obj["location"] = loc_id
@@ -995,20 +1118,22 @@ class PAWSInterpreter:
                 self.recalc_weight()
 
         elif action == "CREATE":
-            obj_id, loc_id = args[0], args[1]
+            obj_id, loc_id = args[0], norm_loc(args[1])
             obj = self.objects.get(obj_id, {})
             if obj:
                 obj["location"] = loc_id
                 self.recalc_weight()
 
         elif action == "SET":
-            self.variables[args[0]] = int(args[1])
+            self.variables[norm_var(args[0])] = int(args[1])
 
         elif action == "ADD":
-            self.variables[args[0]] = self.variables.get(args[0], 0) + int(args[1])
+            k = norm_var(args[0])
+            self.variables[k] = self.variables.get(k, 0) + int(args[1])
 
         elif action == "SUB":
-            self.variables[args[0]] = self.variables.get(args[0], 0) - int(args[1])
+            k = norm_var(args[0])
+            self.variables[k] = self.variables.get(k, 0) - int(args[1])
 
         elif action == "ADDSCORE":
             self.variables["PUNTOS"] = self.variables.get("PUNTOS", 0) + int(args[0])

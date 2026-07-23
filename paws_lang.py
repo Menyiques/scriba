@@ -41,9 +41,8 @@ import re
 # son ids de localización/objeto/timer, números o comodines (* _), y los
 # resuelve cada backend (check_condition en PC, _pred2zx en el export).
 PREDICATES = {
-    'AT', 'NOTAT', 'CARRIED', 'NOTCARR', 'PRESENT', 'ABSENT', 'WORN', 'NOTWORN',
-    'ISAT', 'DARK', 'CHANCE', 'TIMER', 'HASOBJOPEN', 'ZERO', 'NOTZERO',
-    'EQ', 'GT', 'LT', 'VERB', 'NOUN1', 'NOUN2',
+    'AT', 'NOTAT', 'DARK', 'CHANCE', 'TIMER',
+    'VERB', 'NOUN1', 'NOUN2',
 }
 
 # Operadores de comparación, los multi-carácter primero (para casar bien
@@ -70,6 +69,23 @@ def _tokenize_expr(s):
             while j < n and s[j].isdigit():
                 j += 1
             toks.append(('num', int(s[i:j])))
+            i = j
+            continue
+        if ch == '#':
+            # Propiedad de objeto: #objeto.propiedad (p.ej. #puerta.locked) o
+            # id de objeto suelto (p.ej. como destino en #obj.isat = #cofre).
+            j = i + 1
+            while j < n and (s[j] == '_' or s[j] == '.' or s[j].isalnum()):
+                j += 1
+            toks.append(('id', s[i:j]))
+            i = j
+            continue
+        if ch == '@':
+            # Id de localización: @playa (destino de #objeto.isat = @loc)
+            j = i + 1
+            while j < n and (s[j] == '_' or s[j].isalnum()):
+                j += 1
+            toks.append(('id', s[i:j]))
             i = j
             continue
         if ch == '_' or ch.isalpha():

@@ -20,7 +20,7 @@ import sys
 import copy
 
 # ─── Versión del IDE (incrementar AQUÍ cuando se pida) ──────────────────
-SCRIBA_VERSION   = '2.3'
+SCRIBA_VERSION   = '2.43'
 SCRIBA_COPYRIGHT = '(c) 2026 Menyiques Soft'
 
 try:
@@ -35,6 +35,23 @@ except ImportError:
     validate_game = validate_scripts = check_vocabulary = None
 
 BUILTIN_BY_SECTION = {'verbs': BUILTIN_VERBS, 'prepositions': BUILTIN_PREPS}
+
+# Convención de prefijos para dar claridad a los identificadores:
+#   objetos -> '#'   variables -> '_'   localizaciones -> '@'
+# Las variables de sistema van por nombre fijo y NO llevan prefijo.
+PREFIJO_OBJETO = '#'
+PREFIJO_VARIABLE = '_'
+PREFIJO_LOCALIZACION = '@'
+VARS_RESERVADAS = {'PUNTOS', 'TURNOS', 'LLEVAR_MAX', 'PESO_ACT'}
+# Ubicaciones especiales: llevan @ como las localizaciones y están reservadas
+# (el usuario no puede crear una localización con estos nombres).
+LOCS_ESPECIALES = {'@INVEN', '@ONME', '@NOWHERE'}
+# Formas que el autor puede escribir -> forma canónica (@INVEN/@ONME/@NOWHERE).
+LOC_ESP_MAP = {
+    'INVEN': '@INVEN', '@INVEN': '@INVEN',
+    'PUESTO': '@ONME', 'ONME': '@ONME', '@PUESTO': '@ONME', '@ONME': '@ONME',
+    'NADA': '@NOWHERE', 'NOWHERE': '@NOWHERE', '@NADA': '@NOWHERE', '@NOWHERE': '@NOWHERE',
+}
 
 
 def _yaml_str_representer(dumper, data):
@@ -348,7 +365,7 @@ class ScribaEditor:
                 "start_message": "",
                 "border": 0
             },
-            "variables": {"PUNTOS": 0, "TURNOS": 0, "LLEVAR_MAX": 50, "PESO_ACT": 0},
+            "variables": {"_PUNTOS": 0, "_TURNOS": 0, "_LLEVAR_MAX": 50, "_PESO_ACT": 0},
             "vocabulary": {"verbs": {}, "nouns": {}, "prepositions": {}},
             "locations": {},
             "objects": {},
@@ -795,15 +812,54 @@ class ScribaEditor:
         self._build_condacts_tab()
         self._build_crossref_tab()
         self._build_problems_tab()
+        self._build_reference_tab()
         self.nb.bind('<<NotebookTabChanged>>', self._on_tab_changed)
         self._apply_zx_cols(announce=False)   # ancho inicial de cajas + reglas
 
+    _CONDACTS_TAB_TEXT = ' Condacts '
+
     def _on_tab_changed(self, event=None):
-        """Al entrar en la pestaña Código, refresca los combos por si se han
-        añadido o borrado objetos/localizaciones en otras pestañas."""
+        """Condacts y Código son dos vistas del MISMO código. Al SALIR de una se
+        vuelcan sus ediciones al juego; al ENTRAR en la otra se recarga desde el
+        juego. Así lo hecho en una se ve aplicado en la otra al cambiar de pestaña
+        (y de paso los combos de Código quedan al día)."""
         try:
-            if self.nb.tab(self.nb.select(), 'text') == self._CS_TAB_TEXT:
+            cur = self.nb.tab(self.nb.select(), 'text')
+        except Exception:
+            return
+        prev = getattr(self, '_prev_tab_text', None)
+        # salir de una vista -> volcar al juego
+        try:
+            if prev == self._CONDACTS_TAB_TEXT:
+                self._apply_condacts()
+            elif prev == self._CS_TAB_TEXT:
+                self._crossref_apply(quiet=True)
+        except Exception:
+            pass
+        # entrar en una vista -> recargar desde el juego
+        try:
+            if cur == self._CONDACTS_TAB_TEXT:
+                self._load_condacts_to_form()
+            elif cur == self._CS_TAB_TEXT:
                 self._crossref_refresh_combos()
+                self._crossref_rebuild()
+        except Exception:
+            pass
+        self._prev_tab_text = cur
+
+    def _commit_active_code_view(self):
+        """Vuelca al juego las ediciones de la vista de código activa (Condacts o
+        Código). Red de seguridad para guardar/jugar/compilar sin cambiar antes de
+        pestaña (p.ej. Ctrl+S mientras se edita)."""
+        try:
+            cur = self.nb.tab(self.nb.select(), 'text')
+        except Exception:
+            return
+        try:
+            if cur == self._CONDACTS_TAB_TEXT:
+                self._apply_condacts()
+            elif cur == self._CS_TAB_TEXT:
+                self._crossref_apply(quiet=True)
         except Exception:
             pass
 
@@ -1008,7 +1064,7 @@ class ScribaEditor:
         form = ttk.LabelFrame(fr, text=" Editar objeto ")
         form.pack(fill=tk.X, padx=4, pady=4)
 
-        simple_fields = [("ID","id"),("Nombre","name"),("Noun","noun"),
+        simple_fields = [("ID","id"),("Nombre corto","name"),("Nombre input","noun"),
                          ("Ubicación","location"),("Peso","weight"),("Key (llave)","key")]
         self._obj_w = {}
         for i, (label, key) in enumerate(simple_fields):
@@ -1028,15 +1084,61 @@ class ScribaEditor:
         cb_fr = ttk.Frame(form)
         cb_fr.grid(row=len(simple_fields)+1, column=0, columnspan=2, sticky=tk.W, padx=4)
         self._obj_cb = {}
-        for cb in ["wearable","container","openable","open","locked","light_source","lit"]:
+        # 'fixed' NO es un campo booleano: se guarda en la lista attributes[].
+        # Se muestra el primero por ser el mas habitual (objeto que no se coge).
+        self._obj_fixed = tk.BooleanVar()
+        ttk.Checkbutton(cb_fr, text="fixed",
+                        variable=self._obj_fixed).pack(side=tk.LEFT, padx=3)
+        # 'open' y 'locked' YA NO son checkboxes independientes (podían marcarse
+        # a la vez, contradictorio). Ahora son un estado excluyente (ver abajo).
+        self._obj_cb_w = {}
+        for cb in ["wearable", "container", "openable", "light_source", "lit"]:
             v = tk.BooleanVar()
-            ttk.Checkbutton(cb_fr, text=cb, variable=v).pack(side=tk.LEFT, padx=3)
+            cmd = None
+            if cb == "openable":
+                cmd = self._sync_estado_abrible
+            elif cb == "light_source":
+                cmd = self._sync_lit
+            w = ttk.Checkbutton(cb_fr, text=cb, variable=v, command=cmd)
+            w.pack(side=tk.LEFT, padx=3)
             self._obj_cb[cb] = v
+            self._obj_cb_w[cb] = w
+
+        # Estado abrir/cerrar: opciones excluyentes, solo activas si 'openable'.
+        est_fr = ttk.Frame(form)
+        est_fr.grid(row=len(simple_fields)+2, column=0, columnspan=2,
+                    sticky=tk.W, padx=4, pady=(2, 0))
+        ttk.Label(est_fr, text="Estado:").pack(side=tk.LEFT, padx=(2, 4))
+        self._obj_estado = tk.StringVar(value="cerrado")
+        self._obj_estado_rb = []
+        for txt, val in (("Abierto", "abierto"),
+                         ("Cerrado", "cerrado"),
+                         ("Cerrado con llave", "llave")):
+            rb = ttk.Radiobutton(est_fr, text=txt, value=val,
+                                 variable=self._obj_estado)
+            rb.pack(side=tk.LEFT, padx=3)
+            self._obj_estado_rb.append(rb)
 
         ttk.Button(form, text="💾 Guardar objeto",
-                   command=self._apply_obj).grid(row=len(simple_fields)+2, column=0,
+                   command=self._apply_obj).grid(row=len(simple_fields)+3, column=0,
                                                   columnspan=2, pady=6)
         form.columnconfigure(1, weight=1)
+
+    def _sync_estado_abrible(self):
+        """Habilita el estado (abierto/cerrado/llave) solo si el objeto es
+        'openable'; si no, no tiene sentido y queda deshabilitado."""
+        activo = self._obj_cb['openable'].get()
+        for rb in self._obj_estado_rb:
+            rb.configure(state=(tk.NORMAL if activo else tk.DISABLED))
+
+    def _sync_lit(self):
+        """'lit' (encendido) solo tiene sentido si el objeto es 'light_source'."""
+        activo = self._obj_cb['light_source'].get()
+        w = self._obj_cb_w.get('lit')
+        if w is not None:
+            w.configure(state=(tk.NORMAL if activo else tk.DISABLED))
+        if not activo:
+            self._obj_cb['lit'].set(False)
 
     # ─── Tab: Vocabulario ─────────────────────────────────────────────────
 
@@ -1235,7 +1337,7 @@ class ScribaEditor:
 
     def _build_condacts_tab(self):
         fr = ttk.Frame(self.nb)
-        self.nb.add(fr, text=" Condacts ")
+        self.nb.add(fr, text=self._CONDACTS_TAB_TEXT)
         self._condact_nb = ttk.Notebook(fr)   # referencia directa
         self._condact_nb.pack(fill=tk.BOTH, expand=True)
         self._condact_w = {}
@@ -1248,10 +1350,138 @@ class ScribaEditor:
             self._condact_w[section] = t
         bf = ttk.Frame(fr)
         bf.pack(pady=4)
-        ttk.Button(bf, text="Aplicar condacts",
-                   command=self._apply_condacts).pack(side=tk.LEFT, padx=4)
+        # Los condacts se vuelcan solos al juego (al editar, al cambiar de pestaña
+        # y al guardar/jugar/compilar), así que no hace falta un botón "Aplicar".
+        ttk.Button(bf, text="Formatear",
+                   command=self._format_condacts).pack(side=tk.LEFT, padx=4)
         ttk.Label(bf, text="Ctrl+Espacio: autocompletar · clic en el margen: breakpoint",
                   foreground="#667788").pack(side=tk.LEFT, padx=8)
+
+    # Palabras clave del lenguaje de condacts que el formateador pone en MAYÚS.
+    _COND_KEYWORDS = frozenset({
+        # estructura / lógica / operador
+        "ON", "ENDON", "IF", "THEN", "ELSE", "ENDIF", "AND", "OR", "NOT", "MOD",
+        # sentencias
+        "PRINT", "PRINTLN", "LET", "ADDSCORE", "GOTO", "DESC", "SCORE", "END",
+        "QUIT", "NEWLINE", "BEEP", "BORDER", "PAUSE", "INK", "PAPER", "BRIGHT",
+        "FLASH", "INVERSE", "CLS", "MATCH", "REM", "GET", "DROP", "WEAR",
+        "REMOVE", "DESTROY", "CREATE", "PUT", "PUTIN", "TAKEOUT", "LIT", "UNLIT",
+        "OPEN", "CLOSE", "LOCK", "UNLOCK", "TIMER_START", "TIMER_STOP",
+        "TIMER_RESET", "PLAY",
+        # condiciones (predicados)
+        "AT", "NOTAT", "CARRIED", "NOTCARR", "PRESENT", "ABSENT", "WORN",
+        "NOTWORN", "ISAT", "DARK", "CHANCE", "TIMER", "HASOBJOPEN", "ZERO",
+        "NOTZERO", "EQ", "GT", "LT", "VERB", "NOUN1", "NOUN2",
+    })
+    _COND_TOK_RE = re.compile(r'([#@][A-Za-z0-9_.]+)|([A-Za-z_][A-Za-z0-9_]*)')
+
+    @classmethod
+    def _up_keywords(cls, s):
+        """Pone en MAYÚS solo las palabras clave del lenguaje, dejando intactos
+        los identificadores (#objeto, @loc, _variable, nombres), el texto entre
+        comillas y los comentarios REM."""
+        us = s.upper()
+        if us == 'REM' or us.startswith('REM '):
+            return 'REM' + s[3:]          # no tocar el texto del comentario
+
+        def _up_seg(seg):
+            def repl(m):
+                if m.group(1):            # #id / @id: intactos
+                    return m.group(1)
+                w = m.group(2)            # palabra suelta (_var incluido)
+                return w.upper() if w.upper() in cls._COND_KEYWORDS else w
+            return cls._COND_TOK_RE.sub(repl, seg)
+
+        # proteger el texto entre comillas dobles
+        partes = re.split(r'("[^"]*")', s)
+        for j in range(0, len(partes), 2):
+            partes[j] = _up_seg(partes[j])
+        return ''.join(partes)
+
+    @classmethod
+    def _pretty_condact(cls, text, step="  "):
+        """Reindenta un script de condacts en escalones según su anidamiento
+        (ON/ENDON e IF...THEN/ELSE/ENDIF abren y cierran nivel; las cabeceras ON
+        consecutivas comparten nivel) y pone en MAYÚS las palabras clave. No toca
+        identificadores, texto entre comillas ni comentarios."""
+        lineas = text.split("\n")
+        out = []
+        depth = 0
+        for i, raw in enumerate(lineas):
+            s = raw.strip()
+            if not s:
+                out.append("")
+                continue
+            u = s.upper()
+            # cierres: reducen ANTES de imprimir
+            if u in ("ENDON", "ENDIF", "ELSE"):
+                depth = max(0, depth - 1)
+            out.append(step * depth + cls._up_keywords(s))
+            # aperturas: aumentan DESPUÉS
+            if u == "ELSE":
+                depth += 1
+            elif u.startswith("IF ") and u.endswith("THEN"):
+                depth += 1
+            elif u.startswith("ON ") or u == "ON":
+                # cabeceras ON apiladas: solo abre nivel la última del grupo
+                nxt = next((l.strip().upper() for l in lineas[i + 1:] if l.strip()), "")
+                if not (nxt.startswith("ON ") or nxt == "ON"):
+                    depth += 1
+        return "\n".join(out)
+
+    def _format_condacts(self):
+        """Formatea (reindenta) la sección de condacts que se está viendo."""
+        try:
+            section = self._condact_sections[self._condact_nb.index('current')]
+        except Exception:
+            return
+        t = self._condact_w.get(section)
+        if t is None:
+            return
+        texto = t.get("1.0", "end-1c")
+        nuevo = self._pretty_condact(texto)
+        if nuevo != texto:
+            ins = t.index(tk.INSERT)
+            t.delete("1.0", tk.END)
+            t.insert("1.0", nuevo)
+            try: t.mark_set(tk.INSERT, ins)
+            except Exception: pass
+            self._refresh_code_view(section)
+            self.dirty = True
+            try: self.sv_status.set("Condacts formateados: " + section)
+            except Exception: pass
+
+    def _format_crossref(self):
+        """Formatea la vista de Código: reindenta y pone en MAYÚS las palabras
+        clave de cada bloque, dejando intactas las cabeceras '>>> origen'."""
+        if not hasattr(self, '_cs_text') or not getattr(self, '_cs_units', None):
+            return
+        content = self._cs_text.get('1.0', 'end-1c')
+        out, buf = [], []
+
+        def _flush():
+            if buf:
+                out.append(self._pretty_condact('\n'.join(buf)))
+                buf.clear()
+
+        for ln in content.split('\n'):
+            if ln.startswith(self._CS_HDR):
+                _flush()
+                out.append(ln)            # cabecera intacta
+            else:
+                buf.append(ln)
+        _flush()
+        nuevo = '\n'.join(out)
+        if nuevo != content:
+            self._cs_text.delete('1.0', tk.END)
+            self._cs_text.insert('1.0', nuevo)
+            try:
+                self._highlight_code(self._cs_text)
+                self._crossref_highlight_extra()
+            except Exception:
+                pass
+            try: self.sv_status.set("Código formateado.")
+            except Exception: pass
 
     # ── Editor de código con gutter, resaltado y breakpoints ───────────────
 
@@ -1344,6 +1574,13 @@ class ScribaEditor:
         self._highlight_code(t)
         self._refresh_gutter(section)
         self._mark_breakpoint_lines(section)
+        # Auto-volcado al juego (con retardo, vía _code_changed): así los condacts
+        # están siempre al día para guardar / jugar / compilar sin pulsar "Aplicar".
+        c = self.game.setdefault('condacts', {})
+        nuevo = t.get('1.0', 'end-1c').strip()
+        if c.get(section) != nuevo:
+            c[section] = nuevo
+            self.dirty = True
 
     def _highlight_code(self, t):
         content = t.get("1.0", "end-1c")
@@ -1486,6 +1723,12 @@ class ScribaEditor:
         ttk.Button(top, text="Revalidar (F7)",
                    command=lambda: self._run_validation(silent=False)
                    ).pack(side=tk.LEFT, padx=6)
+        ttk.Button(top, text="Acorta Voc",
+                   command=self._acorta_voc
+                   ).pack(side=tk.LEFT, padx=6)
+        ttk.Button(top, text="Migrar prefijos",
+                   command=self._migra_prefijos
+                   ).pack(side=tk.LEFT, padx=6)
         self._problems_info = ttk.Label(top, text="")
         self._problems_info.pack(side=tk.LEFT, padx=8)
         ttk.Label(top, text="Doble clic: ir al elemento",
@@ -1509,6 +1752,254 @@ class ScribaEditor:
         self.problems_tree = tree
 
         self.root.bind("<F7>", lambda e: self._run_validation(silent=False))
+
+    # ─── Acortar vocabulario a 5 letras (tokens del motor) ──────────────────
+    def _acorta_condact_refs(self, val, ren):
+        """Reemplaza en las lineas 'ON ...' de un condact los tokens renombrados
+        (ren: {viejo: nuevo}). Solo toca lineas ON (donde van los tokens verbo/
+        nombre), no los PRINT ni otras. Devuelve (nuevo_valor, n_reemplazos)."""
+        import re
+        es_lista = isinstance(val, list)
+        lineas = list(val) if es_lista else str(val).split('\n')
+        n = 0
+
+        def repl(m):
+            nonlocal n
+            w = m.group(0)
+            if w in ren:
+                n += 1
+                return ren[w]
+            return w
+
+        for i, ln in enumerate(lineas):
+            if isinstance(ln, str) and ln.lstrip().upper().startswith('ON '):
+                lineas[i] = re.sub(r'[A-Za-z0-9_]+', repl, ln)
+        return (lineas if es_lista else '\n'.join(lineas)), n
+
+    def _acorta_voc(self):
+        """Acorta a 5 letras TODAS las palabras del vocabulario (claves/tokens y
+        sinonimos) y actualiza las referencias en objetos (noun) y en los condactos
+        (lineas ON), para que coincidan con lo que el motor usa internamente."""
+        from tkinter import messagebox
+        try:
+            self._apply_vocab()          # sincroniza la tabla -> self.game
+        except Exception:
+            pass
+        g = self.game
+        vocab = g.get('vocabulary') or {}
+        n_key = n_ali = n_cond = n_dup = 0
+        conflictos = []
+        ren_sec = {'verbs': {}, 'nouns': {}, 'prepositions': {}}
+        for section in ('verbs', 'nouns', 'prepositions'):
+            d = vocab.get(section)
+            if not isinstance(d, dict):
+                continue
+            nuevo = {}
+            ren = ren_sec[section]
+            # duplicados en TODA la seccion (no solo dentro de una entrada): si al
+            # recortar coinciden dos palabras (p.ej. "hablar" y "habla" -> ambos
+            # "habla"), se queda solo la primera y se descarta el resto.
+            vistos = set()
+            for key, aliases in list(d.items()):
+                new_al = []
+                for a in (aliases or []):
+                    a5 = str(a)[:5]
+                    lk = a5.lower()
+                    if lk in vistos:
+                        n_dup += 1
+                        continue
+                    vistos.add(lk)
+                    if len(str(a)) > 5:
+                        n_ali += 1
+                    new_al.append(a5)
+                # clave/token -> 5 letras
+                new_key = str(key)[:5]
+                if new_key != key:
+                    n_key += 1
+                    ren[key] = new_key
+                if new_key in nuevo:
+                    conflictos.append("%s: '%s' y '%s' chocan como '%s' (fusionados)"
+                                      % (section, key, new_key, new_key))
+                    for a in new_al:
+                        if a.lower() not in [x.lower() for x in nuevo[new_key]]:
+                            nuevo[new_key].append(a)
+                else:
+                    nuevo[new_key] = new_al
+            vocab[section] = nuevo
+        # referencias en objetos (campo noun)
+        noun_ren = ren_sec['nouns']
+        for obj in (g.get('objects') or {}).values():
+            if isinstance(obj, dict) and obj.get('noun') in noun_ren:
+                obj['noun'] = noun_ren[obj['noun']]
+        # referencias en condactos (lineas ON)
+        all_ren = {}
+        for r in ren_sec.values():
+            all_ren.update(r)
+        if all_ren:
+            cond = g.get('condacts') or {}
+            for name, valor in list(cond.items()):
+                nuevo_v, c = self._acorta_condact_refs(valor, all_ren)
+                if c:
+                    cond[name] = nuevo_v
+                    n_cond += c
+        # refrescar interfaz y revalidar
+        try:
+            self._load_vocab_to_form()
+        except Exception:
+            pass
+        self.dirty = True
+        try:
+            self._run_validation()
+        except Exception:
+            pass
+        msg = ("Vocabulario acortado a 5 letras:\n"
+               "  %d token(s) y %d sinonimo(s) recortados.\n"
+               "  %d duplicado(s) eliminados.\n"
+               "  %d referencia(s) en condactos actualizadas."
+               % (n_key, n_ali, n_dup, n_cond))
+        if conflictos:
+            msg += ("\n\nColisiones al recortar (revisa a mano):\n- "
+                    + "\n- ".join(conflictos[:8]))
+            if len(conflictos) > 8:
+                msg += "\n- ... (%d mas)" % (len(conflictos) - 8)
+        messagebox.showinfo("Acorta Voc", msg)
+        try:
+            self.sv_status.set("Vocabulario acortado a 5 letras.")
+        except Exception:
+            pass
+
+    # ─── Migración de prefijos (#objeto, _variable, @localización) ──────────
+    def _migra_prefijos(self):
+        """Renombra objetos (#), variables (_) y localizaciones (@) que aún no
+        lleven su prefijo correcto y actualiza TODAS las referencias: claves de
+        los dicts, metadata.start_location, exits, object.location (incluidos
+        contenedores), object.key, _editor.positions y el texto de los condactos
+        (protegiendo el texto entre comillas y las líneas REM). Un prefijo antiguo
+        o erróneo (#,_,@) al principio del id se sustituye por el correcto. Las
+        variables de sistema (PUNTOS, TURNOS, LLEVAR_MAX, PESO_ACT) no se tocan."""
+        import re
+        from tkinter import messagebox
+        g = self.game
+        conflictos = []
+
+        def _norm(idv, prefijo):
+            s = str(idv)
+            if s[:1] in ('#', '_', '@'):    # quita prefijo antiguo/erróneo
+                s = s[1:]
+            return prefijo + s if s else str(idv)
+
+        def _build_map(claves, prefijo, exentas=None):
+            m, vistos = {}, set()
+            for k in list(claves):
+                if exentas and str(k).upper() in exentas:
+                    continue
+                nuevo = _norm(k, prefijo)
+                if nuevo == k:
+                    continue
+                if nuevo in vistos or nuevo in claves:
+                    conflictos.append(f"'{k}' -> '{nuevo}' (ya existe; sin renombrar)")
+                    continue
+                vistos.add(nuevo)
+                m[k] = nuevo
+            return m
+
+        obj_map = _build_map((g.get('objects') or {}).keys(), PREFIJO_OBJETO)
+        var_map = _build_map((g.get('variables') or {}).keys(), PREFIJO_VARIABLE)
+        loc_map = _build_map((g.get('locations') or {}).keys(), PREFIJO_LOCALIZACION)
+
+        if not (obj_map or var_map or loc_map):
+            messagebox.showinfo(
+                "Migrar prefijos",
+                "Nada que migrar: todos los identificadores ya llevan su prefijo"
+                + (("\n\nColisiones:\n- " + "\n- ".join(conflictos)) if conflictos else "."))
+            return
+
+        # 1) Renombrar claves de los dicts (preservando orden)
+        def _rekey(d, m):
+            return {m.get(k, k): v for k, v in d.items()} if isinstance(d, dict) else d
+        g['objects']   = _rekey(g.get('objects'), obj_map)
+        g['variables'] = _rekey(g.get('variables'), var_map)
+        g['locations'] = _rekey(g.get('locations'), loc_map)
+
+        # 2) Referencias estructuradas
+        meta = g.get('metadata') or {}
+        if meta.get('start_location') in loc_map:
+            meta['start_location'] = loc_map[meta['start_location']]
+        for loc in (g.get('locations') or {}).values():
+            ex = loc.get('exits') or {}
+            for d, dst in list(ex.items()):
+                if dst in loc_map:
+                    ex[d] = loc_map[dst]
+        for o in (g.get('objects') or {}).values():
+            lc = o.get('location')          # localización, contenedor o especial
+            if isinstance(lc, str) and lc.upper() in LOC_ESP_MAP:
+                o['location'] = LOC_ESP_MAP[lc.upper()]   # INVEN/PUESTO/NADA -> @…
+            elif lc in loc_map:
+                o['location'] = loc_map[lc]
+            elif lc in obj_map:
+                o['location'] = obj_map[lc]
+            if o.get('key') in obj_map:
+                o['key'] = obj_map[o['key']]
+        self.positions = {loc_map.get(k, k): v for k, v in (self.positions or {}).items()}
+
+        # 3) Texto de los condactos (fuera de comillas y de REM)
+        combinado = {}
+        combinado.update(var_map)
+        combinado.update(loc_map)
+        combinado.update(obj_map)      # el id de objeto gana ante colisión de base
+        n_cond = 0
+        if combinado:
+            pat = re.compile(r'\b(' + '|'.join(
+                re.escape(k) for k in sorted(combinado, key=len, reverse=True)) + r')\b')
+
+            def repl(m):
+                nonlocal n_cond
+                n_cond += 1
+                return combinado[m.group(1)]
+
+            def _mig_texto(val):
+                es_lista = isinstance(val, list)
+                lineas = list(val) if es_lista else str(val or '').split('\n')
+                for i, ln in enumerate(lineas):
+                    if not isinstance(ln, str) or ln.lstrip().upper().startswith('REM'):
+                        continue
+                    partes = re.split(r'("[^"]*")', ln)   # protege texto entre comillas
+                    for j in range(0, len(partes), 2):
+                        partes[j] = pat.sub(repl, partes[j])
+                    lineas[i] = ''.join(partes)
+                return lineas if es_lista else '\n'.join(lineas)
+
+            cond = g.get('condacts') or {}
+            for name in ('on_start', 'before_turn', 'after_turn', 'on_end', 'responses'):
+                if name in cond:
+                    cond[name] = _mig_texto(cond[name])
+
+        # 4) refrescar interfaz y revalidar
+        self.dirty = True
+        try:
+            self._load_all_forms(); self._redraw()
+        except Exception:
+            pass
+        try:
+            self._run_validation()
+        except Exception:
+            pass
+        msg = ("Migración de prefijos completada:\n"
+               "  %d objeto(s) -> #\n"
+               "  %d variable(s) -> _\n"
+               "  %d localización(es) -> @\n"
+               "  %d referencia(s) en condactos actualizadas.\n\n"
+               "Revisa los condactos por si algún nombre coincidía con texto."
+               % (len(obj_map), len(var_map), len(loc_map), n_cond))
+        if conflictos:
+            msg += "\n\nColisiones (sin renombrar):\n- " + "\n- ".join(conflictos[:8])
+            if len(conflictos) > 8:
+                msg += "\n- ... (%d más)" % (len(conflictos) - 8)
+        messagebox.showinfo("Migrar prefijos", msg)
+        try:
+            self.sv_status.set("Prefijos migrados (#objeto, _variable, @localización).")
+        except Exception:
+            pass
 
     def _run_validation(self, silent=True):
         """Ejecuta los validadores del compilador y puebla el panel."""
@@ -2175,7 +2666,9 @@ class ScribaEditor:
         loc_objects = {}   # {loc_id: [id_corto, ...]}
         for oid, obj in raw_objs.items():
             loc = obj.get("location", "")
-            if loc and loc not in ("INVEN", "PUESTO", "NADA", ""):
+            if loc and loc.upper() not in ("INVEN", "PUESTO", "NADA", "",
+                                           "@INVEN", "@ONME", "@NOWHERE",
+                                           "@PUESTO", "@NADA"):
                 # El ID es más corto e inequívoco que el nombre largo
                 short = oid if len(oid) <= 14 else oid[:13] + "…"
                 loc_objects.setdefault(loc, []).append(short)
@@ -2775,6 +3268,13 @@ class ScribaEditor:
         new_id = new_id.strip()
         if not new_id:
             return None
+        # Las localizaciones empiezan por '@'; se añade si el autor lo olvidó.
+        if not new_id.startswith(PREFIJO_LOCALIZACION):
+            new_id = PREFIJO_LOCALIZACION + new_id
+        if new_id.upper() in LOCS_ESPECIALES:
+            messagebox.showerror("Nombre reservado",
+                f"'{new_id}' es una ubicación especial reservada.")
+            return None
         if new_id in self.game["locations"]:
             messagebox.showerror("Error", f"Ya existe '{new_id}'")
             return None
@@ -2914,6 +3414,11 @@ class ScribaEditor:
         if not new_id:
             return
         new_id = new_id.strip()
+        if not new_id.startswith(PREFIJO_LOCALIZACION):
+            new_id = PREFIJO_LOCALIZACION + new_id
+        if new_id.upper() in LOCS_ESPECIALES:
+            messagebox.showerror("Nombre reservado",
+                f"'{new_id}' es una ubicación especial reservada."); return
         if new_id in self.game["locations"]:
             messagebox.showerror("Error", f"Ya existe '{new_id}'"); return
         self.game["locations"][new_id] = {
@@ -3017,6 +3522,19 @@ class ScribaEditor:
         new_id = self.loc_id.get().strip()
         if not new_id:
             messagebox.showerror("Error", "El ID no puede estar vacío."); return
+        if not new_id.startswith(PREFIJO_LOCALIZACION):
+            messagebox.showerror(
+                "ID no válido",
+                "El ID de una localización debe empezar por '@' (así se distingue\n"
+                "de objetos #, variables _, verbos y nombres).\n\n"
+                f"Escribe '@{new_id}' en lugar de '{new_id}'.")
+            return
+        if new_id.upper() in LOCS_ESPECIALES:
+            messagebox.showerror(
+                "Nombre reservado",
+                f"'{new_id}' es una ubicación especial reservada "
+                "(@INVEN, @ONME, @NOWHERE) y no puede usarse como localización.")
+            return
 
         loc = {}
         loc["name"]        = self.loc_name.get().strip()
@@ -3327,12 +3845,26 @@ class ScribaEditor:
         self._obj_w["description"].insert("1.0", obj.get("description",""))
         for cb, v in self._obj_cb.items():
             v.set(bool(obj.get(cb, False)))
+        self._obj_fixed.set('fixed' in (obj.get("attributes") or []))
+        # Estado excluyente a partir de open/locked
+        if obj.get("open"):
+            self._obj_estado.set("abierto")
+        elif obj.get("locked"):
+            self._obj_estado.set("llave")
+        else:
+            self._obj_estado.set("cerrado")
+        self._sync_estado_abrible()
+        self._sync_lit()
 
     def _new_obj(self):
         oid = simpledialog.askstring("Nuevo objeto", "ID del objeto:",
                                       parent=self.root)
         if not oid: return
         oid = oid.strip()
+        # Los IDs de objeto siempre empiezan por '#' (para distinguirlos de
+        # localizaciones @, variables _, verbos y nombres). Se añade si falta.
+        if not oid.startswith("#"):
+            oid = "#" + oid
         if oid in self.game["objects"]:
             messagebox.showerror("Error", f"Ya existe '{oid}'"); return
         self.game["objects"][oid] = {
@@ -3366,6 +3898,13 @@ class ScribaEditor:
         new_id = self._obj_w["id"].get().strip()
         if not new_id:
             messagebox.showerror("Error", "ID no puede estar vacío."); return
+        if not new_id.startswith("#"):
+            messagebox.showerror(
+                "ID no válido",
+                "El ID de un objeto debe empezar por '#' (así se distingue de\n"
+                "localizaciones @, variables _, verbos y nombres).\n\n"
+                f"Escribe '#{new_id}' en lugar de '{new_id}'.")
+            return
         if old_id and old_id != new_id and new_id in self.game["objects"]:
             messagebox.showerror("Error", f"Ya existe un objeto '{new_id}'.")
             return
@@ -3374,13 +3913,34 @@ class ScribaEditor:
         obj = copy.deepcopy(old_obj)
         obj["name"]     = self._obj_w["name"].get().strip() or new_id
         obj["noun"]     = self._obj_w["noun"].get().strip()
-        obj["location"] = self._obj_w["location"].get().strip()
+        _loc = self._obj_w["location"].get().strip()
+        # Ubicaciones especiales -> forma canónica @INVEN / @ONME / @NOWHERE
+        # (acepta las antiguas INVEN/PUESTO/NADA y variantes).
+        _loc = LOC_ESP_MAP.get(_loc.upper(), _loc)
+        obj["location"] = _loc
         obj["key"]      = self._obj_w["key"].get().strip() or None
         try:    obj["weight"] = int(self._obj_w["weight"].get())
         except: obj["weight"] = 0
         obj["description"] = self._obj_w["description"].get("1.0", tk.END).strip()
         for cb, v in self._obj_cb.items():
             obj[cb] = v.get()
+        # Estado excluyente -> open/locked (evita el abierto+cerrado contradictorio).
+        # Si no es 'openable', no tiene estado: open y locked a False.
+        if obj.get("openable"):
+            est = self._obj_estado.get()
+            obj["open"]   = (est == "abierto")
+            obj["locked"] = (est == "llave")
+        else:
+            obj["open"] = False
+            obj["locked"] = False
+        # 'lit' solo si es light_source
+        if not obj.get("light_source"):
+            obj["lit"] = False
+        # 'fixed' vive en attributes[]: se conserva el resto de atributos.
+        attrs = [a for a in (obj.get("attributes") or []) if a != "fixed"]
+        if self._obj_fixed.get():
+            attrs.append("fixed")
+        obj["attributes"] = attrs
         if old_id and old_id != new_id and old_id in self.game["objects"]:
             del self.game["objects"][old_id]
             # Actualizar referencias al id antiguo en otros objetos
@@ -3409,26 +3969,23 @@ class ScribaEditor:
     # ── Sincronización automática sustantivos ──────────────────────────────
 
     def _sync_noun_vocab(self, old_noun=None, new_noun=None):
-        """Mantiene vocabulary.nouns sincronizado con los objetos del juego.
-        Elimina old_noun si ningún otro objeto lo usa; añade new_noun si no existe."""
+        """vocabulary.nouns es ahora cosa del AUTOR (solo sinónimos): YA NO se
+        crea una entrada por objeto, porque el motor y el intérprete registran
+        automáticamente el noun del propio objeto. Aquí solo se limpia una entrada
+        que quede huérfana (ningún objeto usa ya ese noun)."""
         nouns = self.game.setdefault("vocabulary", {}).setdefault("nouns", {})
 
-        # Quitar noun anterior si ya no lo usa ningún objeto
+        # Quitar noun anterior si ya no lo usa ningún objeto (limpieza de huérfanos)
         if old_noun:
             still_used = any(
                 (obj.get("noun") or "").strip().lower() == old_noun.lower()
                 for obj in self.game.get("objects", {}).values()
             )
-            if not still_used:
+            if not still_used and (old_noun in nouns or old_noun.lower() in nouns):
                 nouns.pop(old_noun, None)
                 nouns.pop(old_noun.lower(), None)
-
-        # Añadir noun nuevo con el propio nombre como alias
-        if new_noun:
-            key = new_noun.lower()
-            if key not in nouns:
-                nouns[key] = [new_noun.lower()]
-            self._load_vocab_to_form()
+                self._load_vocab_to_form()
+        # NOTA: new_noun ya no crea entrada; el noun del objeto se autorregistra.
 
     # ── Vocabulario / Variables / Timers ──
 
@@ -3592,6 +4149,11 @@ class ScribaEditor:
     def _var_new(self):
         name = simpledialog.askstring("Nueva variable", "Nombre:", parent=self.root)
         if not name: return
+        name = name.strip()
+        # Todas las variables empiezan por '_' (incluidas las de sistema); se
+        # añade si el autor lo olvidó.
+        if name and not name.startswith(PREFIJO_VARIABLE):
+            name = PREFIJO_VARIABLE + name
         try: self.vars_tree.insert("", tk.END, iid=name, values=(name, 0, "--"))
         except tk.TclError: pass
         self._apply_vars()
@@ -3606,6 +4168,13 @@ class ScribaEditor:
         name = self.var_name_e.get().strip()
         val  = self.var_val_e.get().strip()
         if not name: return
+        if not name.startswith(PREFIJO_VARIABLE):
+            messagebox.showerror(
+                "Nombre no válido",
+                "Las variables deben empezar por '_' (incluidas las de sistema:\n"
+                "_PUNTOS, _TURNOS, _LLEVAR_MAX, _PESO_ACT).\n\n"
+                f"Escribe '_{name}' en lugar de '{name}'.")
+            return
         sel = self.vars_tree.selection()
         old_iid = sel[0] if sel else None
         if old_iid and old_iid != name:
@@ -3718,11 +4287,16 @@ class ScribaEditor:
 
     def _apply_condacts(self):
         c = self.game.setdefault('condacts', {})
+        changed = False
         for s, t in self._condact_w.items():
-            c[s] = t.get('1.0', tk.END).strip()
-        self.dirty = True
-        self.sv_status.set('Condacts actualizados.')
-        self._run_validation()
+            nuevo = t.get('1.0', tk.END).strip()
+            if c.get(s) != nuevo:
+                c[s] = nuevo
+                changed = True
+        if changed:
+            self.dirty = True
+            self.sv_status.set('Condacts actualizados.')
+            self._run_validation()
 
     # ─── Tab: Código (vista unificada / referencias cruzadas) ──────────────
     #
@@ -4254,10 +4828,13 @@ class ScribaEditor:
         self._cs_voc_combo.bind('<<ComboboxSelected>>', self._crossref_on_voc)
         ttk.Button(top, text='Mostrar todo',
                    command=self._crossref_show_all).pack(side=tk.LEFT, padx=2)
-        ttk.Button(top, text='↻ Actualizar listas',
-                   command=self._crossref_refresh_combos).pack(side=tk.LEFT, padx=2)
-        ttk.Button(top, text='Aplicar cambios',
-                   command=self._crossref_apply).pack(side=tk.RIGHT, padx=2)
+        # Las listas se refrescan solas al entrar en la pestaña
+        # (_on_tab_changed) y al abrir/crear un juego (_load_all_forms),
+        # así que ya no hace falta un botón manual.
+        # La vista se vuelca sola al juego (al perder foco, al cambiar de pestaña
+        # y al guardar/jugar/compilar), así que no hace falta "Aplicar cambios".
+        ttk.Button(top, text='Formatear',
+                   command=self._format_crossref).pack(side=tk.RIGHT, padx=2)
 
         ttk.Label(fr, textvariable=self._cs_info,
                   foreground='#7c93ad').pack(anchor=tk.W, padx=8)
@@ -4265,7 +4842,8 @@ class ScribaEditor:
         hint = ttk.Label(fr, foreground='#667788', wraplength=560, justify=tk.LEFT,
                          text='Filtra por localización u objeto. NO modifiques las '
                               'líneas que empiezan por ">>> " (marcan el origen de '
-                              'cada bloque). Pulsa "Aplicar cambios" para guardar.')
+                              'cada bloque). Los cambios se guardan solos al salir '
+                              'de la vista.')
         hint.pack(side=tk.BOTTOM, anchor=tk.W, padx=8, pady=(0, 4))
 
         body = ttk.Frame(fr)
@@ -4282,6 +4860,8 @@ class ScribaEditor:
         t.tag_configure("xref_hdr", foreground="#0f1623", background="#ffae57")
         t.tag_configure("xref_hit", background="#1f5236")
         self._cs_text = t
+        # Al perder el foco (clic en otra pestaña/botón/menú) se vuelca al juego.
+        t.bind('<FocusOut>', lambda e: self._crossref_apply(quiet=True))
 
         bar = SearchBar(fr, t)
 
@@ -4526,9 +5106,10 @@ class ScribaEditor:
             if tim is not None:
                 tim[field] = text
 
-    def _crossref_apply(self):
+    def _crossref_apply(self, quiet=False):
         if not getattr(self, '_cs_units', None):
-            self.sv_status.set('Nada que aplicar en la vista de código.')
+            if not quiet:
+                self.sv_status.set('Nada que aplicar en la vista de código.')
             return
         content = self._cs_text.get('1.0', 'end-1c')
 
@@ -4547,6 +5128,8 @@ class ScribaEditor:
         # Si el editor de texto añadió una línea final vacía (cuerpo del último
         # bloque), no pasa nada: forma parte del cuerpo y se conserva tal cual.
         if len(parsed) != len(self._cs_units):
+            if quiet:
+                return
             messagebox.showerror(
                 'No se puede aplicar',
                 f'El número de bloques no coincide ({len(parsed)} encontrados, '
@@ -4555,6 +5138,8 @@ class ScribaEditor:
             return
         for i, (src, _) in enumerate(self._cs_units):
             if parsed[i][0] != src:
+                if quiet:
+                    return
                 messagebox.showerror(
                     'No se puede aplicar',
                     f'La cabecera del bloque {i + 1} ha cambiado '
@@ -4804,6 +5389,7 @@ class ScribaEditor:
             self._interp_win._continue_exec()
 
     def _open_interpreter(self):
+        self._commit_active_code_view()   # jugar con el código visible al día
         if self._interp_win is not None:
             # Ya existe — dar foco a la entrada
             try:
@@ -4949,6 +5535,7 @@ class ScribaEditor:
         return path
 
     def _write(self, path):
+        self._commit_active_code_view()   # vuelca el editor visible antes de guardar
         try:
             game = copy.deepcopy(self.game)
             game.pop('_vocab_lookup', None)
@@ -5356,6 +5943,90 @@ class ScribaEditor:
         except Exception:
             pass
 
+    # ─── Pestaña Referencia (sintaxis del lenguaje, leída del .md) ─────────
+    _REF_MD = 'Scriba_Referencia_Sintaxis.md'
+
+    def _ref_md_path(self):
+        """Ruta del .md de referencia. Prefiere el fichero EXTERNO (editable en
+        vivo) junto al ejecutable / proyecto; si no, el empaquetado en el .exe."""
+        import sys as _sys
+        cands = []
+        if getattr(_sys, 'frozen', False):
+            cands.append(os.path.join(os.path.dirname(_sys.executable), self._REF_MD))
+        cands.append(os.path.join(os.getcwd(), self._REF_MD))
+        cands.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), self._REF_MD))
+        cands.append(_resource_path(self._REF_MD))   # empaquetado (fallback)
+        for c in cands:
+            if os.path.isfile(c):
+                return c
+        return cands[0]
+
+    def _build_reference_tab(self):
+        fr = ttk.Frame(self.nb)
+        self.nb.add(fr, text=' Referencia ')
+        top = ttk.Frame(fr); top.pack(fill=tk.X, pady=3)
+        ttk.Button(top, text='\u21bb Recargar',
+                   command=self._reference_reload).pack(side=tk.LEFT, padx=6)
+        ttk.Label(top, text='Referencia de sintaxis (se lee de %s)' % self._REF_MD,
+                  foreground='#667788').pack(side=tk.LEFT, padx=8)
+        body = ttk.Frame(fr); body.pack(fill=tk.BOTH, expand=True)
+        t = tk.Text(body, wrap=tk.WORD, font=self.fnt_code, bg='#0f1623',
+                    fg='#d8e2f0', padx=12, pady=10, spacing1=1, spacing3=2)
+        vs = ttk.Scrollbar(body, orient=tk.VERTICAL, command=t.yview)
+        t.configure(yscrollcommand=vs.set)
+        vs.pack(side=tk.RIGHT, fill=tk.Y)
+        t.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        fam = self.fnt_code.cget('family')
+        t.tag_configure('h1', foreground='#ffcc66', font=(fam, 13, 'bold'), spacing1=10, spacing3=6)
+        t.tag_configure('h2', foreground='#ffae57', font=(fam, 11, 'bold'), spacing1=12, spacing3=4)
+        t.tag_configure('code', foreground='#7fd6a0', lmargin1=24, lmargin2=24)
+        t.tag_configure('bold', font=(fam, 10, 'bold'), foreground='#66b3ff')
+        self._ref_text = t
+        self._reference_reload()
+
+    def _reference_reload(self):
+        t = getattr(self, '_ref_text', None)
+        if t is None:
+            return
+        path = self._ref_md_path()
+        try:
+            with open(path, encoding='utf-8') as fh:
+                md = fh.read()
+        except Exception:
+            md = ('No se encontró %s.\n\nColócalo junto a Scriba para verlo aquí.'
+                  % self._REF_MD)
+        t.configure(state=tk.NORMAL)
+        t.delete('1.0', tk.END)
+        self._render_markdown(t, md)
+        t.configure(state=tk.DISABLED)
+
+    @staticmethod
+    def _render_markdown(t, md):
+        """Vuelca un Markdown sencillo con estilos: # / ## encabezados, ``` bloques
+        de código, **negrita** y `código` en línea."""
+        import re as _re
+        en_codigo = False
+        for raw in md.split('\n'):
+            s = raw.rstrip()
+            if s.strip().startswith('```'):
+                en_codigo = not en_codigo
+                continue
+            if en_codigo:
+                t.insert(tk.END, s + '\n', 'code'); continue
+            if s.startswith('## '):
+                t.insert(tk.END, s[3:] + '\n', 'h2'); continue
+            if s.startswith('# '):
+                t.insert(tk.END, s[2:] + '\n', 'h1'); continue
+            i = 0
+            for m in _re.finditer(r'\*\*(.+?)\*\*|`([^`]+)`', s):
+                if m.start() > i:
+                    t.insert(tk.END, s[i:m.start()])
+                t.insert(tk.END, m.group(1) if m.group(1) is not None else m.group(2), 'bold')
+                i = m.end()
+            if i < len(s):
+                t.insert(tk.END, s[i:])
+            t.insert(tk.END, '\n')
+
     def _open_manual(self):
         """Abre el manual de referencia (PDF) con el visor del sistema. Busca el
         PDF de la versión actual junto a Scriba (o empaquetado con el .exe)."""
@@ -5387,6 +6058,7 @@ class ScribaEditor:
 
     def _export_spectrum(self, modo='48k'):
         """Exporta el juego a ZX BASIC (Boriel) para ZX Spectrum 48K/128K."""
+        self._commit_active_code_view()
         if not self.game.get('locations'):
             messagebox.showinfo('Exportar', 'Abre o crea un juego primero.')
             return
@@ -5624,6 +6296,7 @@ class ScribaEditor:
     def _export_cpc(self, modo=2, con_imagenes=False):
         """Exporta el juego a Amstrad CPC (.dsk, Locomotive BASIC).
         modo: 1 (40 col) o 2 (80 col). con_imagenes: pantalla partida B/N (Modo 2)."""
+        self._commit_active_code_view()
         if not self.game.get('locations'):
             messagebox.showinfo('Exportar', 'Abre o crea un juego primero.')
             return
@@ -5719,6 +6392,7 @@ class ScribaEditor:
         """Exporta al MOTOR NATIVO Z80 (modelo PAW/DAAD) en un .dsk arrancable.
         modo: 1 (40 col, Modo 1) o 2 (80 col, Modo 2). Mucho mas pequeno y rapido
         que el export BASIC, y no da 'Memory full'."""
+        self._commit_active_code_view()
         if not self.game.get('locations'):
             messagebox.showinfo('Exportar', 'Abre o crea un juego primero.')
             return
@@ -5883,6 +6557,7 @@ class ScribaEditor:
         ZX BASIC (texto comprimido en bancos + imagenes Layer 2 + pantalla de
         titulo + musica), compila con zxbc y empaqueta el .tap (texto en bancos
         bajos $7FFD, imagenes en altos $DFFD). Sin limite de tamano."""
+        self._commit_active_code_view()
         if not self.game.get('locations'):
             messagebox.showinfo('Exportar', 'Abre o crea un juego primero.')
             return
@@ -6008,6 +6683,7 @@ class ScribaEditor:
         """Exporta todos los literales del juego a un CSV (clave;original;
         traduccion) para traducir. Si el CSV ya existe, reaprovecha lo ya
         traducido (memoria de traduccion)."""
+        self._commit_active_code_view()
         if not self.game.get('locations'):
             messagebox.showinfo('Traducción', 'Abre o crea un juego primero.')
             return
@@ -6572,6 +7248,7 @@ class InterpreterWindow:
 
     def _restart(self):
         from interpreter import PAWSInterpreter
+        self.editor._commit_active_code_view()   # re-jugar con el código al día
         # Liberar un posible hilo de turno pausado en el debugger: si no,
         # quedaría bloqueado para siempre y podría escribir salida vieja
         # sobre la sesión nueva.

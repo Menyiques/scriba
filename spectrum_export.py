@@ -209,11 +209,12 @@ def recolecta(game):
 
     # posicion inicial de cada objeto
     def locval(loc):
-        if not loc or loc == 'NADA':
+        lu = str(loc).upper() if loc else ''
+        if not loc or lu == '@NOWHERE':
             return LOC_NADA
-        if loc == 'INVEN':
+        if lu == '@INVEN':
             return LOC_INVEN
-        if loc == 'PUESTO':
+        if lu == '@ONME':
             return LOC_PUESTO
         if loc in c.locidx:
             return c.locidx[loc]
@@ -307,9 +308,7 @@ def recolecta(game):
     return c
 
 # ─── Transpilador de condacts (mini-BASIC PAWS -> ZX BASIC) ─────────────
-_KEYWORDS = {'AT', 'NOTAT', 'CARRIED', 'NOTCARR', 'PRESENT', 'ABSENT',
-             'WORN', 'NOTWORN', 'ISAT', 'DARK', 'CHANCE', 'TIMER',
-             'ZERO', 'NOTZERO', 'EQ', 'GT', 'LT', 'HASOBJOPEN',
+_KEYWORDS = {'AT', 'NOTAT', 'DARK', 'CHANCE', 'TIMER',
              'VERB', 'NOUN1', 'NOUN2'}
 
 def _vname(c, name):
@@ -337,46 +336,12 @@ def _pred2zx(c, kw, args):
         return f'(l = {c.locidx.get(args[0], 0)})'
     if kw == 'NOTAT':
         return f'(l <> {c.locidx.get(args[0], 0)})'
-    if kw == 'CARRIED':
-        return f'(carried({_objref(c, args[0])}) = 1)'
-    if kw == 'NOTCARR':
-        return f'(carried({_objref(c, args[0])}) = 0)'
-    if kw == 'PRESENT':
-        return f'(presente({_objref(c, args[0])}) = 1)'
-    if kw == 'ABSENT':
-        return f'(presente({_objref(c, args[0])}) = 0)'
-    if kw == 'WORN':
-        return f'(oloc({_objref(c, args[0])}) = {LOC_PUESTO})'
-    if kw == 'NOTWORN':
-        return f'(oloc({_objref(c, args[0])}) <> {LOC_PUESTO})'
-    if kw == 'ISAT':
-        o = _objref(c, args[0])
-        dst = args[1]
-        if dst in c.locidx:
-            dv = c.locidx[dst]
-        elif dst in ('INVEN', 'PUESTO', 'NADA'):
-            dv = {'INVEN': LOC_INVEN, 'PUESTO': LOC_PUESTO, 'NADA': LOC_NADA}[dst]
-        else:
-            dv = CONT_BASE + _objref(c, dst)
-        return f'(oloc({o}) = {dv})'
     if kw == 'DARK':
         return '(oscuro() = 1)'
     if kw == 'CHANCE':
         return f'(INT(RND * 100) + 1 <= {args[0]})'
     if kw == 'TIMER':
         return f'(tcur({c.timidx.get(args[0], 0)}) = {args[1]})'
-    if kw == 'ZERO':
-        return f'({_vname(c, args[0])} = 0)'
-    if kw == 'NOTZERO':
-        return f'({_vname(c, args[0])} <> 0)'
-    if kw == 'EQ':
-        return f'({_vname(c, args[0])} = {args[1]})'
-    if kw == 'GT':
-        return f'({_vname(c, args[0])} > {args[1]})'
-    if kw == 'LT':
-        return f'({_vname(c, args[0])} < {args[1]})'
-    if kw == 'HASOBJOPEN':
-        return f'(copen({_objref(c, args[0])}) = 1)'
     if kw == 'VERB':
         p = args[0].upper() if args else '*'
         return '1' if p == '*' else f'(v = {c.verbid.get(p, 0)})'
@@ -394,12 +359,55 @@ def _pred2zx(c, kw, args):
     return '1'
 
 
+# Propiedad de objeto -> array del motor (para #objeto.propiedad).
+_PROP_ARR = {'open': 'copen', 'locked': 'olock', 'lit': 'olit',
+             'openable': 'oable', 'wearable': 'owear',
+             'light_source': 'olight', 'light': 'olight',
+             'fixed': 'ofix', 'weight': 'owght'}
+
+def _obj_prop_lvalue_zx(c, ref):
+    """'#objeto.propiedad' como destino de asignación (LET). Solo las propiedades
+    con array propio son asignables; carried/worn/present dependen de la ubicación
+    y se cambian con condacts (GET/DROP/WEAR...)."""
+    base, _sep, prop = str(ref).partition('.')
+    arr = _PROP_ARR.get(prop.lower())
+    if arr:
+        return f'{arr}({_objref(c, base)})'
+    c.avisos.append(f"propiedad no asignable en '{ref}' (usa un condact)")
+    return None
+
+def _obj_prop_zx(c, ref):
+    """Emite '#objeto.propiedad' como acceso al array del motor (copen(i),
+    olock(i), olit(i)...). carried usa la función carried(i)."""
+    base, _sep, prop = str(ref).partition('.')
+    prop = prop.lower()
+    idx = _objref(c, base)
+    arr = _PROP_ARR.get(prop)
+    if arr:
+        return f'{arr}({idx})'
+    if prop == 'carried':
+        return f'carried({idx})'
+    if prop == 'present':
+        return f'presente({idx})'
+    if prop == 'worn':
+        return f'(oloc({idx}) = {LOC_PUESTO})'
+    if prop in ('isat', 'loc', 'location'):
+        return f'oloc({idx})'   # comparable con @loc / INVEN / #cont
+    c.avisos.append(f"propiedad desconocida en '{ref}'")
+    return '0'
+
+
 class _ZXBackend:
     """Backend de emisión ZX BASIC para paws_lang (var/num/predicate)."""
     def __init__(self, c):
         self.c = c
 
     def var(self, name):
+        if name and name[0] == '#':
+            # #obj.prop -> propiedad; #obj suelto -> destino (contenedor)
+            return _obj_prop_zx(self.c, name) if '.' in name else str(self.c.locval(name))
+        if name and (name[0] == '@' or name in ('INVEN', 'PUESTO', 'NADA')):
+            return str(self.c.locval(name))   # id de localización -> índice
         return _vname(self.c, name)
 
     def num(self, n):
@@ -452,12 +460,16 @@ def stmt2zx(c, linea, dentro_resp):
     if cmd == 'LET':
         if '=' in resto:
             lhs, rhs = resto.split('=', 1)
+            lhs = lhs.strip()
             try:
                 rhs_zx = paws_lang.emit_expr(paws_lang.parse_expr(rhs), _ZXBackend(c))
             except paws_lang.ParseError as e:
                 c.avisos.append(f'expresion LET invalida {rhs!r}: {e}')
                 rhs_zx = '0'
-            return [f'{_vname(c, lhs.strip())} = {rhs_zx}']
+            if lhs.startswith('#'):        # LET #objeto.propiedad = valor
+                lv = _obj_prop_lvalue_zx(c, lhs)
+                return [f'{lv} = {rhs_zx}'] if lv else []
+            return [f'{_vname(c, lhs)} = {rhs_zx}']
         return []
     if cmd == 'ADDSCORE':
         return [f'addsc({resto.strip()})']
@@ -560,6 +572,13 @@ def _on_cond_zx(c, var, slot, kind):
     def ident(tok):
         if kind == 'verb':
             return c.verbid.get(tok, c.verbalias.get(tok, 0))
+        # ID de objeto (empieza por '#'): se resuelve a su Noun, de modo que
+        # 'ON cavar #arena' equivale a 'ON cavar arena'.
+        if tok.startswith('#'):
+            for oid in c.game.get('objects', {}):
+                if oid.upper() == tok:
+                    nn = c.game['objects'][oid].get('noun') or ''
+                    return c.nounid.get(translit(nn[:5]).upper(), 0)
         return c.nounid.get(translit(tok[:5]).upper(), 0)
 
     ids = [ident(t) for t in slot]
@@ -622,16 +641,27 @@ def script2zx(c, script, dentro_resp, ind='    '):
                 nivel[0] -= 1
                 emite('END IF')
             elif up.startswith('ON '):
+                def _header_conds(on_text):
+                    s = paws_lang.parse_on(on_text)
+                    cs = []
+                    for var, slot, kind in (('v', s[0], 'verb'),
+                                            ('n1', s[1], 'noun'),
+                                            ('n2', s[2], 'noun')):
+                        cnd = _on_cond_zx(c, var, slot, kind)
+                        if cnd:
+                            cs.append(cnd)
+                    return '(' + ' AND '.join(cs) + ')' if cs else '1'
+
                 pa = ln.split(None, 1)
-                s = paws_lang.parse_on(pa[1] if len(pa) > 1 else '')
-                conds = []
-                for var, slot, kind in (('v', s[0], 'verb'),
-                                        ('n1', s[1], 'noun'),
-                                        ('n2', s[2], 'noun')):
-                    cnd = _on_cond_zx(c, var, slot, kind)
-                    if cnd:
-                        conds.append(cnd)
-                emite('IF ' + (' AND '.join(conds) if conds else '1') + ' THEN')
+                grupos = [_header_conds(pa[1] if len(pa) > 1 else '')]
+                # Cabeceras ON consecutivas que comparten cuerpo -> se combinan
+                # con OR: 'ON abrir _puerta _llave' + 'ON usar _llave _puerta'.
+                while i < len(prog) and prog[i].upper().startswith('ON '):
+                    pa2 = prog[i].split(None, 1)
+                    grupos.append(_header_conds(pa2[1] if len(pa2) > 1 else ''))
+                    i += 1
+                cond = ' OR '.join(grupos) if len(grupos) > 1 else grupos[0]
+                emite('IF ' + cond + ' THEN')
                 nivel[0] += 1
                 fin = bloque(('ENDON',))
                 if fin:

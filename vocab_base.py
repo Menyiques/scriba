@@ -99,6 +99,21 @@ def norm_lang(lang):
     return 'pt' if s.startswith(('pt', 'por')) else 'en' if s.startswith('en') else 'es'
 
 
+def _corta5(lst):
+    """Recorta cada palabra a 5 letras (lo que el motor usa internamente) y quita
+    los duplicados que resulten (ignorando mayus/minus). Ej.: 'agarrar'->'agarr',
+    'observar'->'obser', y 'examinar'/'examina' -> un solo 'exami'."""
+    out, vistos = [], set()
+    for w in lst:
+        w5 = str(w)[:5]
+        k = w5.lower()
+        if k in vistos:
+            continue
+        vistos.add(k)
+        out.append(w5)
+    return out
+
+
 def _group(table, lang, overrides):
     lang = norm_lang(lang)
     ov = overrides or {}
@@ -108,7 +123,7 @@ def _group(table, lang, overrides):
             syns = list(ov[canon])
         else:
             syns = list(bylang.get(lang) or bylang.get('es') or [])
-        out[canon] = syns
+        out[canon] = _corta5(syns)
     return out
 
 
