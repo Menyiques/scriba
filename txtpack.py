@@ -57,17 +57,24 @@ def tokenize(s, dic):
     return bytes(syms)
 
 
-def _expand(tok, dic, _cache={}):
+def _expand(tok, dic, cache):
     if tok < 128 or tok >= 224:   # <128 literal; 224-239 = acentos (literales)
         return bytes([tok])
-    if tok in _cache:
-        return _cache[tok]
+    if tok in cache:
+        return cache[tok]
     a, b = dic[tok]
-    r = _expand(a, dic) + _expand(b, dic)
-    _cache[tok] = r
+    r = _expand(a, dic, cache) + _expand(b, dic, cache)
+    cache[tok] = r
     return r
 
 
 def expansions(dic):
-    """Expansion completa (str) de cada token, en orden de token (128, 129, ...)."""
-    return [_expand(t, dic).decode('latin-1') for t in sorted(dic)]
+    """Expansion completa (str) de cada token, en orden de token (128, 129, ...).
+
+    El cache es LOCAL a esta llamada a proposito. Cuando era un dict por defecto
+    del propio _expand, sobrevivia entre llamadas y se indexaba solo por numero
+    de token: al comprimir un segundo texto en el mismo proceso, sus tokens se
+    expandian con el diccionario del PRIMERO y el juego salia con frases de otro.
+    """
+    cache = {}
+    return [_expand(t, dic, cache).decode('latin-1') for t in sorted(dic)]

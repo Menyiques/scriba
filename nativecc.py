@@ -253,10 +253,16 @@ def translit(t):
     # o portugu\u00e9s seg\u00fan el idioma) usando translit_disp (c\u00f3digos 144-159) y los
     # desplaza a 224-239, fuera del rango de tokens de compresi\u00f3n (128-223).
     if t is None: return ''
-    s=_sx.translit_disp(t)
+    return desplaza_acentos(_sx.translit_disp(t))
+
+def desplaza_acentos(s):
+    """Segunda mitad de translit(): sube los acentos de 144-159 a 224-239, fuera
+    del rango de tokens de compresion. Para texto que YA paso por translit_disp
+    (p. ej. lo que devuelve spectrum_export.parrafos): pasarlo otra vez por
+    translit_disp convierte cada acento en '?'."""
     return ''.join(chr(ord(ch)+80) if 144<=ord(ch)<160 else ch for ch in s)
 
-def compile_game(c, sysm, width=40):
+def compile_game(c, sysm, width=40, ficha=None):
     g=c.game
     # idioma para los acentos (es/pt). Fija el set de acentos de translit_disp.
     lang=str((getattr(c,'meta',{}) or {}).get('language','') or '').lower()
@@ -340,6 +346,43 @@ def compile_game(c, sysm, width=40):
         if v:
             init_lets+=bytes([ge.COP['LET'], i & 0xFF, v & 0xFF])
     onstart=bytes(init_lets)+bytes(onstart)
+    # Mensaje inicial (metadata.start_message). El motor nativo nunca lo mostraba:
+    # solo lo hacian el interprete y los exports BASIC. Va DESPUES de on_start y
+    # antes de describir la sala, que es el orden del export de Spectrum, y
+    # termina con PAUSE 0 (espera tecla) para que dé tiempo a leerlo.
+    _ini=_sx.parrafos((getattr(c,'meta',{}) or {}).get('start_message',''))
+    if _ini:
+        # Paginado: el mensaje inicial suele ser mas largo que la pantalla, y sin
+        # esto el principio (el titulo, justamente) se va por arriba antes de que
+        # el jugador pueda leerlo. Se estiman las lineas que ocupa cada parrafo al
+        # ancho del destino y se corta con PAUSE 0 + CLS antes de desbordar.
+        _anc=max(20,int(width or 40)); _filas=21; _usadas=0
+        _b=bytearray()
+        for _p in _ini:
+            _n=1 if not _p else (len(_p)+_anc-1)//_anc
+            if _usadas and _usadas+_n>_filas:
+                _b+=bytes([ge.COP_EXTRA['PAUSE'],0])
+                _b+=bytes([ge.COP_EXTRA['CLS']])
+                _usadas=0
+            _mi=ctx.msg(desplaza_acentos(_p))   # parrafos() ya translitero
+            _b+=bytes([ge.COP['MESSAGE'],_mi&0xFF,(_mi>>8)&0xFF])
+            _usadas+=_n
+        _b+=bytes([ge.COP_EXTRA['PAUSE'],0])
+        onstart=bytes(onstart)+bytes(_b)
+    # Comando VERSION. VERSI ya esta en el vocabulario de serie, pero el motor
+    # nativo no lo atendia y respondia "No entiendo". En vez de tocar la cabecera
+    # de la base de datos y el dispatch (que llevan los verbos de sistema en
+    # posiciones fijas), se sintetiza una respuesta 'ON version' que imprime la
+    # ficha y hace MATCH. El que llama decide si hay ficha y que pone.
+    if ficha:
+        _vv=c.verbid.get('VERSI') or 0
+        if _vv:
+            _b=bytearray()
+            for _l in ficha:
+                _mi=ctx.msg(translit(_l))
+                _b+=bytes([ge.COP['MESSAGE'],_mi&0xFF,(_mi>>8)&0xFF])
+            _b+=bytes([ge.COP['DONE']])
+            responses.append((_vv,0,bytes(_b)))
     # temporizadores: duracion, loop, activo inicial y on_expire compilado
     timers=[]
     for tid in getattr(c,'timids',[]):

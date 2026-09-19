@@ -66,26 +66,30 @@ class Teclado:
     def __init__(self, cpu, mem, sym):
         self.puertos = [mem[sym['nxkport'] + i] for i in range(8)]
         self.tabla = [mem[sym['nxktab'] + i] for i in range(40)]
-        self.pulsada = None
+        self.pulsadas = []
         cpu.hook_in[0xFE] = self._leer
 
+    def _pos(self, ch):
+        cod = ord(ch) if isinstance(ch, str) else ch
+        return divmod(self.tabla.index(cod), 5)
+
     def pulsa(self, ch):
-        self.pulsada = ord(ch) if isinstance(ch, str) else ch
+        self.pulsadas = [self._pos(ch)]
+
+    def pulsa_con_caps(self, ch):
+        """CAPS SHIFT (fila 0, bit 0) mas otra tecla: asi se escribe el borrado."""
+        self.pulsadas = [(0, 0), self._pos(ch)]
 
     def suelta(self):
-        self.pulsada = None
+        self.pulsadas = []
 
     def _leer(self, cpu, port):
-        if self.pulsada is None:
-            return 0xFF
-        try:
-            idx = self.tabla.index(self.pulsada)
-        except ValueError:
-            return 0xFF
-        fila, bit = divmod(idx, 5)
-        if self.puertos[fila] != ((port >> 8) & 0xFF):
-            return 0xFF
-        return 0xFF & ~(1 << bit)
+        alto = (port >> 8) & 0xFF
+        mask = 0xFF
+        for fila, bit in self.pulsadas:
+            if self.puertos[fila] == alto:
+                mask &= ~(1 << bit) & 0xFF
+        return mask
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +248,18 @@ def verificar(game):
     tec.suelta()
     chk('KMREAD: sin tecla / tecla / antirrebote', sin and hay and rebote)
     chk('KMREAD: segunda tecla distinta', otra)
+    tec.suelta()
+    ejecutar(cpu, mem, sym['kmread'])
+    tec.pulsa_con_caps('0')
+    ejecutar(cpu, mem, sym['kmread'])
+    chk('KMREAD: CAPS+0 devuelve borrar (127)', (cpu.f & 1) == 1 and cpu.a == 127)
+    tec.suelta()
+    ejecutar(cpu, mem, sym['kmread'])
+    tec.pulsa_con_caps('a')
+    ejecutar(cpu, mem, sym['kmread'])
+    chk('KMREAD: con CAPS pulsada las demas teclas siguen saliendo',
+        (cpu.f & 1) == 1 and cpu.a == ord('a'))
+    tec.suelta()
 
     # ---- 5. paridad de features con verify_cpc.py ----
     A, B = 5, 6
@@ -396,10 +412,30 @@ def verificar_nex(game, salida, datadir=None):
     Teclado(cpu, mem, sym)          # sin teclas pulsadas
     cpu.pc = pc
     cpu.halted = False
+
+    # 1) arranque hasta la primera espera de tecla: ahi esta el mensaje inicial
     n = 0
-    while n < 4000000 and cpu.pc != sym['read_line']:
+    while n < 4000000 and cpu.pc not in (sym['read_line'], sym['kmread']):
         cpu.step()
         n += 1
+    presentacion = []
+    if cpu.pc == sym['kmread']:
+        presentacion = [l for l in leer_pantalla(mem, sym) if l.strip()]
+
+    # 2) pulsar para pasar la presentacion y seguir hasta que pida orden
+    tec0 = Teclado(cpu, mem, sym)
+    soltar = False
+    while n < 6000000 and cpu.pc != sym['read_line']:
+        if cpu.pc == sym['kmread']:
+            if soltar:
+                tec0.suelta()
+                soltar = False
+            else:
+                tec0.pulsa(' ')
+                soltar = True
+        cpu.step()
+        n += 1
+    tec0.suelta()
     llego = cpu.pc == sym['read_line']
     pant = [l for l in leer_pantalla(mem, sym) if l.strip()]
 
@@ -407,7 +443,7 @@ def verificar_nex(game, salida, datadir=None):
     jugadas = []
     if llego:
         tec2 = Teclado(cpu, mem, sym)
-        for orden in ('n', 'coger linterna', 'i'):
+        for orden in ('n', 'coger linterna', 'i', 'version'):
             # teclea() vuelve cuando el juego ya esta pidiendo la orden siguiente,
             # o sea con el turno anterior resuelto y pintado.
             if not teclea(cpu, sym, tec2, orden + chr(13)):
@@ -437,7 +473,7 @@ def verificar_nex(game, salida, datadir=None):
             'paleta_ok': pal_ok,
             'bancos_img': [b for b in bancos if b >= nn.BANK_IMG],
         }
-    return info, llego, n, pant, bancos, jugadas, img
+    return info, llego, n, pant, bancos, jugadas, img, presentacion
 
 
 def main():
@@ -459,7 +495,7 @@ def main():
     # ---- vuelta completa por el .nex ----
     import tempfile
     salida = os.path.join(tempfile.gettempdir(), 'scriba_prueba_nativo.nex')
-    info, llego, pasos, pant, bancos, jugadas, img = verificar_nex(
+    info, llego, pasos, pant, bancos, jugadas, img, presentacion = verificar_nex(
         game, salida, datadir=nn.datadir_por_defecto(path))
     print('--- .nex: %s' % os.path.basename(salida))
     print('    bancos %s   PC=&%04X   SP=&%04X   %d bytes (&%04X-&%04X)'
@@ -474,7 +510,25 @@ def main():
         print('    --- orden: "%s"' % orden)
         for l in p:
             print('    |' + l)
-    res.append(('.nex responde a ordenes escritas', len(jugadas) == 3))
+    res.append(('.nex responde a ordenes escritas', len(jugadas) == 4))
+
+    ini = (game.get('metadata') or {}).get('start_message') or ''
+    if ini.strip():
+        print()
+        print('    --- presentacion (metadata.start_message)')
+        for l in presentacion[:6]:
+            print('    |' + l)
+        if len(presentacion) > 6:
+            print('    |... (%d lineas)' % len(presentacion))
+        clave = ini.split(chr(10))[0].strip()[:20]
+        res.append(('presentacion mostrada y esperando tecla',
+                    bool(presentacion) and any(clave in l for l in presentacion)))
+
+    ver = dict(jugadas).get('version', [])
+    if ver:
+        import scriba_info
+        res.append(('VERSION responde con la ficha',
+                    any('Scriba ' + scriba_info.SCRIBA_VERSION in l for l in ver)))
     if img:
         print()
         print('    --- Layer 2: %d imagenes en los bancos %s'

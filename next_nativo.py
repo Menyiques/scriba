@@ -164,7 +164,7 @@ nxwl:    defb 0            ; ventana: izquierda
 nxwt:    defb 0            ; ventana: arriba
 nxwr:    defb 41           ; ventana: derecha
 nxwb:    defb 23           ; ventana: abajo
-nxattr:  defb 7            ; atributo actual (tinta 7, papel 0)
+nxattr:  defb 56           ; atributo actual (papel 7, tinta 0)
 nxlast:  defb 0            ; ultima tecla devuelta (antirrebote)
 nxsh:    defb 0            ; desplazamiento del glifo dentro del byte (0..7)
 nxmh:    defb 0            ; mascara AND del primer byte de pantalla
@@ -506,6 +506,11 @@ nxw_b:  ld    (nxwb),a
 ; SCRINK: A = pluma (0 = papel, 1 = tinta), C = color. Ajusta el atributo.
 ; ---------------------------------------------------------------------------
 SCRINK:
+        push  af
+        ld    a,c
+        call  nxcolor          ; el guion trae colores de firmware del CPC
+        ld    c,a
+        pop   af
         or    a
         jr    nz,nxi_ink
         ld    a,(nxattr)
@@ -531,9 +536,42 @@ nxi_ink:
 
 ; SCRBORDER: A = color de borde
 SCRBORDER:
+        call  nxcolor
         and   7
         out   (254),a
         ret
+
+; ---------------------------------------------------------------------------
+; nxcolor: A = color de firmware del CPC (0..26) -> A = color del Spectrum (0..7)
+; nativecc compila los colores del guion (0..7, estilo Spectrum) a numeros de
+; firmware del CPC con la tabla _ZX2CPC, porque el motor nativo nacio para el
+; CPC. Aqui hay que deshacerlo: sin esto el blanco (26) se quedaba en 26 AND 7
+; = 2, que es rojo.
+; ---------------------------------------------------------------------------
+nxcolor:
+        push  hl
+        cp    27
+        jr    c,nxc_ok
+        ld    a,26             ; fuera de rango: blanco
+nxc_ok: ld    l,a
+        ld    h,0
+        add   hl,NXCOL         ; Z80N
+        ld    a,(hl)
+        pop   hl
+        ret
+
+NXCOL:  defb 0,0,1,1,1,2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,5,5,5,6,6,6,7
+
+; ---------------------------------------------------------------------------
+; NXINIT: estado de pantalla al arrancar, igual que el export Next en BASIC
+; (borde 7, papel 7, tinta 0), y luego Layer 2 si el juego trae imagenes.
+; ---------------------------------------------------------------------------
+NXINIT:
+        ld    a,7
+        out   (254),a
+        ld    a,56             ; papel 7, tinta 0
+        ld    (nxattr),a
+        jp    NXL2INIT
 
 ; SCRMODE: en el CPC cambia de modo y borra. Aqui solo borra.
 SCRMODE:
@@ -624,14 +662,18 @@ nxs_row:
         ld    b,5
 nxs_bit:
         srl   c
-        jr    c,nxs_hall
+        jr    nc,nxs_otra      ; ese bit no esta pulsado
+        ld    a,(hl)
+        or    a
+        jr    nz,nxs_hall      ; tecla de verdad
+        ; entrada 0 = tecla modificadora (CAPS o SYMBOL SHIFT). NO se devuelve,
+        ; pero tampoco puede cortar el escaneo: si cortara, teniendo CAPS pulsada
+        ; nunca se llegaria a la fila del 0 y CAPS+0 (borrar) no existiria.
+nxs_otra:
         inc   hl
         djnz  nxs_bit
         jr    nxs_sig
 nxs_hall:
-        ld    a,(hl)
-        or    a
-        jr    z,nxs_cero       ; modificadora suelta: no cuenta
         cp    48
         jr    nz,nxs_ok
         ld    a,(nxcaps)
@@ -640,10 +682,6 @@ nxs_hall:
         jr    z,nxs_ok
         ld    a,127            ; CAPS + 0 = borrar
 nxs_ok: pop   bc
-        ret
-nxs_cero:
-        pop   bc
-        xor   a
         ret
 nxs_nada:
         ld    bc,5
@@ -711,7 +749,7 @@ def _engine_next(con_imagenes):
     src = src[:i] + ('detect128:\n'
                      '        xor   a\n'
                      '        ld    (has128),a      ; sin cache de imagenes en banco\n'
-                     '        jp    NXL2INIT') + src[j:]
+                     '        jp    NXINIT') + src[j:]
 
     i = src.index(chr(10) + 'show_loc_image:') + 1
     j = src.index(chr(10) + '; sli_loadfile:', i) + 1
@@ -873,7 +911,9 @@ def compila(game, ancho=COLS, org=ORG, datadir=None):
     sysm, _sal = cpc_nativo._sys_msgs_y_salidas(game.get('metadata') or {})
     while len(sysm) < ge.NSYS:
         sysm.append('')
-    spec, _ = nc.compile_game(c, sysm[:ge.NSYS], width=ancho)
+    import scriba_info
+    ficha = scriba_info.ficha(game, 'next', scriba_info.ahora())
+    spec, _ = nc.compile_game(c, sysm[:ge.NSYS], width=ancho, ficha=ficha)
 
     idioma = str((game.get('metadata') or {}).get('language', '') or 'es')
 
