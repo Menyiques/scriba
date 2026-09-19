@@ -67,7 +67,7 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
         raise ValueError('CPC: %d localizaciones (maximo 255).' % nloc)
     if nobj>255:
         raise ValueError('CPC: %d objetos (maximo 255).' % nobj)
-    HDR=80
+    HDR=82
     p=load+HDR
     dictidx=p; p+=ntok*2
     ddat=p; dptr=[]; dd=bytearray()
@@ -147,6 +147,8 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     objlock_a = p; p += nobj
     objin_a   = p; p += nobj
     objweight_a = p; p += nobj
+    # mensaje inicial por objeto (indice de mensaje, 0 = no tiene)
+    objinit_a = p; p += nobj*2
     # ── efectos de sonido FX (blob AY: [nfx][offsets][bloques]); 0 si no hay ──
     fx_addr = p if fx else 0; p += len(fx)
     out=bytearray()
@@ -181,6 +183,7 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     out.append(llevarmax & 0xFF)                                # 77 (flag LLEVAR_MAX)
     w16(fx_addr)                                                # 79 (blob FX por AY)
     out.append((nvocab>>8)&0xFF)                                # 80 (nvocab byte alto)
+    w16(objinit_a)                                              # 82 (mensaje inicial)
     assert len(out)==HDR, len(out)
     for x in dptr: w16(x)
     out+=dd
@@ -213,6 +216,9 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     for o in objects: out.append(1 if o.get('locked') else 0)
     for o in objects: out.append(o.get('incont',0)&0xFF)
     for o in objects: out.append(o.get('weight',0)&0xFF)
+    for o in objects:
+        _mi=o.get('init',0)&0xFFFF
+        out.append(_mi&0xFF); out.append((_mi>>8)&0xFF)
     out+=bytes(fx)
     return bytes(out), dict(load=load,ntok=ntok,nmsg=nmsg,nloc=nloc,nvocab=nvocab,nobj=nobj,ntimers=nt,size=len(out))
 
@@ -256,6 +262,8 @@ init:   ld    hl,(DBB+0)
         ld    (nobj),a
         ld    hl,(DBB+18)
         ld    (objnamep),hl
+        ld    hl,(DBB+80)
+        ld    (objinitp),hl   ; mensajes iniciales de objeto (0 = no tiene)
         ld    hl,(DBB+20)
         ld    (objnounp),hl
         ld    hl,(DBB+22)
@@ -930,41 +938,56 @@ list_here:
         or    a
         ret   z
         ld    b,a
-        ld    hl,OBJLOC
-        ld    a,(curloc)
-        ld    c,a
-        ld    d,0
-lh_c:   ld    a,(hl)
-        cp    c
-        jr    nz,lh_cn
-        inc   d
-lh_cn:  inc   hl
-        djnz  lh_c
-        ld    a,d
-        or    a
-        ret   z
-        call  newline
-        ld    de,SSEE
-        call  print_msg
-        ld    a,(nobj)
-        ld    b,a
         xor   a
         ld    (oidx),a
-lh_l:   ld    a,(oidx)
+lh_l:   push  bc
+        ld    a,(oidx)
         call  objloc_get
         ld    c,a
         ld    a,(curloc)
         cp    c
+        jr    nz,lh_sk         ; el objeto no esta aqui
+        ld    a,(oidx)
+        call  objinit_get      ; DE = mensaje inicial del objeto
+        ld    a,d
+        or    e
+        jr    nz,lh_ini
+        ; Sin mensaje inicial: si es fijo (escenario, PNJ) no se lista, porque se
+        ; da por hecho que la descripcion de la sala ya lo menciona.
+        ld    a,(oidx)
+        call  objfix_get
+        or    a
         jr    nz,lh_sk
-        push  bc
+        jr    lh_nom
+lh_ini:
+        ; Con mensaje inicial: vale siempre si es fijo, y si no lo es solo
+        ; mientras siga donde lo dejo el autor. Una vez movido pasa a listarse
+        ; por su nombre, como en PAW.
+        push  de
+        ld    a,(oidx)
+        call  objfix_get
+        or    a
+        jr    nz,lh_pon
+        ld    a,(oidx)
+        call  objorig_get
+        ld    c,a
+        ld    a,(curloc)
+        cp    c
+        jr    nz,lh_mov
+lh_pon: pop   de
+        call  newline
+        call  print_msg
+        jr    lh_sk
+lh_mov: pop   de
+lh_nom: call  newline
+        ld    de,SSEE
+        call  print_msg
         ld    a,(oidx)
         call  print_objname
-        ld    a,32
-        call  char_raw
-        pop   bc
 lh_sk:  ld    a,(oidx)
         inc   a
         ld    (oidx),a
+        pop   bc
         djnz  lh_l
         ret
 
@@ -1238,6 +1261,31 @@ objfix_get:
         ld    e,a
         ld    d,0
         ld    hl,(objfixp)
+        add   hl,de
+        ld    a,(hl)
+        ret
+; objinit_get: A = objeto -> DE = indice del mensaje inicial (0 = no tiene)
+objinit_get:
+        ld    e,a
+        ld    d,0
+        ld    hl,(objinitp)
+        ld    a,h
+        or    l
+        jr    z,oig_no        ; el juego no trae tabla de mensajes iniciales
+        ex    de,hl           ; HL = indice, DE = tabla
+        add   hl,hl           ; indice*2 (entradas de 16 bits)
+        add   hl,de
+        ld    e,(hl)
+        inc   hl
+        ld    d,(hl)
+        ret
+oig_no: ld    de,0
+        ret
+; objorig_get: A = objeto -> A = localizacion donde lo puso el autor
+objorig_get:
+        ld    e,a
+        ld    d,0
+        ld    hl,(objlocsrc)
         add   hl,de
         ld    a,(hl)
         ret
@@ -2870,6 +2918,7 @@ msgidx:   defw 0
 locidx:   defw 0
 vocabp:   defw 0
 objnamep: defw 0
+objinitp: defw 0
 objnounp: defw 0
 objlocsrc: defw 0
 objfixp: defw 0

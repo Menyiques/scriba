@@ -287,6 +287,13 @@ def compile_game(c, sysm, width=40, ficha=None):
     for name,_id in obj_by_id:
         O=g['objects'][name]
         ni=len(messages); messages.append(translit(O.get('name','')))
+        # Mensaje inicial del objeto: lo que se imprime al mirar la sala en vez de
+        # "Aqui hay <nombre>". En los objetos fijos (escenario, PNJ) es ademas lo
+        # unico que los hace visibles.
+        _im=(O.get('initial_message') or '').strip()
+        ii=0
+        if _im:
+            ii=len(messages); messages.append(translit(_im))
         noun=c.nounid.get(O.get('noun','') or '',0)
         lname=O.get('location')
         attrs=[str(a).lower() for a in (O.get('attributes') or [])]
@@ -309,7 +316,7 @@ def compile_game(c, sysm, width=40, ficha=None):
         op=1 if (is_cont and O.get('open')) else 0
         lk=1 if (is_cont and O.get('locked')) else 0
         wt=int(O.get('weight',0) or 0)&0xFF
-        objects.append({'name':ni,'noun':noun,'loc':loc,'fixed':fixed,
+        objects.append({'name':ni,'init':ii,'noun':noun,'loc':loc,'fixed':fixed,
                         'light':light,'lit':lit,'open':op,'locked':lk,'incont':incont,
                         'weight':wt})
     # contexto con indices de recolecta

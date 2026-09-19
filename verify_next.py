@@ -524,6 +524,25 @@ def main():
         res.append(('presentacion mostrada y esperando tecla',
                     bool(presentacion) and any(clave in l for l in presentacion)))
 
+    # ---- mensajes iniciales de objeto ----
+    objs = (game.get('objects') or {}).values()
+    fijos = [o for o in objs
+             if 'fixed' in [str(a).lower() for a in (o.get('attributes') or [])]
+             and (o.get('initial_message') or '').strip()]
+    if fijos:
+        texto = ' '.join(' '.join(p) for _, p in jugadas)
+        texto = ' '.join(texto.split())
+        nombres = [o for o in fijos
+                   if ' '.join(str(o.get('name', '')).split())[:18] in texto]
+        vistos = [o for o in fijos
+                  if ' '.join(str(o['initial_message']).split())[:28] in texto]
+        res.append(('los fijos con mensaje inicial salen por su mensaje', bool(vistos)))
+        res.append(('...y NO por su nombre de objeto', not nombres))
+        if nombres:
+            print()
+            print('    se listan por nombre y no deberian: %s'
+                  % ', '.join(str(o.get('name')) for o in nombres))
+
     ver = dict(jugadas).get('version', [])
     if ver:
         import scriba_info
