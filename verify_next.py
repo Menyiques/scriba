@@ -232,6 +232,37 @@ def verificar(game):
         antes[22] == 'PENULTIMA' and antes[23] == 'ULTIMA'
         and desp[21] == 'PENULTIMA' and desp[22] == 'ULTIMA' and desp[23] == '')
 
+    # ---- 3c. pausa de pagina: esperar tecla antes de tirar una linea ----
+    def _con_kmw(addr):
+        """Ejecuta addr contando cuantas veces se para a esperar tecla."""
+        vistas = [0]
+        paso = cpu.step
+
+        def _cuenta():
+            if cpu.pc == sym['kmw']:
+                vistas[0] += 1
+            paso()
+
+        cpu.step = _cuenta
+        try:
+            ejecutar(cpu, mem, addr)
+        finally:
+            cpu.step = paso
+        return vistas[0]
+
+    ejecutar(cpu, mem, sym['nxcls'])
+    tec.pulsa('a')                     # hay tecla pulsada: la pausa se resuelve sola
+    mem[sym['nxrow']] = mem[sym['nxwb']]
+    mem[sym['nxpcnt']] = mem[sym['nxwb']] - mem[sym['nxwt']]   # ventana llena
+    cpu.a = 10
+    chk('al llegar abajo espera tecla antes de desplazar', _con_kmw(sym['txto']) == 1)
+    mem[sym['nxrow']] = mem[sym['nxwb']]
+    mem[sym['nxpcnt']] = 0                                     # aun queda sitio
+    cpu.a = 10
+    chk('...y no para si todavia queda pantalla', _con_kmw(sym['txto']) == 0)
+    tec.suelta()
+    ejecutar(cpu, mem, sym['nxcls'])
+
     # ---- 4. teclado por el puerto &FE ----
     tec.suelta()
     ejecutar(cpu, mem, sym['kmread'])
@@ -342,10 +373,21 @@ def teclea(cpu, sym, tec, texto, tope=6000000):
     lectura (que es lo que espera el antirrebote) y pasa a la siguiente."""
     pendientes = list(texto)
     soltar = False
+    en_pausa = False
+    kmw = sym.get('kmw')
     n = 0
     while n < tope:
-        if cpu.pc == sym['kmread']:
-            if soltar:
+        if kmw is not None and cpu.pc == kmw:
+            # El juego se ha parado a que leamos (pausa de pagina al desplazar, o
+            # un PAUSE 0). Eso NO es el comando: se le da una tecla cualquiera y
+            # la cola de caracteres se queda como estaba.
+            tec.pulsa(' ')
+            en_pausa = True
+            soltar = True
+        elif cpu.pc == sym['kmread']:
+            if en_pausa:
+                en_pausa = False          # esta lectura es la de la pausa
+            elif soltar:
                 tec.suelta()
                 soltar = False
             elif pendientes:
@@ -510,6 +552,26 @@ def verificar_nex(game, salida, datadir=None, musicdir=None):
                 break
             jugadas.append((orden, [l for l in leer_pantalla(mem, sym) if l.strip()]))
 
+    # ---- revelado progresivo al entrar en una sala con imagen ----
+    revelado = None
+    if info['imagenes'] and llego:
+        espia.flujo.clear()
+        barridos = [0]
+        paso = cpu.step
+
+        def _vigilado():
+            if cpu.pc == sym.get('nxrframe'):
+                barridos[0] += 1
+            paso()
+
+        cpu.step = _vigilado
+        # se llama a show_loc_image directamente en vez de escribir "mirar": el
+        # verbo cambia con el idioma y esto no
+        ejecutar(cpu, mem, sym['show_loc_image'], pasos=3000000)
+        cpu.step = paso
+        cortes = [v for r, v in espia.flujo if r == 0x18][3::4]
+        revelado = {'barridos': barridos[0], 'cortes': cortes}
+
     # ---- Layer 2: comprobar el banco activo y la paleta de la sala actual ----
     img = None
     if info['imagenes'] and llego:
@@ -540,7 +602,7 @@ def verificar_nex(game, salida, datadir=None, musicdir=None):
             'fila_intro': fila_intro,
             'esp0': esp0,
         }
-    return info, llego, n, pant, bancos, jugadas, img, presentacion, titulo
+    return info, llego, n, pant, bancos, jugadas, img, presentacion, titulo, revelado
 
 
 def main():
@@ -559,10 +621,12 @@ def main():
     for l in desc:
         print('|' + l)
     print()
+    ya = len(res)
     # ---- vuelta completa por el .nex ----
     import tempfile
     salida = os.path.join(tempfile.gettempdir(), 'scriba_prueba_nativo.nex')
-    info, llego, pasos, pant, bancos, jugadas, img, presentacion, titulo = verificar_nex(
+    (info, llego, pasos, pant, bancos, jugadas, img, presentacion, titulo,
+     revelado) = verificar_nex(
         game, salida, datadir=nn.datadir_por_defecto(path),
         musicdir=nn.musicdir_por_defecto(path))
     print('--- .nex: %s' % os.path.basename(salida))
@@ -579,6 +643,15 @@ def main():
         for l in p:
             print('    |' + l)
     res.append(('.nex responde a ordenes escritas', len(jugadas) == 4))
+
+    if revelado:
+        print()
+        print('    --- revelado de la imagen al entrar en una sala')
+        print('        %d barridos, lineas de corte %s'
+              % (revelado['barridos'], revelado['cortes']))
+        esperado = list(range(0, 64, nn.REVELADO_PASO)) + [63]
+        res.append(('la imagen se descubre de arriba abajo, no de golpe',
+                    revelado['cortes'] == esperado))
 
     if titulo:
         print()
@@ -666,6 +739,9 @@ def main():
                     img['l2_intro'] == 128 and img['banco_intro'] == img['esp0']))
         res.append(('...y su texto empieza en la fila 8', img['fila_intro'] == nn.FILA_TEXTO))
         res.append(('paleta de la sala subida entera', img['paleta_ok']))
+    print()
+    for nombre, b in res[ya:]:
+        print(('  OK  ' if b else ' FALLA') + '  ' + nombre)
     ok = sum(1 for _, b in res if b)
     print()
     print('%d/%d comprobaciones correctas' % (ok, len(res)))

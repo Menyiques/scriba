@@ -40,6 +40,7 @@ FILA_TEXTO = 8      # la imagen ocupa las filas 0..7; el texto empieza aqui
 FILAS_CON_IMAGEN = 15   # lineas utiles de presentacion con imagen (8..23)
 FILAS_SIN_IMAGEN = 22   # ...y sin imagen (0..23)
 PSG_MAX = 4480      # tope de musica que cabe plana (igual que el export BASIC)
+REVELADO_PASO = 4   # lineas por barrido al descubrir la imagen (64/4 = 16 frames)
 FILAS = 24
 
 
@@ -117,6 +118,54 @@ nxl2off:
         out   (c),a
         ret
 
+; nxclip: E = ultima linea visible de Layer 2. El clip se programa escribiendo
+; cuatro veces el registro $18 (x1, x2, y1, y2) tras reiniciar su indice en $1C.
+nxclip191:
+        ld    e,191
+        jr    nxclip
+nxclip63:
+        ld    e,63
+nxclip: push  de
+        ld    d,&1C
+        ld    e,2
+        call  nxreg
+        ld    d,&18
+        ld    e,0
+        call  nxreg
+        ld    e,255
+        call  nxreg
+        ld    e,0
+        call  nxreg
+        pop   de
+        ld    d,&18
+        jp    nxreg
+
+; nxrframe: un barrido de pantalla, para el revelado.
+nxrframe:
+        ei
+        halt
+        ret
+
+; nxrevela: descubre la imagen de arriba abajo subiendo la linea de corte del
+; clip unas cuantas lineas por barrido. En el .nex la imagen ya esta en su banco
+; desde que arranca, o sea que sin esto aparece de golpe; los builds BASIC la
+; pintaban poco a poco y quedaba mejor. Aqui no se pinta nada: solo se va
+; dejando ver, que sale gratis.
+nxrevela:
+        ld    b,NXREVPASO      ; la linea 0 ya la dejo puesta quien nos llama
+nxrev_l:
+        ld    e,b
+        push  bc
+        call  nxclip
+        call  nxrframe
+        pop   bc
+        ld    a,b
+        add   a,NXREVPASO
+        ld    b,a
+        cp    64
+        jr    c,nxrev_l
+        jp    nxclip63
+
 ; NXNOPIC: sin imagen (sala que no tiene, u oscuridad). Basta con apagar Layer 2
 ; y el texto vuelve a disponer de las 24 filas. Ya no hace falta un banco de 16K
 ; en negro al que apuntar: cuando Layer 2 esta apagado no se ve nada, y ese banco
@@ -134,7 +183,10 @@ NXPIC:
         call  nxreg
         pop   af
         call  nxsubepal        ; A = slot: su paleta esta en el banco de paletas
-        jp    nxl2on           ; ya hay imagen: encender Layer 2
+        ld    e,0
+        call  nxclip           ; empezar con una sola linea a la vista
+        call  nxl2on
+        jp    nxrevela         ; y descubrirla de arriba abajo
 
 ; nxsubepal: A = slot de paleta -> los 256 colores a la paleta de Layer 2.
 ;
@@ -197,26 +249,6 @@ NXTIT:
         call  nxespera         ; suena la musica mientras no toquen tecla
         call  nxl2off
         jp    nxclip63         ; clip de vuelta al tercio superior
-
-nxclip191:
-        ld    e,191
-        jr    nxclip
-nxclip63:
-        ld    e,63
-nxclip: push  de
-        ld    d,&1C
-        ld    e,2
-        call  nxreg            ; reinicia el indice de clip de Layer 2
-        ld    d,&18
-        ld    e,0
-        call  nxreg
-        ld    e,255
-        call  nxreg
-        ld    e,0
-        call  nxreg
-        pop   de
-        ld    d,&18
-        jp    nxreg
 
 ; nxespera: espera a que SUELTEN cualquier tecla y luego a que pulsen una nueva.
 ; Sin lo primero, la tecla con la que se arranco saldria del bucle al instante.
@@ -329,6 +361,7 @@ nxsh:    defb 0            ; desplazamiento del glifo dentro del byte (0..7)
 nxmh:    defb 0            ; mascara AND del primer byte de pantalla
 nxml:    defb 0            ; mascara AND del segundo
 nxfil:   defb 0            ; contador de lineas de pixeles
+nxpcnt:  defb 0            ; lineas desplazadas desde la ultima pausa
 nxcaps:  defb 0            ; CAPS SHIFT pulsado en el ultimo escaneo
 
 ; ---------------------------------------------------------------------------
@@ -396,9 +429,39 @@ nx_lf:  ld    a,(nxrow)
         ld    a,b
         ld    (nxrow),a
         ret
-nx_scr: ld    a,(nxwb)
+nx_scr: call  nxmas            ; antes de tirar una linea, dejar leer
+        ld    a,(nxwb)
         ld    (nxrow),a
         jp    nxscroll
+
+; ---------------------------------------------------------------------------
+; nxmas: cuenta las lineas que se han ido por arriba y, cuando se ha desplazado
+; una ventana entera desde la ultima vez, espera una tecla. Sin esto un texto
+; largo se desplaza entero de golpe y no da tiempo a leerlo. Es lo mismo que
+; hacen los builds BASIC con pcnt/pmas, y como alli no se imprime ningun aviso:
+; el texto se para y ya.
+; ---------------------------------------------------------------------------
+nxmas:
+        push  af
+        push  bc
+        ld    a,(nxpcnt)
+        inc   a
+        ld    (nxpcnt),a
+        ld    b,a
+        ld    a,(nxwb)
+        ld    c,a
+        ld    a,(nxwt)
+        neg
+        add   a,c              ; A = alto de la ventana - 1
+        cp    b
+        jr    nc,nxm_fin       ; todavia queda pantalla por llenar
+        call  KMW              ; pausa hasta que pulsen
+        xor   a
+        ld    (nxpcnt),a
+nxm_fin:
+        pop   bc
+        pop   af
+        ret
 
 nx_bs:  ld    a,(nxcol)
         ld    b,a
@@ -558,6 +621,8 @@ nxcls:
         ld    (nxrow),a
         ld    a,(nxwl)
         ld    (nxcol),a
+        xor   a
+        ld    (nxpcnt),a       ; pantalla limpia: la cuenta de pagina, a cero
         ret
 
 ; ---------------------------------------------------------------------------
@@ -1000,7 +1065,8 @@ def prefijo(org, db_base, nimg=0, titulo=False):
          'NXIMG equ %d' % BANK_IMG,         # primer banco de imagen
          'NXTITLE equ %d' % (BANK_IMG + nimg),   # portada: 3 bancos seguidos
          'NXPALPG equ %d' % (2 * (BANK_IMG + nimg + (3 if titulo else 0))),
-         'NXPALTIT equ %d' % nimg]              # slot de la paleta de la portada
+         'NXPALTIT equ %d' % nimg,              # slot de la paleta de la portada
+         'NXREVPASO equ %d' % REVELADO_PASO]    # lineas por barrido al revelar
     for n in ('SCANTGO', 'SEXITS', 'SNOUND', 'SSEE', 'STAKE', 'SDROP',
               'SNOTHERE', 'SNOTCARR', 'SINVEN', 'SEMPTY', 'SNOTAKE', 'SDARK',
               'SSCORE', 'SHEAVY', 'SSCOREP', 'SSCORES',
