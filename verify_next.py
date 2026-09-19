@@ -24,7 +24,7 @@ import spectrum_export as sx
 import z80
 
 ORG = 0x6000
-ANCHO = 32
+ANCHO = 42
 
 
 # ---------------------------------------------------------------------------
@@ -92,31 +92,37 @@ class Teclado:
 # decodificador de pantalla: pixeles -> texto
 # ---------------------------------------------------------------------------
 def tabla_glifos(mem, sym):
+    """Indice inverso: los 6 bits de tinta de cada glifo -> su caracter."""
     t = {}
     base = sym['nxfont']
-    for i in range(96):
-        t[bytes(mem[base + i * 8:base + i * 8 + 8])] = chr(32 + i)
-    facc = mem[sym['faccp']] | (mem[sym['faccp'] + 1] << 8)
-    if facc:
-        acc = sx._ACC_CODE_PT if sx._PT_LANG else sx._ACC_CODE
-        por_codigo = {code: ch for ch, code in acc.items()}
-        for i in range(16):
-            g = bytes(mem[facc + i * 8:facc + i * 8 + 8])
-            t.setdefault(g, por_codigo.get(144 + i, '?'))
+    acc = sx._ACC_CODE_PT if sx._PT_LANG else sx._ACC_CODE
+    por_codigo = {code: ch for ch, code in acc.items()}
+    for i in range(112):
+        g = bytes(b & 0xFC for b in mem[base + i * 8:base + i * 8 + 8])
+        ch = chr(32 + i) if i < 96 else por_codigo.get(144 + i - 96, '?')
+        t.setdefault(g, ch)
     t[bytes(8)] = ' '
     return t
 
 
-def leer_pantalla(mem, sym):
+def leer_pantalla(mem, sym, ancho=ANCHO):
+    """Decodifica la pantalla a texto. Cada caracter ocupa 6 pixeles, asi que
+    hay que recortar la rodaja de 6 bits de los dos bytes que lo contienen."""
     glifos = tabla_glifos(mem, sym)
     lineas = []
     for fila in range(24):
         alto = 0x40 | (fila & 0x18)
         bajo = (fila & 7) << 5
         out = []
-        for col in range(32):
-            g = bytes(mem[((alto + l) << 8) | (bajo + col)] for l in range(8))
-            out.append(glifos.get(g, '?'))
+        for col in range(ancho):
+            x = col * 6
+            byte, n = x // 8, x % 8
+            g = []
+            for l in range(8):
+                dirn = ((alto + l) << 8) | (bajo + byte)
+                par = (mem[dirn] << 8) | (mem[dirn + 1] if byte < 31 else 0)
+                g.append(((par << n) >> 8) & 0xFC)
+            out.append(glifos.get(bytes(g), '?'))
         lineas.append(''.join(out).rstrip())
     return lineas
 

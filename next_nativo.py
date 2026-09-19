@@ -25,7 +25,7 @@ el resto.
 """
 import re
 
-import cpc_font
+import font42
 import game_engine as ge
 import z80asm
 
@@ -33,20 +33,20 @@ ORG = 0x6000        # motor: por encima de la pantalla ULA (&4000-&5AFF)
 MTABLE = 0x5B00     # tabla de matrices de usuario (RAM libre bajo el motor)
 PANT = 0x4000       # pantalla ULA
 ATTR = 0x5800       # atributos
-COLS = 32           # columnas de texto (fase 1: fuente 8x8)
+COLS = 42           # columnas de texto (fuente de 6 pixeles)
 FILAS = 24
 
 
 # ---------------------------------------------------------------------------
-# Fuente: 32..127 desde cpc_font.ASCII (8x8). Los acentos (codigos 224..239) NO
-# van aqui: el motor los trae en la propia base de datos, en (faccp), y NXGLYPH
-# los lee de alli. Asi el juego manda su propia tipografia acentuada.
+# Fuente de 6 pixeles: 112 glifos (codigos 32..127 y 224..239), con la tinta
+# dentro de los 6 bits altos. La genera genera_font42.py a partir de la fuente
+# de la ROM del Spectrum y de las tablas de print42_es/pt.bas, o sea que el
+# motor nativo saca los mismos pixeles que los builds BASIC de 128K y Next.
+# Los acentos van en la tabla, no en (faccp): la plataforma ya no depende de
+# que el juego traiga sus bitmaps.
 # ---------------------------------------------------------------------------
-def _font_asm():
-    datos = bytearray(cpc_font.ASCII)
-    if len(datos) < 96 * 8:
-        datos += bytes(96 * 8 - len(datos))
-    datos = datos[:96 * 8]
+def _font_asm(idioma='es'):
+    datos = font42.tabla(idioma)
     L = ['NXFONT:']
     for i in range(0, len(datos), 8):
         L.append('        defb ' + ','.join(str(b) for b in datos[i:i + 8]))
@@ -63,10 +63,14 @@ nxrow:   defb 0            ; fila del cursor
 nxcol:   defb 0            ; columna del cursor
 nxwl:    defb 0            ; ventana: izquierda
 nxwt:    defb 0            ; ventana: arriba
-nxwr:    defb 31           ; ventana: derecha
+nxwr:    defb 41           ; ventana: derecha
 nxwb:    defb 23           ; ventana: abajo
 nxattr:  defb 7            ; atributo actual (tinta 7, papel 0)
 nxlast:  defb 0            ; ultima tecla devuelta (antirrebote)
+nxsh:    defb 0            ; desplazamiento del glifo dentro del byte (0..7)
+nxmh:    defb 0            ; mascara AND del primer byte de pantalla
+nxml:    defb 0            ; mascara AND del segundo
+nxfil:   defb 0            ; contador de lineas de pixeles
 nxcaps:  defb 0            ; CAPS SHIFT pulsado en el ultimo escaneo
 
 ; ---------------------------------------------------------------------------
@@ -137,9 +141,9 @@ nx_bs:  ld    a,(nxcol)
         ret
 
 ; ---------------------------------------------------------------------------
-; nxglyph: A = codigo -> HL = direccion de la matriz de 8 bytes.
-;   32..127  -> NXFONT
-;   224..239 -> acentos del juego, en (faccp) dentro de la base de datos
+; nxglyph: A = codigo -> HL = matriz de 8 bytes.
+;   32..127  -> indices 0..95 de la tabla
+;   224..239 -> indices 96..111 (acentos)
 ; ---------------------------------------------------------------------------
 nxglyph:
         cp    224
@@ -151,58 +155,80 @@ nxglyph:
 nxg_acc:
         cp    240
         jr    nc,nxg_sp
-        sub   224
-        ld    l,a
-        ld    h,0
-        add   hl,hl
-        add   hl,hl
-        add   hl,hl
-        ld    de,(faccp)
-        ld    a,d
-        or    e
-        jr    z,nxg_sp
-        add   hl,de
-        ret
+        sub   128              ; 224 -> 96
+        jr    nxg_tab
+nxg_sp: xor   a                ; desconocido -> espacio
 nxg_tab:
         ld    l,a
         ld    h,0
         add   hl,hl
         add   hl,hl
         add   hl,hl
-        ld    de,NXFONT
-        add   hl,de
-        ret
-nxg_sp: ld    hl,NXFONT       ; desconocido -> espacio
+        add   hl,NXFONT        ; Z80N: ADD HL,nn
         ret
 
 ; ---------------------------------------------------------------------------
-; nxplot: vuelca la matriz de HL en (nxrow,nxcol) y pone el atributo.
-; Distribucion de la pantalla del Spectrum:
-;   pixel:  alto = &40 + (fila AND &18) + linea ;  bajo = (fila AND 7)*32 + col
-;   attr :  &5800 + fila*32 + col
+; nxplot: pinta la matriz de HL en (nxrow,nxcol) con paso de 6 pixeles.
+; El glifo lleva la tinta en los bits 7..2, o sea que al desplazarlo n bits a la
+; derecha ocupa 6 pixeles a partir del pixel n del byte. Como puede caer a
+; caballo de dos bytes, se escriben los dos, cada uno con su mascara.
 ; ---------------------------------------------------------------------------
 nxplot:
         ld    (nxtmp),hl       ; guarda la matriz
+        ld    a,(nxcol)
+        ld    b,a
+        add   a,a
+        add   a,b
+        add   a,a              ; X = col*6   (41*6 = 246, cabe en un byte)
+        ld    e,a
+        and   7
+        ld    (nxsh),a
+        add   a,a              ; *2: la tabla lleva dos bytes por entrada
+        ld    c,a
+        ld    b,0
+        ld    hl,NXMASK
+        add   hl,bc
+        ld    a,(hl)
+        ld    (nxmh),a
+        inc   hl
+        ld    a,(hl)
+        ld    (nxml),a
         ld    a,(nxrow)
         add   a,a
         add   a,a
-        add   a,a
-        ld    d,a              ; Y en pixeles = fila*8
-        ld    a,(nxcol)
-        add   a,a
-        add   a,a
-        add   a,a
-        ld    e,a              ; X en pixeles = col*8
+        add   a,a              ; Y = fila*8
+        ld    d,a
         pixelad                ; Z80N: HL = direccion de pantalla de (D,E)
-        ex    de,hl            ; DE = pantalla
-        ld    hl,(nxtmp)       ; HL = matriz
-        ld    b,8
-nxp_l:  ld    a,(hl)
-        ld    (de),a
-        inc   hl
-        inc   d                ; dentro de una fila de caracteres basta INC D
-        djnz  nxp_l
-        ld    a,(nxrow)        ; atributo: &5800 + fila*32 + col
+        ld    a,8
+        ld    (nxfil),a
+        ld    de,(nxtmp)       ; DE = matriz
+nxp_l:  ld    a,(de)
+        inc   de
+        ld    c,0
+        ld    b,a
+        ld    a,(nxsh)
+        or    a
+        jr    z,nxp_ya
+nxp_sh: srl   b                ; desplaza el glifo a su sitio; lo que sale
+        rr    c                ; por la derecha cae en C (segundo byte)
+        dec   a
+        jr    nz,nxp_sh
+nxp_ya: ld    a,(nxmh)
+        and   (hl)
+        or    b
+        ld    (hl),a
+        inc   l
+        ld    a,(nxml)
+        and   (hl)
+        or    c
+        ld    (hl),a
+        dec   l
+        pixeldn                ; Z80N: siguiente linea de pixeles
+        ld    a,(nxfil)
+        dec   a
+        ld    (nxfil),a
+        jr    nz,nxp_l
+        ld    a,(nxrow)        ; atributo: &5800 + fila*32 + X/8
         ld    l,a
         ld    h,0
         add   hl,hl
@@ -211,12 +237,36 @@ nxp_l:  ld    a,(hl)
         add   hl,hl
         add   hl,hl
         ld    a,(nxcol)
-        add   hl,a             ; Z80N: ADD HL,A
-        add   hl,&5800         ; Z80N: ADD HL,nn
+        ld    b,a
+        add   a,a
+        add   a,b
+        add   a,a
+        srl   a
+        srl   a
+        srl   a                ; X/8
+        add   hl,a             ; Z80N
+        add   hl,&5800         ; Z80N
+        ld    a,(nxattr)
+        ld    (hl),a
+        ld    a,(nxsh)
+        cp    3
+        ret   c                ; el glifo cabe entero en una celda de atributo
+        inc   hl
         ld    a,(nxattr)
         ld    (hl),a
         ret
 nxtmp:  defw 0
+
+; mascaras AND por desplazamiento (byte alto, byte bajo): dejan a cero los 6
+; pixeles que va a ocupar el glifo y conservan los vecinos.
+NXMASK: defb &03,&FF
+        defb &81,&FF
+        defb &C0,&FF
+        defb &E0,&7F
+        defb &F0,&3F
+        defb &F8,&1F
+        defb &FC,&0F
+        defb &FE,&07
 
 ; ---------------------------------------------------------------------------
 ; nxcls: borra la pantalla entera con el atributo actual y sube el cursor al
@@ -312,11 +362,11 @@ nxrowadr:
 
 ; ---------------------------------------------------------------------------
 ; TXTWIN: H=izquierda L=arriba D=derecha E=abajo (convenio TXT WIN ENABLE).
-; El motor pide ventanas de 80 columnas (CPC modo 2); aqui se recortan.
+; El motor pide ventanas de 80 columnas (CPC modo 2); aqui se recortan a 42.
 ; ---------------------------------------------------------------------------
 TXTWIN:
         ld    a,h
-        cp    32
+        cp    42
         jr    c,nxw_l
         xor   a
 nxw_l:  ld    (nxwl),a
@@ -326,9 +376,9 @@ nxw_l:  ld    (nxwl),a
         xor   a
 nxw_t:  ld    (nxwt),a
         ld    a,d
-        cp    32
+        cp    42
         jr    c,nxw_r
-        ld    a,31
+        ld    a,41
 nxw_r:  ld    (nxwr),a
         ld    a,e
         cp    24
@@ -558,11 +608,12 @@ def prefijo(org, db_base):
     return chr(10).join(L) + chr(10)
 
 
-def assemble_engine_next(org=ORG, db_base=None):
+def assemble_engine_next(org=ORG, db_base=None, idioma='es'):
     """Ensambla motor + plataforma Next. Devuelve (bytes, tabla_de_simbolos)."""
     if db_base is None:
         db_base = org
-    fuente = prefijo(org, db_base) + _engine_next() + PLAT_ASM + chr(10) + _font_asm() + chr(10)
+    fuente = (prefijo(org, db_base) + _engine_next() + PLAT_ASM + chr(10) +
+              _font_asm(idioma) + chr(10))
     return z80asm.assemble(fuente, org=org)
 
 
@@ -605,9 +656,10 @@ def compila(game, ancho=COLS, org=ORG):
         sysm.append('')
     spec, _ = nc.compile_game(c, sysm[:ge.NSYS], width=ancho)
 
-    code, sym = assemble_engine_next(org=org, db_base=org)   # 1a pasada: tamaño
+    idioma = str((game.get('metadata') or {}).get('language', '') or 'es')
+    code, sym = assemble_engine_next(org=org, db_base=org, idioma=idioma)
     dbaddr = org + len(code)
-    code, sym = assemble_engine_next(org=org, db_base=dbaddr)
+    code, sym = assemble_engine_next(org=org, db_base=dbaddr, idioma=idioma)
     db, _ = ge.build_game_db(
         spec['messages'], spec['locations'], spec['vocab'], spec['objects'],
         spec['responses'], spec['startloc'], spec['sysverbs'], spec['width'],
