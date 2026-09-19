@@ -274,12 +274,15 @@ def compile_game(c, sysm, width=40, filas=21, ficha=None):
     for name,_id in loc_by_id:
         L=g['locations'][name]
         di=len(messages); messages.append(translit(L.get('description','')))
+        # Nombre de la localizacion, en mayusculas como en los exports BASIC.
+        _nm=str(L.get('name') or name)
+        li=len(messages); messages.append(translit(_nm.upper()))
         exits=[]
         for d,dest in (L.get('exits') or {}).items():
             if dest and dest in c.locidx:
                 vd=c.verbid.get(d.upper())
                 if vd: exits.append((vd, c.locidx[dest]-1))
-        locations.append({'desc':di,'exits':exits,
+        locations.append({'desc':di,'name':li,'exits':exits,
                           'dark':1 if L.get('dark') else 0})
     # objetos por id
     obj_by_id=sorted(c.objidx.items(), key=lambda kv: kv[1])

@@ -133,24 +133,34 @@ NXPIC:
         ld    e,a
         call  nxreg
         pop   af
-        ld    h,a              ; la paleta del slot esta en NXPALS + slot*256
-        ld    l,0
-        ld    de,NXPALS
-        add   hl,de
-        call  nxsubepal
+        call  nxsubepal        ; A = slot: su paleta esta en el banco de paletas
         jp    nxl2on           ; ya hay imagen: encender Layer 2
 
-; nxsubepal: HL = 256 colores -> paleta de Layer 2. El registro $41 autoincrementa
-; el indice, asi que basta seleccionarlo una vez y soltar los 256 bytes seguidos.
+; nxsubepal: A = slot de paleta -> los 256 colores a la paleta de Layer 2.
+;
+; Las paletas NO van en el binario plano: 24 paletas son 6 KB, y plano no sobra
+; ni eso. Viven en su propio banco de 16K, que se pagina un instante sobre la
+; ROM (&0000-&1FFF, pagina de 8K del MMU), se leen y se devuelve la ROM a su
+; sitio escribiendo 255 en el registro $50. Con interrupciones inhibidas, que
+; mientras la ROM no esta no hay gestor en &0038.
+;
+; El registro $41 autoincrementa el indice de color, asi que basta seleccionarlo
+; una vez y soltar los 256 bytes seguidos.
 nxsubepal:
-        push  hl
+        push  af
         ld    d,&43
         ld    e,&10
         call  nxreg            ; paleta de Layer 2
         ld    d,&40
         ld    e,0
         call  nxreg            ; empezando por el indice 0
-        pop   hl
+        pop   af
+        di
+        ld    h,a
+        ld    l,0              ; HL = slot*256, dentro de &0000-&1FFF
+        ld    d,&50
+        ld    e,NXPALPG
+        call  nxreg            ; banco de paletas sobre la ROM
         ld    bc,&243B
         ld    a,&41
         out   (c),a
@@ -162,6 +172,10 @@ nxpal_l:
         inc   hl
         dec   d
         jr    nz,nxpal_l
+        ld    d,&50
+        ld    e,255
+        call  nxreg            ; la ROM, de vuelta
+        ei
         ret
 '''
 
@@ -177,7 +191,7 @@ NXTIT:
         ld    e,NXTITLE
         call  nxreg            ; banco activo = el primero de los tres
         call  nxclip191
-        ld    hl,NXTPAL
+        ld    a,NXPALTIT       ; la paleta de la portada va detras de las de imagen
         call  nxsubepal
         call  nxl2on
         call  nxespera         ; suena la musica mientras no toquen tecla
@@ -977,14 +991,16 @@ sli_cls:
     return src[:i] + nuevo + src[j:]
 
 
-def prefijo(org, db_base, nimg=0):
+def prefijo(org, db_base, nimg=0, titulo=False):
     """Constantes que el motor espera resueltas. A diferencia del CPC, aqui NO
     se declaran TXTO/KMW/... como equ: son etiquetas de PLAT_ASM."""
     L = ['ORIGIN equ &%04X' % org,          # el motor lleva dentro 'org ORIGIN'
          'DBB equ &%04X' % db_base,
          'MTABLE equ &%04X' % MTABLE,
          'NXIMG equ %d' % BANK_IMG,         # primer banco de imagen
-         'NXTITLE equ %d' % (BANK_IMG + nimg)]   # portada: 3 bancos seguidos
+         'NXTITLE equ %d' % (BANK_IMG + nimg),   # portada: 3 bancos seguidos
+         'NXPALPG equ %d' % (2 * (BANK_IMG + nimg + (3 if titulo else 0))),
+         'NXPALTIT equ %d' % nimg]              # slot de la paleta de la portada
     for n in ('SCANTGO', 'SEXITS', 'SNOUND', 'SSEE', 'STAKE', 'SDROP',
               'SNOTHERE', 'SNOTCARR', 'SINVEN', 'SEMPTY', 'SNOTAKE', 'SDARK',
               'SSCORE', 'SHEAVY', 'SSCOREP', 'SSCORES',
@@ -1006,15 +1022,13 @@ def assemble_engine_next(org=ORG, db_base=None, idioma='es', paletas=b'',
     partes = []
     if nimg or titulo:
         partes.append(IMG_ASM)
-        partes.append(_datos_asm('NXPALS', paletas) if nimg else 'NXPALS: defw 0')
     else:
         partes.append(IMG_ASM_VACIO)
     if titulo:
         partes.append(TITULO_ASM)
-        partes.append(_datos_asm('NXTPAL', titulo_pal))
         partes.append(PSG_ASM + chr(10) + _datos_asm('NXPSG', psg)
                       if psg else PSG_ASM_VACIO)
-    fuente = (prefijo(org, db_base, nimg) + _engine_next(nimg > 0, titulo) +
+    fuente = (prefijo(org, db_base, nimg, titulo) + _engine_next(nimg > 0, titulo) +
               PLAT_ASM + chr(10) + chr(10).join(partes) + chr(10) +
               _font_asm(idioma) + chr(10))
     return z80asm.assemble(fuente, org=org)
@@ -1228,8 +1242,8 @@ def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None):
         font_acc=spec['font_acc'], timers=spec['timers'],
         llevarmax=spec['llevarmax'], fx=fx_blob)
     extras = {'imgs': imgs, 'datadir': datadir, 'fx': fx_blob,
-              'titulo': titulo_bin, 'psg': psg, 'psg_nom': psg_nom,
-              'aviso_psg': aviso_psg}
+              'titulo': titulo_bin, 'titulo_pal': titulo_pal, 'paletas': paletas,
+              'psg': psg, 'psg_nom': psg_nom, 'aviso_psg': aviso_psg}
     return code, db, sym, spec, dbaddr, extras
 
 
@@ -1267,6 +1281,12 @@ def export_nex(game, salida, ancho=COLS, org=ORG, borde=0, datadir=None,
         base = BANK_IMG + len(imgs)
         for k in range(3):
             bancos[base + k] = ex['titulo'][k * 16384:(k + 1) * 16384]
+    if ex['paletas'] or ex['titulo'] is not None:            # banco de paletas
+        pal = ex['paletas'] + (ex['titulo_pal'] or b'')
+        if len(pal) > 16384:
+            raise ValueError('demasiadas paletas para un banco: %d bytes' % len(pal))
+        bancos[BANK_IMG + len(imgs) + (3 if ex['titulo'] is not None else 0)] = \
+            pal.ljust(16384, b'\x00')
 
     empaqueta_nex.build_nex(salida, bancos, pc=sym['start'], sp=SP_NEX,
                             border=borde)
@@ -1283,8 +1303,9 @@ def export_nex(game, salida, ancho=COLS, org=ORG, borde=0, datadir=None,
 
 def carga_nex(path):
     """Reconstruye el mapa de 64K de un .nex como lo hace NextZXOS.
-    Devuelve (memoria, pc, sp, bancos_presentes). Sirve para verificar el
-    empaquetado sin emulador."""
+    Devuelve (memoria, pc, sp, bancos_presentes, contenido_de_los_bancos).
+    El contenido hace falta para emular la paginacion del MMU: el banco de
+    paletas no esta en el mapa de 64K, se pagina sobre la ROM al leerlo."""
     import struct
     datos = open(path, 'rb').read()
     if datos[:4] != b'Next':
@@ -1296,12 +1317,14 @@ def carga_nex(path):
     mem = bytearray(65536)
     ranura = {5: 0x4000, 2: 0x8000, 0: 0xC000}
     off = 512
+    contenido = {}
     for b in orden:
         trozo = datos[off:off + 16384]
         off += 16384
+        contenido[b] = trozo
         if b in ranura:
             mem[ranura[b]:ranura[b] + 16384] = trozo
-    return mem, pc, sp, presentes
+    return mem, pc, sp, presentes, contenido
 
 
 def main():

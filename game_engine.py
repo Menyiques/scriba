@@ -67,7 +67,7 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
         raise ValueError('CPC: %d localizaciones (maximo 255).' % nloc)
     if nobj>255:
         raise ValueError('CPC: %d objetos (maximo 255).' % nobj)
-    HDR=82
+    HDR=84
     p=load+HDR
     dictidx=p; p+=ntok*2
     ddat=p; dptr=[]; dd=bytearray()
@@ -149,6 +149,8 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     objweight_a = p; p += nobj
     # mensaje inicial por objeto (indice de mensaje, 0 = no tiene)
     objinit_a = p; p += nobj*2
+    # nombre de cada localizacion (indice de mensaje, 0 = sin nombre)
+    locname_a = p; p += nloc*2
     # ── efectos de sonido FX (blob AY: [nfx][offsets][bloques]); 0 si no hay ──
     fx_addr = p if fx else 0; p += len(fx)
     out=bytearray()
@@ -184,6 +186,7 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     w16(fx_addr)                                                # 79 (blob FX por AY)
     out.append((nvocab>>8)&0xFF)                                # 80 (nvocab byte alto)
     w16(objinit_a)                                              # 82 (mensaje inicial)
+    w16(locname_a)                                              # 84 (nombre de loc)
     assert len(out)==HDR, len(out)
     for x in dptr: w16(x)
     out+=dd
@@ -219,6 +222,9 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     for o in objects:
         _mi=o.get('init',0)&0xFFFF
         out.append(_mi&0xFF); out.append((_mi>>8)&0xFF)
+    for L in locations:
+        _ln=L.get('name',0)&0xFFFF
+        out.append(_ln&0xFF); out.append((_ln>>8)&0xFF)
     out+=bytes(fx)
     return bytes(out), dict(load=load,ntok=ntok,nmsg=nmsg,nloc=nloc,nvocab=nvocab,nobj=nobj,ntimers=nt,size=len(out))
 
@@ -264,6 +270,8 @@ init:   ld    hl,(DBB+0)
         ld    (objnamep),hl
         ld    hl,(DBB+80)
         ld    (objinitp),hl   ; mensajes iniciales de objeto (0 = no tiene)
+        ld    hl,(DBB+82)
+        ld    (locnamep),hl   ; nombres de localizacion (0 = sin nombre)
         ld    hl,(DBB+20)
         ld    (objnounp),hl
         ld    hl,(DBB+22)
@@ -491,6 +499,14 @@ d_nound:
 describe:
         call  show_loc_image
         call  newline
+        ld    a,(curloc)      ; nombre de la localizacion, antes que nada (y
+        call  locname_get     ; tambien a oscuras, como en el resto de motores)
+        ld    a,d
+        or    e
+        jr    z,d_nonom
+        call  print_msg
+        call  newline
+d_nonom:
         call  is_dark
         or    a
         jp    nz,d_dark
@@ -1280,6 +1296,23 @@ objinit_get:
         ld    d,(hl)
         ret
 oig_no: ld    de,0
+        ret
+; locname_get: A = localizacion -> DE = indice del mensaje de su nombre (0 = sin)
+locname_get:
+        ld    e,a
+        ld    d,0
+        ld    hl,(locnamep)
+        ld    a,h
+        or    l
+        jr    z,lng_no
+        ex    de,hl           ; HL = indice, DE = tabla
+        add   hl,hl
+        add   hl,de
+        ld    e,(hl)
+        inc   hl
+        ld    d,(hl)
+        ret
+lng_no: ld    de,0
         ret
 ; objorig_get: A = objeto -> A = localizacion donde lo puso el autor
 objorig_get:
@@ -2919,6 +2952,7 @@ locidx:   defw 0
 vocabp:   defw 0
 objnamep: defw 0
 objinitp: defw 0
+locnamep: defw 0
 objnounp: defw 0
 objlocsrc: defw 0
 objfixp: defw 0

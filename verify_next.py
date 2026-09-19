@@ -367,6 +367,27 @@ def corre_hasta(cpu, addr, tope=6000000):
     return cpu.pc == addr
 
 
+class Mmu:
+    """Emula la paginacion de la ranura 0 del MMU ($0000-$1FFF), que es lo que
+    usa el motor para leer el banco de paletas: escribir el numero de pagina de
+    8K en el NextReg $50 la trae, y escribir 255 devuelve la ROM. Sin esto la
+    paleta se leeria como ceros y la comprobacion no probaria nada."""
+
+    def __init__(self, cpu, mem, bancos):
+        self.mem = mem
+        self.bancos = bancos
+        self.rom = bytes(mem[0:0x2000])
+        cpu.mmu = self
+
+    def pagina(self, v):
+        if v == 255:
+            self.mem[0:0x2000] = self.rom
+            return
+        banco, mitad = divmod(v, 2)
+        datos = self.bancos.get(banco, bytes(16384))
+        self.mem[0:0x2000] = datos[mitad * 8192:(mitad + 1) * 8192]
+
+
 class EspiaNextReg:
     """Anota lo que se escribe por los puertos de NextReg ($243B selecciona el
     registro, $253B manda el dato) para poder comprobar la subida de paletas,
@@ -387,6 +408,8 @@ class EspiaNextReg:
         if self.reg is not None:
             cpu.nextreg[self.reg] = val
             self.flujo.append((self.reg, val))
+            if self.reg == 0x50 and getattr(cpu, 'mmu', None) is not None:
+                cpu.mmu.pagina(val)
 
     def paleta(self):
         """La ultima tirada de 256 valores seguidos escritos en $41. No tiene por
@@ -411,11 +434,12 @@ def verificar_nex(game, salida, datadir=None, musicdir=None):
     arranca desde el PC de la cabecera y comprueba que llega a pedir orden con
     la sala inicial en pantalla. Prueba del empaquetado, no solo del motor."""
     info = nn.export_nex(game, salida, datadir=datadir, musicdir=musicdir)
-    mem, pc, sp, bancos = nn.carga_nex(salida)
+    mem, pc, sp, bancos, contenido = nn.carga_nex(salida)
     sym = info['simbolos']
     cpu = z80.Z80(mem)
     cpu.sp = sp
     espia = EspiaNextReg(cpu)
+    Mmu(cpu, mem, contenido)
     Teclado(cpu, mem, sym)          # sin teclas pulsadas
     cpu.pc = pc
     cpu.halted = False
