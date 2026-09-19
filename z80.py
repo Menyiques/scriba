@@ -39,6 +39,10 @@ class Z80:
         self.iff1 = self.iff2 = 0
         self.halted = False
         self.hook_call = {}          # {addr: fn(cpu)}  intercepta CALL/llamada a addr
+        self.ports = {}              # {puerto16: valor}  ultimo valor escrito / leido
+        self.nextreg = {}            # {registro: valor}  NextRegs del ZX Spectrum Next
+        self.hook_out = {}           # {puerto: fn(cpu,puerto,valor)}  clave = byte bajo o 16 bits
+        self.hook_in = {}            # {puerto: fn(cpu,puerto) -> valor}
         self.hook_rst = {}
         self.cycles = 0
         self.trace = False
@@ -66,6 +70,18 @@ class Z80:
     def af(self, v): self.a = (v >> 8) & 0xFF; self.f = v & 0xFF
 
     # ---- memoria ----
+    def io_out(self, port, val):
+        port &= 0xFFFF; val &= 0xFF
+        fn = self.hook_out.get(port) or self.hook_out.get(port & 0xFF)
+        if fn: fn(self, port, val); return
+        self.ports[port] = val
+
+    def io_in(self, port):
+        port &= 0xFFFF
+        fn = self.hook_in.get(port) or self.hook_in.get(port & 0xFF)
+        if fn: return fn(self, port) & 0xFF
+        return self.ports.get(port, 0xFF)
+
     def rb(self, a): return self.mem[a & 0xFFFF]
     def wb(self, a, v): self.mem[a & 0xFFFF] = v & 0xFF
     def rw(self, a): return self.rb(a) | (self.rb(a + 1) << 8)
@@ -495,9 +511,88 @@ def _ed(c):
         pass
     elif op == 0x4D or op == 0x45:                        # RETI/RETN
         c.pc = c.pop()
+    # ---------------- Z80N (ZX Spectrum Next) ----------------
+    elif op == 0x94:                                      # PIXELAD: D=Y E=X -> HL
+        y, x = c.d, c.e
+        c.hl = 0x4000 + ((y & 0xC0) << 5) + ((y & 0x07) << 8) + ((y & 0x38) << 2) + (x >> 3)
+    elif op == 0x93:                                      # PIXELDN: HL -> linea de abajo
+        h = (c.h + 1) & 0xFF
+        if h & 0x07:
+            c.h = h
+        else:
+            l = c.l + 0x20
+            c.l = l & 0xFF
+            c.h = h if l > 0xFF else (h - 8) & 0xFF
+    elif op == 0x95:                                      # SETAE: A = mascara del pixel X
+        c.a = 0x80 >> (c.e & 7)
+    elif op == 0xA5:                                      # LDWS
+        c.wb(c.de, c.rb(c.hl)); c.l = (c.l + 1) & 0xFF; c.d = c._inc8(c.d)
+    elif op == 0x31: c.hl = (c.hl + c.a) & 0xFFFF         # ADD HL,A
+    elif op == 0x32: c.de = (c.de + c.a) & 0xFFFF         # ADD DE,A
+    elif op == 0x33: c.bc = (c.bc + c.a) & 0xFFFF         # ADD BC,A
+    elif op == 0x34: c.hl = (c.hl + c._fw()) & 0xFFFF     # ADD HL,nn
+    elif op == 0x35: c.de = (c.de + c._fw()) & 0xFFFF     # ADD DE,nn
+    elif op == 0x36: c.bc = (c.bc + c._fw()) & 0xFFFF     # ADD BC,nn
+    elif op == 0x30: c.de = (c.d * c.e) & 0xFFFF          # MUL D,E
+    elif op == 0x23: c.a = ((c.a << 4) | (c.a >> 4)) & 0xFF        # SWAPNIB
+    elif op == 0x24: c.a = int('{:08b}'.format(c.a)[::-1], 2)      # MIRROR A
+    elif op == 0x27: c._szp(c.a & c._fetch(), 0)          # TEST n
+    elif op == 0x8A:                                      # PUSH nn (big endian)
+        hi_ = c._fetch(); lo_ = c._fetch(); c.push(((hi_ << 8) | lo_) & 0xFFFF)
+    elif op == 0x90:                                      # OUTINB
+        c.io_out(c.bc, c.rb(c.hl)); c.hl = (c.hl + 1) & 0xFFFF
+    elif op in (0xA4, 0xB4, 0xAC, 0xBC, 0xB7):            # LDIX/LDIRX/LDDX/LDDRX/LDPIRX
+        rep = op in (0xB4, 0xBC, 0xB7)
+        while True:
+            if op == 0xB7:                                # LDPIRX: patron de 8 bytes
+                v = c.rb((c.hl & 0xFFF8) | (c.e & 7))
+            else:
+                v = c.rb(c.hl)
+            if v != c.a: c.wb(c.de, v)
+            c.de = (c.de + 1) & 0xFFFF
+            if op in (0xAC, 0xBC): c.hl = (c.hl - 1) & 0xFFFF
+            elif op != 0xB7: c.hl = (c.hl + 1) & 0xFFFF
+            c.bc = (c.bc - 1) & 0xFFFF
+            if not rep or c.bc == 0: break
+        c._setf(FPV, c.bc != 0)
+    elif op in (0x28, 0x29, 0x2A, 0x2B, 0x2C):            # BSLA/BSRA/BSRL/BSRF/BRLC DE,B
+        v = c.de
+        if op == 0x28: c.de = (v << (c.b & 31)) & 0xFFFF
+        elif op == 0x29:
+            n = c.b & 31
+            c.de = (((v >> n) | (0xFFFF << (16 - n))) & 0xFFFF) if (n and v & 0x8000) else ((v >> n) & 0xFFFF)
+        elif op == 0x2A: c.de = (v >> (c.b & 31)) & 0xFFFF
+        elif op == 0x2B:
+            n = c.b & 31
+            c.de = (((v >> n) | (0xFFFF << (16 - n))) & 0xFFFF) if n else v
+        else:
+            n = c.b & 15
+            c.de = (((v << n) | (v >> (16 - n))) & 0xFFFF) if n else v
+    elif op in (0x40, 0x48, 0x50, 0x58, 0x60, 0x68, 0x78):   # IN r,(C)
+        v = c.io_in(c.bc); c._r8set((op >> 3) & 7, v); c._szp(v, c.f & FC)
+    elif op in (0x41, 0x49, 0x51, 0x59, 0x61, 0x69, 0x79):   # OUT (C),r
+        c.io_out(c.bc, c._r8get((op >> 3) & 7))
+    elif op == 0x70:                                      # IN (C) (sin destino)
+        c._szp(c.io_in(c.bc), c.f & FC)
+    elif op == 0x71:                                      # OUT (C),0
+        c.io_out(c.bc, 0)
+    elif op == 0x91:                                      # NEXTREG n,n  (ZX Next)
+        r = c._fetch(); v = c._fetch(); c.nextreg[r] = v
+    elif op == 0x92:                                      # NEXTREG n,A  (ZX Next)
+        r = c._fetch(); c.nextreg[r] = c.a
     else:
         raise RuntimeError('ED %02X no implementado en %04X' % (op, (c.pc - 2) & 0xFFFF))
 _OPS[0xED] = _ed
+
+
+def _out_n_a(c):
+    n = c._fetch(); c.io_out((c.a << 8) | n, c.a)
+_OPS[0xD3] = _out_n_a
+
+
+def _in_a_n(c):
+    n = c._fetch(); c.a = c.io_in((c.a << 8) | n)
+_OPS[0xDB] = _in_a_n
 
 # ---- prefijos DD/FD (IX/IY) — subconjunto habitual ----
 def _idx(regname):

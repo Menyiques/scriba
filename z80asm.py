@@ -105,6 +105,11 @@ def _enc(mnem, ops, cur, sym, final=False):
         if d=='a' and s=='i': return [0xED,0x57]
         if d=='a' and s=='r': return [0xED,0x5F]
         raise AsmError('LD no soportado: %s'%ops)
+    if m=='add' and len(o)==2 and o[0] in ('hl','de','bc'):   # Z80N: ADD rr,A / ADD rr,nn
+        base={'hl':0,'de':1,'bc':2}[o[0]]
+        if o[1]=='a': return [0xED,0x31+base]
+        if o[1] not in RP_SP and o[1] not in ('ix','iy','sp'):
+            v=n16(o[1]); return [0xED,0x34+base,lo(v),hi(v)]
     if m in ALU:
         k=ALU[m]
         if m=='add' and o[0]=='hl' and o[1] in RP_SP: return [0x09|(RP_SP[o[1]]<<4)]
@@ -155,6 +160,29 @@ def _enc(mnem, ops, cur, sym, final=False):
         b=n8(o[0])&7
         top={'bit':0x40,'res':0x80,'set':0xC0}[m]
         if o[1] in R8: return [0xCB,top|(b<<3)|R8[o[1]]]
+    # ---- Z80N (ZX Spectrum Next) ----
+    Z80N_SIMPLE={'swapnib':[0xED,0x23],'mirror':[0xED,0x24],'mul':[0xED,0x30],
+        'outinb':[0xED,0x90],'pixeldn':[0xED,0x93],'pixelad':[0xED,0x94],
+        'setae':[0xED,0x95],'ldix':[0xED,0xA4],'ldws':[0xED,0xA5],
+        'lddx':[0xED,0xAC],'ldirx':[0xED,0xB4],'ldpirx':[0xED,0xB7],
+        'lddrx':[0xED,0xBC]}
+    if m in Z80N_SIMPLE and (not o or o==['a'] or o==['d','e']): return Z80N_SIMPLE[m]
+    if m=='test': return [0xED,0x27,n8(o[0])]
+    if m=='push' and len(o)==1 and o[0] not in RP_AF and o[0] not in ('ix','iy'):
+        v=n16(o[0]); return [0xED,0x8A,hi(v),lo(v)]      # PUSH nn: big endian
+    if m in ('bsla','bsra','bsrl','bsrf','brlc') and o==['de','b']:
+        return [0xED,{'bsla':0x28,'bsra':0x29,'bsrl':0x2A,'bsrf':0x2B,'brlc':0x2C}[m]]
+    if m=='out':
+        if o[0]=='(c)':
+            if o[1] in R8 and o[1]!='(hl)': return [0xED,0x41|(R8[o[1]]<<3)]
+            if o[1]=='0': return [0xED,0x71]
+        if _is_mem(o[0]) and o[1]=='a': return [0xD3,n8(o[0][1:-1])]
+    if m=='in':
+        if o[1]=='(c)' and o[0] in R8 and o[0]!='(hl)': return [0xED,0x40|(R8[o[0]]<<3)]
+        if o[0]=='a' and _is_mem(o[1]): return [0xDB,n8(o[1][1:-1])]
+    if m=='nextreg':
+        if o[1]=='a': return [0xED,0x92,n8(o[0])]
+        return [0xED,0x91,n8(o[0]),n8(o[1])]
     raise AsmError('instruccion no soportada: %s %s'%(mnem,ops))
 
 def _split_data_items(arg):
