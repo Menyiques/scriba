@@ -262,7 +262,7 @@ def desplaza_acentos(s):
     translit_disp convierte cada acento en '?'."""
     return ''.join(chr(ord(ch)+80) if 144<=ord(ch)<160 else ch for ch in s)
 
-def compile_game(c, sysm, width=40, ficha=None):
+def compile_game(c, sysm, width=40, filas=21, ficha=None):
     g=c.game
     # idioma para los acentos (es/pt). Fija el set de acentos de translit_disp.
     lang=str((getattr(c,'meta',{}) or {}).get('language','') or '').lower()
@@ -363,7 +363,7 @@ def compile_game(c, sysm, width=40, ficha=None):
         # esto el principio (el titulo, justamente) se va por arriba antes de que
         # el jugador pueda leerlo. Se estiman las lineas que ocupa cada parrafo al
         # ancho del destino y se corta con PAUSE 0 + CLS antes de desbordar.
-        _anc=max(20,int(width or 40)); _filas=21; _usadas=0
+        _anc=max(20,int(width or 40)); _filas=max(6,int(filas or 21)); _usadas=0
         _b=bytearray()
         for _p in _ini:
             _n=1 if not _p else (len(_p)+_anc-1)//_anc

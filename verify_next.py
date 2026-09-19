@@ -426,6 +426,8 @@ def verificar_nex(game, salida, datadir=None):
         n += 1
     presentacion = []
     l2_en_intro = cpu.nextreg.get(0x69)
+    l2_banco_intro = cpu.nextreg.get(0x12)
+    fila_intro = mem[sym['nxwt']]
     if cpu.pc == sym['kmread']:
         presentacion = [l for l in leer_pantalla(mem, sym) if l.strip()]
 
@@ -464,6 +466,10 @@ def verificar_nex(game, salida, datadir=None):
         slot = mem[slotp + mem[sym['curloc']]] if slotp else 255
         blank = nn.BANK_IMG + len(info['imagenes'])
         esperado = blank if slot == 255 else nn.BANK_IMG + slot
+        # la presentacion sale en la sala INICIAL, que a estas alturas ya no es
+        # la actual: hay que mirar su slot aparte
+        slot0 = mem[slotp + info['inicio']] if slotp else 255
+        esp0 = blank if slot0 == 255 else nn.BANK_IMG + slot0
         pal_ok = True
         if slot != 255:
             lid = info['imagenes'][slot]
@@ -480,6 +486,9 @@ def verificar_nex(game, salida, datadir=None):
             'paleta_ok': pal_ok,
             'bancos_img': [b for b in bancos if b >= nn.BANK_IMG],
             'l2_intro': l2_en_intro,
+            'banco_intro': l2_banco_intro,
+            'fila_intro': fila_intro,
+            'esp0': esp0,
         }
     return info, llego, n, pant, bancos, jugadas, img, presentacion
 
@@ -568,8 +577,11 @@ def main():
         res.append(('Layer 2 arrancado (8bpp, visible, clip 0-63)',
                     img['modo'] == 0 and img['activa'] == 128 and img['clip'] == 63))
         res.append(('banco de imagen de la sala correcto', img['banco'] == img['esperado']))
-        res.append(('Layer 2 apagado durante la presentacion (no tapa el texto)',
-                    img['l2_intro'] != 128))
+        print('        en la presentacion: Layer 2 $69=%s, banco $12=%s, texto desde la fila %s'
+              % (img['l2_intro'], img['banco_intro'], img['fila_intro']))
+        res.append(('la presentacion ya lleva la imagen de la sala inicial',
+                    img['l2_intro'] == 128 and img['banco_intro'] == img['esp0']))
+        res.append(('...y su texto empieza en la fila 8', img['fila_intro'] == nn.FILA_TEXTO))
         res.append(('paleta de la sala subida entera', img['paleta_ok']))
     ok = sum(1 for _, b in res if b)
     print()

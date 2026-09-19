@@ -37,6 +37,8 @@ ATTR = 0x5800       # atributos
 COLS = 42           # columnas de texto (fuente de 6 pixeles)
 BANK_IMG = 16       # primer banco de 16K para imagenes (igual que next_export)
 FILA_TEXTO = 8      # la imagen ocupa las filas 0..7; el texto empieza aqui
+FILAS_CON_IMAGEN = 15   # lineas utiles de presentacion con imagen (8..23)
+FILAS_SIN_IMAGEN = 22   # ...y sin imagen (0..23)
 FILAS = 24
 
 
@@ -761,6 +763,16 @@ def _engine_next(con_imagenes):
                      '        ld    (has128),a      ; sin cache de imagenes en banco\n'
                      '        jp    NXINIT') + src[j:]
 
+    # La imagen de la sala inicial se pone ANTES de la presentacion, no al
+    # describir la sala: asi la intro se lee con su ilustracion ya puesta y el
+    # texto colocado en las filas 8..23, en vez de a pantalla completa y con la
+    # imagen apareciendo de golpe al final.
+    k = src.index('call  setup_acc')
+    k = src.index(chr(10), k) + 1
+    src = (src[:k] +
+           '        call  show_loc_image   ; imagen de la sala inicial ya en la intro\n' +
+           src[k:])
+
     i = src.index(chr(10) + 'show_loc_image:') + 1
     j = src.index(chr(10) + '; sli_loadfile:', i) + 1
     if con_imagenes:
@@ -921,15 +933,23 @@ def compila(game, ancho=COLS, org=ORG, datadir=None):
     sysm, _sal = cpc_nativo._sys_msgs_y_salidas(game.get('metadata') or {})
     while len(sysm) < ge.NSYS:
         sysm.append('')
-    import scriba_info
-    ficha = scriba_info.ficha(game, 'next', scriba_info.ahora())
-    spec, _ = nc.compile_game(c, sysm[:ge.NSYS], width=ancho, ficha=ficha)
-
-    idioma = str((game.get('metadata') or {}).get('language', '') or 'es')
 
     # imagenes: una por localizacion, cada una en su banco de 16K
     imgs = _imagenes(c, datadir)
     paletas = b''.join(_paleta256(os.path.join(datadir, lid + '.nxp')) for lid in imgs)
+
+    # Cuantas lineas puede usar la presentacion antes de parar a esperar tecla.
+    # Con imagen el texto vive en las filas 8..23, o sea 16; sin imagen tiene las
+    # 24 enteras. Si no se ajusta, el titulo se va por arriba sin que dé tiempo a
+    # leerlo, que es justo lo que pasaba.
+    filas = FILAS_CON_IMAGEN if imgs else FILAS_SIN_IMAGEN
+
+    import scriba_info
+    ficha = scriba_info.ficha(game, 'next', scriba_info.ahora())
+    spec, _ = nc.compile_game(c, sysm[:ge.NSYS], width=ancho, filas=filas,
+                              ficha=ficha)
+
+    idioma = str((game.get('metadata') or {}).get('language', '') or 'es')
     # la tabla loc_slot dice, por localizacion, que slot de imagen le toca (255 =
     # ninguna). El indice es la POSICION de la localizacion, no su id del editor.
     orden = [n for n, _ in sorted(c.locidx.items(), key=lambda kv: kv[1])]
@@ -988,6 +1008,7 @@ def export_nex(game, salida, ancho=COLS, org=ORG, borde=0, datadir=None):
     return {'codigo': len(code), 'datos': len(db), 'total': len(plano),
             'org': org, 'fin': fin, 'pc': sym['start'], 'sp': SP_NEX,
             'bancos': sorted(bancos), 'simbolos': sym, 'imagenes': imgs,
+            'inicio': spec['startloc'],
             'localizaciones': len(spec['locations']),
             'objetos': len(spec['objects'])}
 
