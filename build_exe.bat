@@ -18,7 +18,7 @@ python -m PyInstaller --noconfirm --onefile --windowed --name %SNAME% ^
   --add-data "print42_pt.bas;." ^
   --add-data "print64_pt.bas;." ^
   --add-data "scriba_logo.png;." ^
-  --add-data "Scriba manual v2.43.pdf;." ^
+  --add-data "Scriba manual v2.44.pdf;." ^
   --add-data "Scriba_Referencia_Sintaxis.md;." ^
   --add-data "player.py;." ^
   --add-data "build_game_exe.py;." ^

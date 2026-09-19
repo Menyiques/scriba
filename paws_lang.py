@@ -41,8 +41,15 @@ import re
 # son ids de localización/objeto/timer, números o comodines (* _), y los
 # resuelve cada backend (check_condition en PC, _pred2zx en el export).
 PREDICATES = {
+    # entorno
     'AT', 'NOTAT', 'DARK', 'CHANCE', 'TIMER',
+    # comando del turno
     'VERB', 'NOUN1', 'NOUN2',
+    # estado de objeto
+    'CARRIED', 'NOTCARR', 'PRESENT', 'ABSENT', 'WORN', 'NOTWORN',
+    'ISAT', 'HASOBJOPEN',
+    # estado de variable
+    'ZERO', 'NOTZERO', 'EQ', 'GT', 'LT',
 }
 
 # Operadores de comparación, los multi-carácter primero (para casar bien
@@ -255,9 +262,19 @@ def parse_condition(s):
         right = s[idx + len(op):].strip()
         return ('cmp', op, parse_expr(left), parse_expr(right))
 
-    # Predicado (palabra clave) o, si no se reconoce, predicado desconocido:
-    # el backend decidirá (en PC check_condition devuelve True; el export avisa).
-    return ('pred', first, toks[1:])
+    # Predicado (palabra clave reconocida).
+    if first in PREDICATES:
+        return ('pred', first, toks[1:])
+
+    # Si no es un predicado, se intenta como EXPRESIÓN suelta: la condición es
+    # cierta si su valor es distinto de 0 (p.ej. 'IF _arena_cavada' equivale a
+    # 'IF _arena_cavada <> 0'; también vale '#obj.open', '_a + _b', etc.).
+    try:
+        return ('cmp', '!=', parse_expr(s), ('num', 0))
+    except ParseError:
+        # No parsea como expresión: se deja como predicado desconocido (el
+        # backend decide; en PC devuelve True, el export avisa).
+        return ('pred', first, toks[1:])
 
 
 # ─── Backend 1: evaluación en Python (intérprete PC) ────────────────────────

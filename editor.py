@@ -20,7 +20,7 @@ import sys
 import copy
 
 # ─── Versión del IDE (incrementar AQUÍ cuando se pida) ──────────────────
-SCRIBA_VERSION   = '2.43'
+SCRIBA_VERSION   = '2.44'
 SCRIBA_COPYRIGHT = '(c) 2026 Menyiques Soft'
 
 try:
@@ -1551,7 +1551,8 @@ class ScribaEditor:
         m = re.match(r'\d+\s+', s)
         if m:
             s = s[m.end():].strip()
-        if not s or s.upper().startswith('REM'):
+        su = s.upper()
+        if not s or su == 'REM' or su.startswith('REM '):
             return ''
         return s
 
@@ -1961,7 +1962,10 @@ class ScribaEditor:
                 es_lista = isinstance(val, list)
                 lineas = list(val) if es_lista else str(val or '').split('\n')
                 for i, ln in enumerate(lineas):
-                    if not isinstance(ln, str) or ln.lstrip().upper().startswith('REM'):
+                    if not isinstance(ln, str):
+                        continue
+                    _lu = ln.lstrip().upper()
+                    if _lu == 'REM' or _lu.startswith('REM '):
                         continue
                     partes = re.split(r'("[^"]*")', ln)   # protege texto entre comillas
                     for j in range(0, len(partes), 2):
@@ -5947,19 +5951,10 @@ class ScribaEditor:
     _REF_MD = 'Scriba_Referencia_Sintaxis.md'
 
     def _ref_md_path(self):
-        """Ruta del .md de referencia. Prefiere el fichero EXTERNO (editable en
-        vivo) junto al ejecutable / proyecto; si no, el empaquetado en el .exe."""
-        import sys as _sys
-        cands = []
-        if getattr(_sys, 'frozen', False):
-            cands.append(os.path.join(os.path.dirname(_sys.executable), self._REF_MD))
-        cands.append(os.path.join(os.getcwd(), self._REF_MD))
-        cands.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), self._REF_MD))
-        cands.append(_resource_path(self._REF_MD))   # empaquetado (fallback)
-        for c in cands:
-            if os.path.isfile(c):
-                return c
-        return cands[0]
+        """Ruta del .md de referencia: el recurso EMBEBIDO en el .exe (v\u00eda
+        _resource_path, que en el ejecutable apunta al bundle de PyInstaller y en
+        desarrollo al .md del proyecto). El .md no se distribuye suelto."""
+        return _resource_path(self._REF_MD)
 
     def _build_reference_tab(self):
         fr = ttk.Frame(self.nb)
@@ -5967,7 +5962,7 @@ class ScribaEditor:
         top = ttk.Frame(fr); top.pack(fill=tk.X, pady=3)
         ttk.Button(top, text='\u21bb Recargar',
                    command=self._reference_reload).pack(side=tk.LEFT, padx=6)
-        ttk.Label(top, text='Referencia de sintaxis (se lee de %s)' % self._REF_MD,
+        ttk.Label(top, text='Referencia de sintaxis del lenguaje',
                   foreground='#667788').pack(side=tk.LEFT, padx=8)
         body = ttk.Frame(fr); body.pack(fill=tk.BOTH, expand=True)
         t = tk.Text(body, wrap=tk.WORD, font=self.fnt_code, bg='#0f1623',
@@ -7175,7 +7170,8 @@ class InterpreterWindow:
         if not self._debug_mode:
             return
         # No pausar en REMs
-        if line.strip().upper().startswith('REM'):
+        _lu = line.strip().upper()
+        if _lu == 'REM' or _lu.startswith('REM '):
             return
         # Un IF que NO se cumple SÍ se muestra (el usuario quiere pasar por el if
         # aunque sea falso y, al hacer step, saltar a la línea tras el ENDIF).

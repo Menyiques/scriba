@@ -18,6 +18,34 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
 
 ---
 
+## 2.44 — 2026-09-19 — Restauración de los predicados de objeto
+
+### Novedades
+- El validador rechaza las condiciones que usan un predicado desconocido, con el
+  nombre y la línea. Aparece también en el panel de problemas del editor.
+- Al validar, se informa de lo que cada plataforma no soporta del juego.
+- `paws_lang.PREDICATES` vuelve a estar completo (21 nombres), de modo que
+  `capabilities.py` y `compiler.py` reconocen los predicados de estado.
+
+### Correcciones
+- Restaurados los trece predicados de estado (`CARRIED`, `NOTCARR`, `PRESENT`,
+  `ABSENT`, `WORN`, `NOTWORN`, `ISAT`, `HASOBJOPEN`, `ZERO`, `NOTZERO`, `EQ`,
+  `GT`, `LT`) en el intérprete de PC y en el exportador de Spectrum —del que
+  bebe el Next—. Se perdieron en 2.43 al unificar la gramática en `paws_lang`;
+  mientras faltaron, toda condición que los usara valía «verdadero» siempre.
+  El backend de CPC no se vio afectado y sirvió de referencia.
+- `REMOVE` no llegaba a ejecutarse: la detección de comentarios comparaba por
+  prefijo con `REM`. Corregido en `interpreter.py`, `nativecc.py` y en tres
+  puntos de `editor.py` (depurador, puntos de ruptura y renombrado).
+- `CREATE` y `PUT` con destino `INVEN`, `PUESTO` o `NADA` dejaban el objeto en
+  «ninguna parte» al exportar a Spectrum, Next y CPC, porque `locval()` solo
+  admitía las formas con arroba. Ahora acepta las dos escrituras, igual que
+  `_destval()` en `nativecc.py`.
+- Un predicado que el motor no reconozca ya no se da por cierto: se avisa una
+  vez por consola y se evalúa como falso.
+
+---
+
 ## 2.3 — Vocabulario de serie editable y por idioma
 
 ### Novedades

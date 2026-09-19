@@ -54,7 +54,9 @@ def validate_game(game: dict) -> list[str]:
     for obj_id, obj in objects.items():
         # Location válida
         loc = obj.get("location")
-        if loc and loc not in ("INVEN", "PUESTO", "NADA") and loc not in locations and loc not in objects:
+        _esp = ("@INVEN", "@ONME", "@NOWHERE", "INVEN", "PUESTO", "NADA")
+        if loc and str(loc).upper() not in _esp \
+                and loc not in locations and loc not in objects:
             errors.append(f"objects.{obj_id}.location '{loc}' no existe")
 
         # Llave del contenedor existe
@@ -197,6 +199,83 @@ def validate_script(name: str, script, game: dict, errors: list, warnings: list)
         errors.append(f"{name}: {on_depth} ON sin ENDON")
 
 
+# ─── Predicados: ninguna condición debe usar uno que el motor no conozca ─────
+#
+# Un predicado desconocido no es un detalle de estilo: ningún backend puede
+# evaluarlo, así que la condición se comporta de forma distinta a la escrita
+# (el intérprete la da por falsa y avisa; un export la emite como constante).
+# Esta comprobación caza tanto un CARRIED mal tecleado como un predicado que
+# un refactor del motor se haya dejado por el camino.
+
+def _script_lines(script):
+    if isinstance(script, list):
+        return script if (script and isinstance(script[0], str)) else []
+    if isinstance(script, str):
+        return script.split('\n')
+    return []
+
+
+def _iter_conditions(script):
+    """Condición de cada IF del script, ya sin el 'IF' ni el 'THEN'."""
+    for raw in _script_lines(script):
+        code = raw.strip()
+        parts = code.split(None, 1)
+        if parts and parts[0].isdigit():
+            code = parts[1].strip() if len(parts) > 1 else ''
+        if code[:3].upper() not in ('IF ', 'IF'):
+            continue
+        if code[:2].upper() != 'IF' or (len(code) > 2 and not code[2].isspace()):
+            continue
+        cond = code[2:].strip()
+        up = cond.upper()
+        if up.endswith(' THEN'):
+            cond = cond[:-5].strip()
+        elif up.endswith('THEN') and len(cond) > 4:
+            cond = cond[:-4].strip()
+        if cond:
+            yield cond
+
+
+def _walk_preds(node):
+    if not isinstance(node, tuple):
+        return
+    if node[0] == 'pred':
+        yield node[1]
+    elif node[0] in ('or', 'and'):
+        for hijo in node[1]:
+            yield from _walk_preds(hijo)
+    elif node[0] == 'not':
+        yield from _walk_preds(node[1])
+
+
+def _secciones_con_script(game):
+    for sec, script in (game.get('condacts') or {}).items():
+        yield f'condacts.{sec}', script
+    for lid, loc in (game.get('locations') or {}).items():
+        for hook in ('on_enter', 'on_look'):
+            yield f'locations.{lid}.{hook}', (loc or {}).get(hook)
+    for tid, tim in (game.get('timers') or {}).items():
+        yield f'timers.{tid}.on_expire', (tim or {}).get('on_expire')
+
+
+def check_predicates(game: dict, errors: list):
+    """Añade a 'errors' cada condición que use un predicado desconocido."""
+    if paws_lang is None:
+        return
+    for name, script in _secciones_con_script(game):
+        for cond in _iter_conditions(script):
+            try:
+                ast = paws_lang.parse_condition(cond)
+            except Exception:
+                continue          # la sintaxis ya la valida validate_script
+            for kw in _walk_preds(ast):
+                if kw.upper() not in paws_lang.PREDICATES:
+                    errors.append(
+                        f"{name}: 'IF {cond}' usa '{kw}', que no es un "
+                        f"predicado conocido. Ningún motor sabe evaluarlo: "
+                        f"la condición no hará lo que dice.")
+
+
 def validate_scripts(game: dict) -> tuple:
     """Valida todos los scripts BASIC del juego. Devuelve (errors, warnings)."""
     errors, warnings = [], []
@@ -212,6 +291,8 @@ def validate_scripts(game: dict) -> tuple:
     for tid, tim in game.get("timers", {}).items():
         validate_script(f"timers.{tid}.on_expire", tim.get("on_expire"),
                         game, errors, warnings)
+
+    check_predicates(game, errors)
 
     # Nouns duplicados entre objetos: el parser solo distingue las primeras
     # 5 letras, así que dos objetos con el mismo noun son ambiguos
@@ -321,6 +402,16 @@ def validate_file(input_path: str, verbose: bool = False) -> bool:
         return False
 
     print("[Scriba] OK  El juego es válido (sin errores)")
+
+    # Compatibilidad por plataforma: lo que el juego usa y un destino no tiene.
+    try:
+        import capabilities
+        for target in ('spectrum', 'next', 'cpc'):
+            aviso = capabilities.report(game, target)
+            if aviso:
+                print(aviso)
+    except Exception:
+        pass
 
     if verbose:
         meta = game.get("metadata", {})

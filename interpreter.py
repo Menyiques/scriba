@@ -290,7 +290,7 @@ class PAWSBasic:
 
             self.pos += 1
 
-            if upper.startswith('REM'):
+            if upper == 'REM' or upper.startswith('REM '):
                 if self.pre_exec_hook:
                     self.pre_exec_hook(line, None)
                 continue
@@ -850,6 +850,32 @@ class PAWSInterpreter:
             return arg
         return self.find_object_by_noun(arg, accessible_only=False) or arg
 
+    def obj_reachable(self, obj: dict) -> bool:
+        """Un objeto esta al alcance si lo llevas, lo tienes puesto, esta en la
+        sala, o esta dentro de un contenedor abierto que a su vez esta al
+        alcance. Misma regla que presente() en ZX BASIC y FNpr en CPC."""
+        loc = obj.get('location', 'NADA')
+        if loc in ('INVEN', 'PUESTO') or loc == self.player_location:
+            return True
+        cont = self.objects.get(loc)
+        if cont and cont.get('container') and cont.get('open'):
+            cloc = cont.get('location', 'NADA')
+            return cloc in ('INVEN', 'PUESTO') or cloc == self.player_location
+        return False
+
+    def obj_isat(self, obj_arg: str, dest_arg: str) -> bool:
+        """ISAT obj destino. El destino puede ser @loc, @INVEN / @ONME /
+        @NOWHERE (o sus formas internas INVEN / PUESTO / NADA) o #contenedor."""
+        obj = self.objects.get(self.resolve_obj(obj_arg))
+        if obj is None:
+            return False
+        dest = norm_loc(dest_arg)
+        # Prioridad: localizacion > centinela > contenedor (por id o nombre),
+        # igual que antes de v2.43, pero admitiendo tambien @INVEN/@ONME/@NOWHERE.
+        if dest not in self.locations and dest not in ('INVEN', 'PUESTO', 'NADA'):
+            dest = self.resolve_obj(dest)
+        return obj.get('location', 'NADA') == dest
+
     def obj_prop(self, ref: str) -> int:
         """Lee '#objeto.propiedad' como entero (0/1 para banderas). Propiedades:
         open, locked, lit, openable, wearable, light_source (o light), fixed,
@@ -870,8 +896,7 @@ class PAWSInterpreter:
         if prop == 'worn':
             return 1 if obj.get('location') == 'PUESTO' or obj.get('worn') else 0
         if prop == 'present':
-            loc = obj.get('location', 'NADA')
-            return 1 if loc in ('INVEN', 'PUESTO') or loc == self.player_location else 0
+            return 1 if self.obj_reachable(obj) else 0
         if prop == 'weight':
             return int(obj.get('weight') or 0)
         if prop in ('isat', 'loc', 'location'):
@@ -1000,7 +1025,47 @@ class PAWSInterpreter:
             tim_id, val = args[0], int(args[1])
             timer = self.timers.get(tim_id, {})
             return timer.get("current", 0) == val
-        return True
+
+        # ── estado de objeto ────────────────────────────────────────────
+        elif condition == "CARRIED":
+            return self.obj_prop(args[0] + '.carried') == 1
+        elif condition == "NOTCARR":
+            return self.obj_prop(args[0] + '.carried') == 0
+        elif condition == "PRESENT":
+            return self.obj_prop(args[0] + '.present') == 1
+        elif condition == "ABSENT":
+            return self.obj_prop(args[0] + '.present') == 0
+        elif condition == "WORN":
+            return self.obj_prop(args[0] + '.worn') == 1
+        elif condition == "NOTWORN":
+            return self.obj_prop(args[0] + '.worn') == 0
+        elif condition == "ISAT":
+            return self.obj_isat(args[0], args[1])
+        elif condition == "HASOBJOPEN":
+            return self.obj_prop(args[0] + '.open') == 1
+
+        # ── estado de variable ──────────────────────────────────────────
+        elif condition == "ZERO":
+            return self.variables.get(norm_var(args[0]), 0) == 0
+        elif condition == "NOTZERO":
+            return self.variables.get(norm_var(args[0]), 0) != 0
+        elif condition == "EQ":
+            return self.variables.get(norm_var(args[0]), 0) == int(args[1])
+        elif condition == "GT":
+            return self.variables.get(norm_var(args[0]), 0) > int(args[1])
+        elif condition == "LT":
+            return self.variables.get(norm_var(args[0]), 0) < int(args[1])
+
+        # Predicado desconocido: NO se da por cierto (eso enmascaraba errores
+        # de guion durante toda la partida). Se avisa una vez y vale falso.
+        avisados = getattr(self, '_pred_avisados', None)
+        if avisados is None:
+            avisados = self._pred_avisados = set()
+        if condition not in avisados:
+            avisados.add(condition)
+            print(f"[Scriba] condicion desconocida '{condition}': "
+                  f"se evalua como FALSA. Revisa el guion.")
+        return False
 
     # Estas se usan desde PAWSBasic._eval_condition via check_condition
     # (VERB/NOUN1/NOUN2 se delegan aquí para acceder al estado del intérprete)

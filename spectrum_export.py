@@ -209,12 +209,16 @@ def recolecta(game):
 
     # posicion inicial de cada objeto
     def locval(loc):
+        # Se admiten las dos escrituras: la del autor (@INVEN / @ONME /
+        # @NOWHERE) y la forma interna del motor (INVEN / PUESTO / NADA),
+        # que es la que aparece en CREATE/PUT y en 'location:' de juegos
+        # anteriores a la convencion de prefijos.
         lu = str(loc).upper() if loc else ''
-        if not loc or lu == '@NOWHERE':
+        if not loc or lu in ('@NOWHERE', 'NOWHERE', 'NADA'):
             return LOC_NADA
-        if lu == '@INVEN':
+        if lu in ('@INVEN', 'INVEN'):
             return LOC_INVEN
-        if lu == '@ONME':
+        if lu in ('@ONME', 'ONME', 'PUESTO'):
             return LOC_PUESTO
         if loc in c.locidx:
             return c.locidx[loc]
@@ -328,6 +332,21 @@ def _objref(c, arg):
     c.avisos.append(f"objeto desconocido en script: '{arg}'")
     return 0
 
+def _destval(c, dst):
+    """Destino de ISAT -> valor numerico de oloc(). Admite @loc, @INVEN /
+    @ONME / @NOWHERE, sus formas internas INVEN / PUESTO / NADA, y #contenedor."""
+    du = str(dst).upper()
+    if du in ('@NOWHERE', 'NADA'):
+        return LOC_NADA
+    if du in ('@INVEN', 'INVEN'):
+        return LOC_INVEN
+    if du in ('@ONME', 'PUESTO'):
+        return LOC_PUESTO
+    if dst in c.locidx:
+        return c.locidx[dst]
+    return CONT_BASE + _objref(c, dst)   # contenedor, por id o por nombre
+
+
 def _pred2zx(c, kw, args):
     """Condición-palabra-clave PAWS -> expresión booleana ZX BASIC.
     (El análisis sintáctico lo hace paws_lang; esto solo mapea cada
@@ -342,6 +361,34 @@ def _pred2zx(c, kw, args):
         return f'(INT(RND * 100) + 1 <= {args[0]})'
     if kw == 'TIMER':
         return f'(tcur({c.timidx.get(args[0], 0)}) = {args[1]})'
+    # ── estado de objeto (carried()/presente() son del motor BASIC) ──
+    if kw == 'CARRIED':
+        return f'(carried({_objref(c, args[0])}) = 1)'
+    if kw == 'NOTCARR':
+        return f'(carried({_objref(c, args[0])}) = 0)'
+    if kw == 'PRESENT':
+        return f'(presente({_objref(c, args[0])}) = 1)'
+    if kw == 'ABSENT':
+        return f'(presente({_objref(c, args[0])}) = 0)'
+    if kw == 'WORN':
+        return f'(oloc({_objref(c, args[0])}) = {LOC_PUESTO})'
+    if kw == 'NOTWORN':
+        return f'(oloc({_objref(c, args[0])}) <> {LOC_PUESTO})'
+    if kw == 'ISAT':
+        return f'(oloc({_objref(c, args[0])}) = {_destval(c, args[1])})'
+    if kw == 'HASOBJOPEN':
+        return f'(copen({_objref(c, args[0])}) = 1)'
+    # ── estado de variable ──────────────────────────────────────────
+    if kw == 'ZERO':
+        return f'({_vname(c, args[0])} = 0)'
+    if kw == 'NOTZERO':
+        return f'({_vname(c, args[0])} <> 0)'
+    if kw == 'EQ':
+        return f'({_vname(c, args[0])} = {int(args[1])})'
+    if kw == 'GT':
+        return f'({_vname(c, args[0])} > {int(args[1])})'
+    if kw == 'LT':
+        return f'({_vname(c, args[0])} < {int(args[1])})'
     if kw == 'VERB':
         p = args[0].upper() if args else '*'
         return '1' if p == '*' else f'(v = {c.verbid.get(p, 0)})'

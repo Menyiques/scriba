@@ -44,9 +44,9 @@ PREDMAP={'AT':'AT','NOTAT':'NOTAT','ZERO':'ZERO','NOTZERO':'NOTZERO','DARK':'DAR
 def _destval(ctx,dst):
     # destino para ISAT: localizacion o sentinel (INVEN/PUESTO/NADA)
     u=str(dst).upper()
-    if u in ('INVEN',): return ge.CARRIED
-    if u in ('PUESTO','WORN'): return ge.WORN
-    if u in ('NADA','NOWHERE'): return ge.NOWHERE
+    if u in ('INVEN','@INVEN'): return ge.CARRIED
+    if u in ('PUESTO','WORN','@ONME'): return ge.WORN
+    if u in ('NADA','NOWHERE','@NOWHERE'): return ge.NOWHERE
     return ctx.loc(dst)
 
 def cond_rpn(a,ctx):
@@ -186,7 +186,7 @@ def compile_lines(lines,ctx):
     out=bytearray(); i=0
     while i<len(lines):
         ln=lines[i].strip()
-        if not ln or ln.upper().startswith('REM'): i+=1; continue
+        if not ln or ln.upper()=='REM' or ln.upper().startswith('REM '): i+=1; continue
         up=ln.upper()
         if up.startswith('IF'):
             i+=1
