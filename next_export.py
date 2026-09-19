@@ -555,6 +555,157 @@ def _escribe_manifiesto(out_path, locs_con_img, extra=None, deferidos=None):
     return man
 
 
+# ─── Modo .nex modular: el texto va a MODULEs, uno por banco ────────────────
+#
+# Boriel 2.0 (--split-modules) empaqueta cada MODULE en un banco real y pone
+# el trampolin de paginacion. Restricciones comprobadas en hardware/CSpect:
+#   · un modulo NO puede pasar de un banco de 16K (23K -> "DoesNotFit")
+#   · se pueden tener los modulos que haga falta, cada uno a su banco
+#   · un miembro de modulo no puede llevar sufijo $ ni llamarse como un tipo
+#   · el programa principal va con --org 49152, por ENCIMA de la ventana
+#     de paginacion ($8000-$BFFF), o se desaloja a si mismo
+#
+# Esto post-procesa el .bas ya generado en modo 'nex': parte el blob de texto,
+# escribe un modulo por trozo y sustituye binBase()/entW$ por un despachador.
+# No toca spectrum_export ni los caminos de 48K/128K/CPC.
+
+MOD_MAX = 12000          # margen holgado bajo los 16384 de un banco
+
+_MOD_PLANTILLA = """MODULE %(nom)s
+PRIVATE
+DIM dbase AS UINTEGER
+DIM ddata AS UINTEGER
+
+FUNCTION FASTCALL bbase() AS UINTEGER
+    asm
+        ld hl, blob_%(nom)s
+        ret
+blob_%(nom)s:
+        incbin "%(fic)s"
+    end asm
+END FUNCTION
+
+PUBLIC
+SUB initDic()
+    dbase = bbase()
+    ddata = dbase + 2 + 2 * %(nidx)d
+END SUB
+
+FUNCTION entW(k AS UINTEGER) AS STRING
+    DIM o AS UINTEGER
+    DIM a AS UINTEGER
+    DIM f AS UINTEGER
+    DIM w AS STRING
+    o = dbase + 2 + 2 * k
+    a = ddata + PEEK(o) + 256 * PEEK(o + 1)
+    f = ddata + PEEK(o + 2) + 256 * PEEK(o + 3)
+    w = ""
+    DO WHILE a < f
+        w = w + CHR$(PEEK(a))
+        a = a + 1
+    LOOP
+    RETURN w
+END FUNCTION
+END MODULE
+"""
+
+
+def _parte_blob(blob, maximo=MOD_MAX):
+    """Parte el blob de texto en trozos que quepan en un banco.
+    Devuelve [(blob_trozo, n_indice, primera_entrada), ...]."""
+    import struct
+    n = struct.unpack_from('<H', blob, 0)[0]
+    base = 2 + 2 * (n + 1)
+    idx = [struct.unpack_from('<H', blob, 2 + 2 * k)[0] for k in range(n + 1)]
+    ents = [blob[base + idx[k]:base + idx[k + 1]] for k in range(n)]
+
+    def arma(lista):
+        off = [0]
+        for e in lista:
+            off.append(off[-1] + len(e))
+        out = bytearray(struct.pack('<H', len(lista)))
+        for v in off:
+            out += struct.pack('<H', v)
+        for e in lista:
+            out += e
+        return bytes(out), len(off)
+
+    trozos, grupo, primera = [], [], 0
+    for i, e in enumerate(ents):
+        # cabecera del grupo + datos + la entrada que viene
+        coste = 2 + 2 * (len(grupo) + 2) + sum(len(x) for x in grupo) + len(e)
+        if grupo and coste > maximo:
+            b, ni = arma(grupo)
+            trozos.append((b, ni, primera))
+            grupo, primera = [], i
+        grupo.append(e)
+    if grupo:
+        b, ni = arma(grupo)
+        trozos.append((b, ni, primera))
+    return trozos
+
+
+def moduliza_texto(bas_path, bin_name):
+    """Convierte un .bas generado en modo 'nex' a la forma modular.
+    Devuelve la lista de avisos/notas para el informe."""
+    import re as _re
+    d = os.path.dirname(os.path.abspath(bas_path))
+    base = os.path.splitext(os.path.basename(bas_path))[0]
+    blob = open(os.path.join(d, bin_name), 'rb').read()
+    trozos = _parte_blob(blob)
+
+    nombres = []
+    for i, (b, nidx, _pri) in enumerate(trozos):
+        nom = 't%d' % i
+        fic = '%s_%s.bin' % (base, nom)
+        open(os.path.join(d, fic), 'wb').write(b)
+        open(os.path.join(d, nom + '.bas'), 'w', encoding='ascii',
+             errors='replace').write(
+            _MOD_PLANTILLA % {'nom': nom, 'fic': fic, 'nidx': nidx})
+        nombres.append(nom)
+
+    src = open(bas_path, encoding='utf-8', errors='replace').read()
+
+    # 1) binBase() con el incbin: fuera, el blob vive ahora en los modulos.
+    src = _re.sub(r'FUNCTION FASTCALL binBase\(\) AS UINTEGER.*?END FUNCTION\n',
+                  '', src, count=1, flags=_re.S)
+
+    # 2) entW$ pasa a ser el despachador: elige modulo y delega.
+    ramas = []
+    for i, (_b, _n, pri) in enumerate(trozos):
+        sig = trozos[i + 1][2] if i + 1 < len(trozos) else None
+        arg = 'k' if pri == 0 else 'k - %d' % pri
+        if sig is None:
+            ramas.append('    RETURN %s.entW(%s)' % (nombres[i], arg))
+        else:
+            ramas.append('    IF k < %d THEN\n        RETURN %s.entW(%s)\n    END IF'
+                         % (sig, nombres[i], arg))
+    desp = ('FUNCTION entW$(k AS UINTEGER) AS STRING\n'
+            + '\n'.join(ramas) + '\nEND FUNCTION\n')
+    src = _re.sub(r'FUNCTION entW\$\(k AS UINTEGER\) AS STRING.*?END FUNCTION\n',
+                  desp, src, count=1, flags=_re.S)
+
+    # 3) initDic(): en vez de calcular dbase/ddata, arranca cada modulo.
+    inits = '\n'.join('    %s.initDic()' % n for n in nombres)
+    src = _re.sub(r'SUB initDic\(\)\n    dbase = binBase\(\)\n    ddata = [^\n]*\n',
+                  'SUB initDic()\n' + inits + '\n', src, count=1)
+
+    # 4) los USE van los primeros del fichero, pero DESPUES del BOM:
+    #    dejarlo a mitad de fichero rompe al compilador.
+    bom = ''
+    if src[:1] == '\ufeff':
+        bom, src = src[0], src[1:]
+    src = bom + '\n'.join('USE ' + n for n in nombres) + '\n\n' + src
+
+    with open(bas_path, 'w', encoding='utf-8') as f:
+        f.write(src)
+
+    return ['texto modular: %d modulo(s) %s (max %d bytes/banco)'
+            % (len(trozos), ', '.join(nombres), MOD_MAX),
+            'compilar con: zxbc %s.bas --arch zxnext --split-modules '
+            '--org 49152 -m . -f nex -o %s.nex' % (base, base)]
+
+
 def export_bas(game, out_path, progreso=None, columnas=42, modo='tap'):
     """modo='tap': texto comprimido en BANCOS (128K, pk128/$7FFD) + imagenes
     Layer 2 en bancos altos ($DFFD) -> empaqueta_nextap.py -> .tap (juegos
