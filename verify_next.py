@@ -388,14 +388,20 @@ class EspiaNextReg:
             self.flujo.append((self.reg, val))
 
     def paleta(self):
-        """Los ultimos 256 valores seguidos escritos en $41."""
+        """La ultima tirada de 256 valores seguidos escritos en $41. No tiene por
+        que estar al final del flujo: despues de subir la paleta se escriben otros
+        registros (el de encendido de Layer 2, por ejemplo)."""
+        fin = None
+        for i in range(len(self.flujo) - 1, -1, -1):
+            if self.flujo[i][0] == 0x41:
+                fin = i
+                break
+        if fin is None:
+            return b''
         out = []
-        for r, v in reversed(self.flujo):
-            if r != 0x41:
-                break
-            out.append(v)
-            if len(out) == 256:
-                break
+        while fin >= 0 and self.flujo[fin][0] == 0x41 and len(out) < 256:
+            out.append(self.flujo[fin][1])
+            fin -= 1
         return bytes(reversed(out))
 
 
@@ -419,6 +425,7 @@ def verificar_nex(game, salida, datadir=None):
         cpu.step()
         n += 1
     presentacion = []
+    l2_en_intro = cpu.nextreg.get(0x69)
     if cpu.pc == sym['kmread']:
         presentacion = [l for l in leer_pantalla(mem, sym) if l.strip()]
 
@@ -472,6 +479,7 @@ def verificar_nex(game, salida, datadir=None):
             'clip': cpu.nextreg.get(0x18),
             'paleta_ok': pal_ok,
             'bancos_img': [b for b in bancos if b >= nn.BANK_IMG],
+            'l2_intro': l2_en_intro,
         }
     return info, llego, n, pant, bancos, jugadas, img, presentacion
 
@@ -560,6 +568,8 @@ def main():
         res.append(('Layer 2 arrancado (8bpp, visible, clip 0-63)',
                     img['modo'] == 0 and img['activa'] == 128 and img['clip'] == 63))
         res.append(('banco de imagen de la sala correcto', img['banco'] == img['esperado']))
+        res.append(('Layer 2 apagado durante la presentacion (no tapa el texto)',
+                    img['l2_intro'] != 128))
         res.append(('paleta de la sala subida entera', img['paleta_ok']))
     ok = sum(1 for _, b in res if b)
     print()

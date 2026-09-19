@@ -73,6 +73,11 @@ nxreg:  ld    bc,&243B
         out   (c),e
         ret
 
+; NXL2INIT deja Layer 2 CONFIGURADO pero APAGADO. Si se dejara visible con el
+; banco negro, ese negro taparia las ocho primeras filas de texto: es lo que
+; pasaba mientras se lee la presentacion, antes de que haya ninguna sala que
+; describir. Se enciende en NXPIC, cuando hay imagen de verdad que poner, y se
+; vuelve a apagar en NXNOPIC para que el texto recupere la pantalla entera.
 NXL2INIT:
         ld    d,&70
         ld    e,0
@@ -89,31 +94,36 @@ NXL2INIT:
         call  nxreg
         ld    e,63
         call  nxreg            ; clip = lineas 0..63
-        ld    d,&69
+        jp    nxl2off
+
+; nxl2on / nxl2off: encienden y apagan Layer 2 (registro $69 bit 7 y el bit 1
+; del puerto $123B).
+nxl2on: ld    d,&69
         ld    e,128
-        call  nxreg            ; habilita Layer 2
+        call  nxreg
         ld    bc,&123B
         ld    a,2
-        out   (c),a            ; y lo hace visible
-        jp    NXNOPIC
+        out   (c),a
+        ret
+nxl2off:
+        ld    d,&69
+        ld    e,0
+        call  nxreg
+        ld    bc,&123B
+        xor   a
+        out   (c),a
+        ret
 
-; NXNOPIC: banco negro y color 0 a negro (salas sin imagen, y oscuridad).
+; NXNOPIC: sin imagen (sala que no tiene, u oscuridad). Layer 2 se apaga y el
+; texto vuelve a disponer de las 24 filas.
 NXNOPIC:
         ld    d,&12
         ld    e,NXBLANK
         call  nxreg
-        ld    d,&43
-        ld    e,&10
-        call  nxreg
-        ld    d,&40
-        ld    e,0
-        call  nxreg
-        ld    d,&41
-        ld    e,0
-        call  nxreg
-        ret
+        jp    nxl2off
 
-; NXPIC: A = slot de imagen. Apunta Layer 2 a su banco y sube su paleta.
+; NXPIC: A = slot de imagen. Apunta Layer 2 a su banco, sube su paleta y lo
+; enciende.
 NXPIC:
         push  af
         ld    d,&12
@@ -142,7 +152,7 @@ nxpal_l:
         inc   hl
         dec   d
         jr    nz,nxpal_l
-        ret
+        jp    nxl2on           ; ya hay imagen: encender Layer 2
 '''
 
 # El juego no trae imagenes: nada de Layer 2, y ni un byte de mas.
