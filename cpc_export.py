@@ -34,6 +34,7 @@ Uso:  from cpc_export import export_bas; export_bas(game, 'juego.bas', modo=1)
 import re
 import spectrum_export as sx
 import paws_lang
+import scriba_info
 
 # Constantes de ubicacion (compartidas con el motor del Spectrum)
 LOC_INVEN  = sx.LOC_INVEN     # 240
@@ -756,6 +757,14 @@ def genera_cpc(c, modo=1, image_locs=None, menu_inks=None, raw_locs=None, music=
         S('RETURN')
     verb_branch(vb('INVEN'), _inven)
     verb_branch(vb('PUNT'), lambda: S('GOSUB {SHOWPTS}:RETURN'))
+
+    # VERSION: ficha de identificacion, resuelta al exportar.
+    def _versi():
+        for _ln in (getattr(c, 'ficha', None) or
+                    scriba_info.ficha(c.game, 'cpc', scriba_info.ahora())):
+            S('A$="%s":GOSUB {PW}' % translit_cpc(str(_ln).replace('"', "'")))
+        S('RETURN')
+    verb_branch(vb('VERSI'), _versi)
     verb_branch(vb('SALIR'),
                 lambda: S('A$="Abandonas la aventura.":GOSUB {PW}:GOSUB {GAMEOVER}:RETURN'))
 
@@ -982,6 +991,7 @@ def _aplica_compresion_texto(asm):
 def export_bas(game, out_path, modo=1, progreso=None):
     """API principal: genera el .bas Locomotive para CPC."""
     c = cpc_prepare(sx.recolecta(game))
+    c.ficha = scriba_info.ficha(game, 'cpc', scriba_info.ahora())
     lines = genera_cpc(c, modo=modo)
     with open(out_path, 'w', encoding='ascii', errors='replace', newline='\r\n') as f:
         f.write('\n'.join(lines) + '\n')

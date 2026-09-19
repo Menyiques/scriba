@@ -20,7 +20,8 @@ import sys
 import copy
 
 # ─── Versión del IDE (incrementar AQUÍ cuando se pida) ──────────────────
-SCRIBA_VERSION   = '2.44'
+import scriba_info                    # fuente unica de version (la lee build_exe.bat)
+SCRIBA_VERSION   = scriba_info.SCRIBA_VERSION
 SCRIBA_COPYRIGHT = '(c) 2026 Menyiques Soft'
 
 try:
@@ -5543,6 +5544,18 @@ class ScribaEditor:
         try:
             game = copy.deepcopy(self.game)
             game.pop('_vocab_lookup', None)
+            # Sello de version: 'revision' sube en cada guardado y 'modified'
+            # queda con la fecha. 'version' es del autor y no se toca.
+            meta = game.setdefault('metadata', {})
+            try:
+                rev = int(meta.get('revision') or 0)
+            except (TypeError, ValueError):
+                rev = 0
+            meta['revision'] = rev + 1
+            meta['modified'] = scriba_info.hoy()
+            vivo = self.game.setdefault('metadata', {})
+            vivo['revision'] = meta['revision']
+            vivo['modified'] = meta['modified']
             # Persistir el layout del mapa (posiciones de los nodos)
             game['_editor'] = {
                 'positions': {lid: list(p) for lid, p in self.positions.items()

@@ -17,6 +17,7 @@ import re
 import yaml
 import textwrap
 import paws_lang
+import scriba_info
 
 # Direcciones válidas y sus opuestos
 DIRECTIONS = {
@@ -1625,6 +1626,11 @@ class PAWSInterpreter:
 
         if verb == "INVEN":
             self.show_inventory()
+            return True
+
+        if verb == "VERSI":
+            for linea in scriba_info.ficha(self.game, 'pc'):
+                print(linea)
             return True
 
         if verb == "EXAMI":

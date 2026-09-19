@@ -25,6 +25,7 @@ import os
 import sys
 
 import spectrum_export as sx
+import scriba_info
 
 BANK_BASE = 16        # primer banco de 16K para imagenes (editable si colisiona)
 REG_PORT = 9275       # $243B - selecciona el NextReg
@@ -569,6 +570,7 @@ def export_bas(game, out_path, progreso=None, columnas=42, modo='tap'):
     _lang = (game.get('metadata', {}).get('language') or 'es').strip().lower()
     sx._PT_LANG = _lang.startswith('pt') or _lang.startswith('por')
     c = sx.recolecta(game)
+    c.ficha = scriba_info.ficha(game, 'next', scriba_info.ahora())
     c.fx_enabled = True      # FX por AY en Next (prueba con heap reducido a 2 KB)
     _p(62, 'Generando motor ZX BASIC...')
     L = sx.genera_fuente(c)

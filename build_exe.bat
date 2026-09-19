@@ -9,7 +9,7 @@ REM  El ejecutable final queda en  dist\Scriba.exe
 REM ============================================================
 
 REM  Nombre del .exe derivado de SCRIBA_VERSION en editor.py (1.2 -> Scriba_v_1_2)
-for /f "usebackq tokens=2 delims='" %%v in (`findstr /b "SCRIBA_VERSION" editor.py`) do set SVER=%%v
+for /f "usebackq tokens=2 delims='" %%v in (`findstr /b "SCRIBA_VERSION" scriba_info.py`) do set SVER=%%v
 set SNAME=Scriba_v_%SVER:.=_%
 
 python -m PyInstaller --noconfirm --onefile --windowed --name %SNAME% ^
@@ -18,9 +18,10 @@ python -m PyInstaller --noconfirm --onefile --windowed --name %SNAME% ^
   --add-data "print42_pt.bas;." ^
   --add-data "print64_pt.bas;." ^
   --add-data "scriba_logo.png;." ^
-  --add-data "Scriba manual v2.44.pdf;." ^
+  --add-data "Scriba_Manual.pdf;." ^
   --add-data "Scriba_Referencia_Sintaxis.md;." ^
   --add-data "player.py;." ^
+  --add-data "scriba_info.py;." ^
   --add-data "build_game_exe.py;." ^
   --add-data "interpreter.py;." ^
   --add-data "paws_lang.py;." ^
@@ -51,6 +52,7 @@ python -m PyInstaller --noconfirm --onefile --windowed --name %SNAME% ^
   --hidden-import fx_engine ^
   --hidden-import afx ^
   --hidden-import vocab_base ^
+  --hidden-import scriba_info ^
   editor.py
 
 REM  Copia el .exe versionado a Scriba.exe para que Scriba.exe sea SIEMPRE la

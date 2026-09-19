@@ -18,6 +18,31 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
 
 ---
 
+## 2.45 — 2026-09-19 — Ficha de identificacion de los compilados
+
+### Novedades
+- Comando **VERSION** en todos los juegos y en los cuatro motores. Muestra
+  titulo, version y revision del juego con su fecha, autor, idioma, version de
+  Scriba, fecha de compilacion y sistema. El texto se resuelve al exportar,
+  porque en la maquina destino no hay YAML que consultar.
+- El editor sella `metadata.revision` (contador que sube en cada guardado) y
+  `metadata.modified` (fecha) al guardar. `metadata.version` sigue siendo del
+  autor, para marcar hitos.
+- Nuevo modulo `scriba_info.py`: fuente unica de la version de Scriba y de la
+  ficha, compartida por editor, interprete y los tres exportadores.
+  `build_exe.bat` lee de ahi el numero para nombrar el ejecutable.
+
+### Correcciones
+- `build_exe.bat` empaqueta `Scriba_Manual.pdf` en vez del PDF con la version en
+  el nombre, que obligaba a renombrarlo en cada release para que el manual
+  siguiera abriendose desde el programa.
+
+### Pendiente
+- El motor nativo de CPC (`nativecc.py` / `game_engine.py`) no responde todavia
+  al comando VERSION; el export a BASIC Locomotive si.
+
+---
+
 ## 2.44 — 2026-09-19 — Restauración de los predicados de objeto
 
 ### Novedades

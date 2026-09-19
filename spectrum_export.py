@@ -16,6 +16,7 @@ import sys
 from collections import Counter
 import heapq
 import paws_lang
+import scriba_info
 
 # ─── Transliteracion al charset del Spectrum ────────────────────────────
 _TR = str.maketrans({
@@ -970,6 +971,14 @@ SUB gameOver()
     fin = 1
 END SUB""")
     L.append('')
+    # Ficha de identificacion (comando VERSION). El texto se resuelve AQUI, al
+    # exportar, porque en la maquina destino no hay YAML que consultar.
+    L.append('SUB verInfo()')
+    for _ln in (getattr(c, 'ficha', None) or
+                scriba_info.ficha(c.game, 'spectrum', scriba_info.ahora())):
+        L.append('    pw(%s)' % q(translit_disp(_ln)))
+    L.append('END SUB')
+    L.append('')
     return L
 
 def genera_fuente2(c, L):
@@ -1292,6 +1301,10 @@ SUB builtins()
     END IF
     IF v = {c.verbid.get('PUNT', 0)} THEN
         verPts()
+        RETURN
+    END IF
+    IF v = {c.verbid.get('VERSI', 0)} THEN
+        verInfo()
         RETURN
     END IF
     IF v = {c.verbid.get('SALIR', 0)} THEN
@@ -2940,6 +2953,7 @@ def export_bas(game, out_path, progreso=None, modo='48k', columnas=42):
     _lang = (game.get('metadata', {}).get('language') or 'es').strip().lower()
     _PT_LANG = _lang.startswith('pt') or _lang.startswith('por')
     c = recolecta(game)
+    c.ficha = scriba_info.ficha(game, modo, scriba_info.ahora())
     c.fx_enabled = (modo == '128k')      # FX por AY solo en 128K (48K no tiene AY)
     _p(5, 'Generando motor y datos...')
     L = genera_fuente(c)
