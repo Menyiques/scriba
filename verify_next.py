@@ -350,15 +350,49 @@ def corre_hasta(cpu, addr, tope=6000000):
     return cpu.pc == addr
 
 
-def verificar_nex(game, salida):
+class EspiaNextReg:
+    """Anota lo que se escribe por los puertos de NextReg ($243B selecciona el
+    registro, $253B manda el dato) para poder comprobar la subida de paletas,
+    que es un chorro de 256 bytes al mismo registro con autoincremento."""
+
+    def __init__(self, cpu):
+        self.reg = None
+        self.flujo = []                 # lista de (registro, valor)
+        cpu.hook_out[0x243B] = self._sel
+        cpu.hook_out[0x253B] = self._dato
+
+    def _sel(self, cpu, port, val):
+        self.reg = val
+        cpu.ports[port] = val
+
+    def _dato(self, cpu, port, val):
+        cpu.ports[port] = val
+        if self.reg is not None:
+            cpu.nextreg[self.reg] = val
+            self.flujo.append((self.reg, val))
+
+    def paleta(self):
+        """Los ultimos 256 valores seguidos escritos en $41."""
+        out = []
+        for r, v in reversed(self.flujo):
+            if r != 0x41:
+                break
+            out.append(v)
+            if len(out) == 256:
+                break
+        return bytes(reversed(out))
+
+
+def verificar_nex(game, salida, datadir=None):
     """Empaqueta el .nex, lo vuelve a leer del disco como lo hace NextZXOS,
     arranca desde el PC de la cabecera y comprueba que llega a pedir orden con
     la sala inicial en pantalla. Prueba del empaquetado, no solo del motor."""
-    info = nn.export_nex(game, salida)
+    info = nn.export_nex(game, salida, datadir=datadir)
     mem, pc, sp, bancos = nn.carga_nex(salida)
     sym = info['simbolos']
     cpu = z80.Z80(mem)
     cpu.sp = sp
+    espia = EspiaNextReg(cpu)
     Teclado(cpu, mem, sym)          # sin teclas pulsadas
     cpu.pc = pc
     cpu.halted = False
@@ -379,7 +413,31 @@ def verificar_nex(game, salida):
             if not teclea(cpu, sym, tec2, orden + chr(13)):
                 break
             jugadas.append((orden, [l for l in leer_pantalla(mem, sym) if l.strip()]))
-    return info, llego, n, pant, bancos, jugadas
+
+    # ---- Layer 2: comprobar el banco activo y la paleta de la sala actual ----
+    img = None
+    if info['imagenes'] and llego:
+        slotp = mem[sym['locslotp']] | (mem[sym['locslotp'] + 1] << 8)
+        slot = mem[slotp + mem[sym['curloc']]] if slotp else 255
+        blank = nn.BANK_IMG + len(info['imagenes'])
+        esperado = blank if slot == 255 else nn.BANK_IMG + slot
+        pal_ok = True
+        if slot != 255:
+            lid = info['imagenes'][slot]
+            pal_ok = espia.paleta() == nn._paleta256(
+                os.path.join(datadir, lid + '.nxp'))
+        img = {
+            'n': len(info['imagenes']),
+            'slot': slot,
+            'banco': cpu.nextreg.get(0x12),
+            'esperado': esperado,
+            'modo': cpu.nextreg.get(0x70),
+            'activa': cpu.nextreg.get(0x69),
+            'clip': cpu.nextreg.get(0x18),
+            'paleta_ok': pal_ok,
+            'bancos_img': [b for b in bancos if b >= nn.BANK_IMG],
+        }
+    return info, llego, n, pant, bancos, jugadas, img
 
 
 def main():
@@ -401,7 +459,8 @@ def main():
     # ---- vuelta completa por el .nex ----
     import tempfile
     salida = os.path.join(tempfile.gettempdir(), 'scriba_prueba_nativo.nex')
-    info, llego, pasos, pant, bancos, jugadas = verificar_nex(game, salida)
+    info, llego, pasos, pant, bancos, jugadas, img = verificar_nex(
+        game, salida, datadir=nn.datadir_por_defecto(path))
     print('--- .nex: %s' % os.path.basename(salida))
     print('    bancos %s   PC=&%04X   SP=&%04X   %d bytes (&%04X-&%04X)'
           % (bancos, info['pc'], info['sp'], info['total'], info['org'], info['fin']))
@@ -416,6 +475,19 @@ def main():
         for l in p:
             print('    |' + l)
     res.append(('.nex responde a ordenes escritas', len(jugadas) == 3))
+    if img:
+        print()
+        print('    --- Layer 2: %d imagenes en los bancos %s'
+              % (img['n'], img['bancos_img']))
+        print('        modo $70=%s  activa $69=%s  clip $18=%s'
+              % (img['modo'], img['activa'], img['clip']))
+        print('        sala actual: slot %s -> banco $12=%s (esperado %s), paleta %s'
+              % (img['slot'], img['banco'], img['esperado'],
+                 'OK' if img['paleta_ok'] else 'NO COINCIDE'))
+        res.append(('Layer 2 arrancado (8bpp, visible, clip 0-63)',
+                    img['modo'] == 0 and img['activa'] == 128 and img['clip'] == 63))
+        res.append(('banco de imagen de la sala correcto', img['banco'] == img['esperado']))
+        res.append(('paleta de la sala subida entera', img['paleta_ok']))
     ok = sum(1 for _, b in res if b)
     print()
     print('%d/%d comprobaciones correctas' % (ok, len(res)))

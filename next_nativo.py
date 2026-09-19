@@ -23,6 +23,7 @@ matriz, AY por &FFFD/&BFFD, sin imagenes ni musica. La geometria del impresor
 esta aislada en NXPLOT/NXGLYPH: un impresor de 42 columnas entra ahi sin tocar
 el resto.
 """
+import os
 import re
 
 import font42
@@ -34,6 +35,8 @@ MTABLE = 0x5B00     # tabla de matrices de usuario (RAM libre bajo el motor)
 PANT = 0x4000       # pantalla ULA
 ATTR = 0x5800       # atributos
 COLS = 42           # columnas de texto (fuente de 6 pixeles)
+BANK_IMG = 16       # primer banco de 16K para imagenes (igual que next_export)
+FILA_TEXTO = 8      # la imagen ocupa las filas 0..7; el texto empieza aqui
 FILAS = 24
 
 
@@ -51,6 +54,102 @@ def _font_asm(idioma='es'):
     for i in range(0, len(datos), 8):
         L.append('        defb ' + ','.join(str(b) for b in datos[i:i + 8]))
     return chr(10).join(L)
+
+
+IMG_ASM = r'''
+; ===========================================================================
+;  Imagenes: Layer 2 con conmutacion de banco
+; ===========================================================================
+; Cada imagen (256x64, un byte por pixel) ocupa exactamente un banco de 16K, y
+; el .nex la carga ahi. Mostrarla es apuntar NextReg $12 a ese banco y subir su
+; paleta: no se copia ni un byte de pixeles. El clip ($18) deja ver solo las
+; lineas 0..63 de Layer 2, o sea el tercio superior, y el texto va debajo sobre
+; la pantalla ULA de siempre.
+
+; nxreg: D = registro del Next, E = valor. Por puerto, sin NextLib.
+nxreg:  ld    bc,&243B
+        out   (c),d
+        ld    bc,&253B
+        out   (c),e
+        ret
+
+NXL2INIT:
+        ld    d,&70
+        ld    e,0
+        call  nxreg            ; Layer 2 a 256x192, 8 bits por pixel
+        ld    d,&1C
+        ld    e,2
+        call  nxreg            ; reinicia el indice de clip de Layer 2
+        ld    d,&18
+        ld    e,0
+        call  nxreg
+        ld    e,255
+        call  nxreg
+        ld    e,0
+        call  nxreg
+        ld    e,63
+        call  nxreg            ; clip = lineas 0..63
+        ld    d,&69
+        ld    e,128
+        call  nxreg            ; habilita Layer 2
+        ld    bc,&123B
+        ld    a,2
+        out   (c),a            ; y lo hace visible
+        jp    NXNOPIC
+
+; NXNOPIC: banco negro y color 0 a negro (salas sin imagen, y oscuridad).
+NXNOPIC:
+        ld    d,&12
+        ld    e,NXBLANK
+        call  nxreg
+        ld    d,&43
+        ld    e,&10
+        call  nxreg
+        ld    d,&40
+        ld    e,0
+        call  nxreg
+        ld    d,&41
+        ld    e,0
+        call  nxreg
+        ret
+
+; NXPIC: A = slot de imagen. Apunta Layer 2 a su banco y sube su paleta.
+NXPIC:
+        push  af
+        ld    d,&12
+        add   a,NXIMG
+        ld    e,a
+        call  nxreg
+        ld    d,&43
+        ld    e,&10
+        call  nxreg            ; paleta de Layer 2
+        ld    d,&40
+        ld    e,0
+        call  nxreg            ; empezando por el indice 0
+        pop   af
+        ld    h,a              ; la paleta del slot esta en NXPALS + slot*256
+        ld    l,0
+        ld    de,NXPALS
+        add   hl,de
+        ld    bc,&243B
+        ld    a,&41
+        out   (c),a            ; $41 autoincrementa el indice de color
+        ld    bc,&253B
+        ld    d,0              ; 256 colores
+nxpal_l:
+        ld    a,(hl)
+        out   (c),a
+        inc   hl
+        dec   d
+        jr    nz,nxpal_l
+        ret
+'''
+
+# El juego no trae imagenes: nada de Layer 2, y ni un byte de mas.
+IMG_ASM_VACIO = r'''
+NXL2INIT:
+        ret
+'''
 
 
 PLAT_ASM = r'''
@@ -101,17 +200,29 @@ nxchar:
         jr    z,nx_bs
         cp    32
         ret   c                ; otros codigos de control: se ignoran
-        call  nxglyph          ; HL -> 8 bytes de la matriz del caracter
+        ; Salto de linea DIFERIDO. El motor lleva su propia cuenta de columna y
+        ; llama a newline cuando toca, asi que si aqui saltaramos nada mas pasar
+        ; el margen, una linea que llenara el ancho exacto saltaria dos veces y
+        ; dejaria un hueco en blanco. Se deja el cursor fuera de margen y solo se
+        ; salta al llegar el siguiente caracter imprimible; si el motor manda un
+        ; retorno antes, el salto pendiente se cancela solo.
+        ld    b,a
+        ld    a,(nxcol)
+        ld    c,a
+        ld    a,(nxwr)
+        cp    c
+        ld    a,b
+        jr    nc,nx_pr         ; el cursor aun esta dentro
+        push  af
+        call  nx_cr
+        call  nx_lf
+        pop   af
+nx_pr:  call  nxglyph          ; HL -> 8 bytes de la matriz del caracter
         call  nxplot
         ld    a,(nxcol)
         inc   a
         ld    (nxcol),a
-        ld    b,a
-        ld    a,(nxwr)
-        cp    b
-        ret   nc               ; aun cabe en la linea
-        call  nx_cr            ; desborda: margen + siguiente linea
-        jr    nx_lf
+        ret
 
 nx_cr:  ld    a,(nxwl)
         ld    (nxcol),a
@@ -580,26 +691,97 @@ MUSSTOP:
 '''
 
 
-def _engine_next():
-    """ENGINE_ASM con las rutinas irreproducibles del CPC neutralizadas.
-    De momento solo detect128, que sondea los bancos del CPC escribiendo en
-    &4000 (que en el Spectrum es la pantalla) por el puerto &7Fxx."""
+def _engine_next(con_imagenes):
+    """ENGINE_ASM con las rutinas irreproducibles del CPC sustituidas.
+
+    detect128       sondea los bancos del CPC escribiendo en &4000 (que en el
+                    Spectrum es la pantalla) por el puerto &7Fxx. Aqui solo
+                    apaga la cache de imagenes en banco -- el Next no la
+                    necesita, porque no copia imagenes -- y arranca Layer 2.
+
+    show_loc_image  en el CPC carga la imagen de disco, la cachea en un banco y
+                    la desempaqueta a la pantalla. En el Next la imagen ya esta
+                    en su banco desde que arranca el .nex, asi que basta con
+                    apuntar Layer 2 ahi.
+    """
     src = ge.ENGINE_ASM
+
     i = src.index(chr(10) + 'detect128:') + 1      # la etiqueta, no el comentario
     j = src.index('ret', src.index('ld    (has128),a', i)) + 3
-    nuevo = ('detect128:\n'
-             '        xor   a\n'
-             '        ld    (has128),a      ; fase 1: sin bancos de imagen\n'
-             '        ret')
+    src = src[:i] + ('detect128:\n'
+                     '        xor   a\n'
+                     '        ld    (has128),a      ; sin cache de imagenes en banco\n'
+                     '        jp    NXL2INIT') + src[j:]
+
+    i = src.index(chr(10) + 'show_loc_image:') + 1
+    j = src.index(chr(10) + '; sli_loadfile:', i) + 1
+    if con_imagenes:
+        nuevo = '''show_loc_image:
+        ld    hl,(locslotp)
+        ld    a,h
+        or    l
+        jr    z,sli_noimg      ; el juego no trae tabla de imagenes
+        ld    a,(curloc)
+        ld    e,a
+        ld    d,0
+        add   hl,de
+        ld    a,(hl)           ; slot de imagen de esta sala
+        cp    255
+        jr    z,sli_noimg      ; esta sala no tiene
+        ld    (curslot),a
+        push  af
+        call  is_dark
+        or    a
+        pop   bc               ; B = slot (is_dark se lleva A)
+        jr    nz,sli_noimg     ; a oscuras no se ve nada
+        ld    a,b
+        call  NXPIC            ; Layer 2 -> banco del slot, y su paleta
+        ld    h,0
+        ld    l,8              ; la imagen ocupa las filas 0..7
+        ld    d,41
+        ld    e,23
+        call  TXTWIN
+        jr    sli_cls
+sli_noimg:
+        call  NXNOPIC
+        ld    h,0
+        ld    l,0
+        ld    d,41
+        ld    e,23
+        call  TXTWIN
+sli_cls:
+        ld    a,12
+        call  TXTO
+        xor   a
+        ld    (col),a
+        ret
+
+'''
+    else:
+        nuevo = '''show_loc_image:
+        ld    h,0
+        ld    l,0
+        ld    d,41
+        ld    e,23
+        call  TXTWIN
+        ld    a,12
+        call  TXTO
+        xor   a
+        ld    (col),a
+        ret
+
+'''
     return src[:i] + nuevo + src[j:]
 
 
-def prefijo(org, db_base):
+def prefijo(org, db_base, nimg=0):
     """Constantes que el motor espera resueltas. A diferencia del CPC, aqui NO
     se declaran TXTO/KMW/... como equ: son etiquetas de PLAT_ASM."""
     L = ['ORIGIN equ &%04X' % org,          # el motor lleva dentro 'org ORIGIN'
          'DBB equ &%04X' % db_base,
-         'MTABLE equ &%04X' % MTABLE]
+         'MTABLE equ &%04X' % MTABLE,
+         'NXIMG equ %d' % BANK_IMG,         # primer banco de imagen
+         'NXBLANK equ %d' % (BANK_IMG + nimg)]
     for n in ('SCANTGO', 'SEXITS', 'SNOUND', 'SSEE', 'STAKE', 'SDROP',
               'SNOTHERE', 'SNOTCARR', 'SINVEN', 'SEMPTY', 'SNOTAKE', 'SDARK',
               'SSCORE', 'SHEAVY', 'SSCOREP', 'SSCORES',
@@ -608,13 +790,23 @@ def prefijo(org, db_base):
     return chr(10).join(L) + chr(10)
 
 
-def assemble_engine_next(org=ORG, db_base=None, idioma='es'):
-    """Ensambla motor + plataforma Next. Devuelve (bytes, tabla_de_simbolos)."""
+def assemble_engine_next(org=ORG, db_base=None, idioma='es', paletas=b''):
+    """Ensambla motor + plataforma Next. Devuelve (bytes, tabla_de_simbolos).
+    paletas: 256 bytes por imagen (un byte por color), en orden de slot."""
     if db_base is None:
         db_base = org
-    fuente = (prefijo(org, db_base) + _engine_next() + PLAT_ASM + chr(10) +
-              _font_asm(idioma) + chr(10))
+    nimg = len(paletas) // 256
+    img = IMG_ASM + chr(10) + _pal_asm(paletas) if nimg else IMG_ASM_VACIO
+    fuente = (prefijo(org, db_base, nimg) + _engine_next(nimg > 0) + PLAT_ASM +
+              chr(10) + img + chr(10) + _font_asm(idioma) + chr(10))
     return z80asm.assemble(fuente, org=org)
+
+
+def _pal_asm(paletas):
+    L = ['NXPALS:']
+    for i in range(0, len(paletas), 16):
+        L.append('        defb ' + ','.join(str(b) for b in paletas[i:i + 16]))
+    return chr(10).join(L)
 
 
 # ===========================================================================
@@ -643,9 +835,36 @@ def assemble_engine_next(org=ORG, db_base=None, idioma='es'):
 SP_NEX = 0xFFF0
 
 
-def compila(game, ancho=COLS, org=ORG):
+def datadir_por_defecto(yaml_path):
+    """Donde deja el editor los .nxi/.nxp de cada localizacion."""
+    return os.path.join(os.path.dirname(os.path.abspath(yaml_path)),
+                        'temp', 'Next', 'data')
+
+
+def _imagenes(c, datadir):
+    """Localizaciones con imagen lista: <id>.nxi de 16K (un banco exacto) y su
+    paleta <id>.nxp. Mismo criterio que el export Next en BASIC."""
+    if not datadir or not os.path.isdir(datadir):
+        return []
+    out = []
+    for lid in c.locids:
+        nxi = os.path.join(datadir, lid + '.nxi')
+        nxp = os.path.join(datadir, lid + '.nxp')
+        if (os.path.isfile(nxi) and os.path.getsize(nxi) == 16384
+                and os.path.isfile(nxp)):
+            out.append(lid)
+    return out
+
+
+def _paleta256(path):
+    """El .nxp trae 256 colores de 2 bytes; Layer 2 usa el primero de cada par."""
+    d = open(path, 'rb').read()
+    return bytes(d[0::2][:256]).ljust(256, b'\x00')
+
+
+def compila(game, ancho=COLS, org=ORG, datadir=None):
     """Ensambla motor+plataforma y construye la base de datos del juego.
-    Devuelve (codigo, base_de_datos, simbolos, spec, dir_db)."""
+    Devuelve (codigo, base_de_datos, simbolos, spec, dir_db, imagenes, datadir)."""
     import cpc_nativo
     import nativecc as nc
     import spectrum_export as sx
@@ -657,26 +876,41 @@ def compila(game, ancho=COLS, org=ORG):
     spec, _ = nc.compile_game(c, sysm[:ge.NSYS], width=ancho)
 
     idioma = str((game.get('metadata') or {}).get('language', '') or 'es')
-    code, sym = assemble_engine_next(org=org, db_base=org, idioma=idioma)
+
+    # imagenes: una por localizacion, cada una en su banco de 16K
+    imgs = _imagenes(c, datadir)
+    paletas = b''.join(_paleta256(os.path.join(datadir, lid + '.nxp')) for lid in imgs)
+    # la tabla loc_slot dice, por localizacion, que slot de imagen le toca (255 =
+    # ninguna). El indice es la POSICION de la localizacion, no su id del editor.
+    orden = [n for n, _ in sorted(c.locidx.items(), key=lambda kv: kv[1])]
+    pos = {lid: i for i, lid in enumerate(orden)}
+    loc_slot = bytearray([255] * len(spec['locations']))
+    for k, lid in enumerate(imgs):
+        loc_slot[pos[lid]] = k
+
+    code, sym = assemble_engine_next(org=org, db_base=org, idioma=idioma,
+                                     paletas=paletas)
     dbaddr = org + len(code)
-    code, sym = assemble_engine_next(org=org, db_base=dbaddr, idioma=idioma)
+    code, sym = assemble_engine_next(org=org, db_base=dbaddr, idioma=idioma,
+                                     paletas=paletas)
     db, _ = ge.build_game_db(
         spec['messages'], spec['locations'], spec['vocab'], spec['objects'],
         spec['responses'], spec['startloc'], spec['sysverbs'], spec['width'],
         load=dbaddr, proc_before=spec['proc_before'], proc_after=spec['proc_after'],
         proc_onstart=spec['proc_onstart'], hdrbuf=0, imgbuf=0,
-        loc_slot=bytes([255] * len(spec['locations'])), vall=spec['vall'],
+        loc_slot=bytes(loc_slot), vall=spec['vall'],
         font_acc=spec['font_acc'], timers=spec['timers'],
         llevarmax=spec['llevarmax'])
-    return code, db, sym, spec, dbaddr
+    return code, db, sym, spec, dbaddr, imgs, datadir
 
 
-def export_nex(game, salida, ancho=COLS, org=ORG, borde=0):
+def export_nex(game, salida, ancho=COLS, org=ORG, borde=0, datadir=None):
     """Compila el juego al motor nativo y lo empaqueta en un .nex arrancable.
     Sin zxbc, sin Boriel, sin NextBuild: todo en Python."""
     import empaqueta_nex
 
-    code, db, sym, spec, dbaddr = compila(game, ancho=ancho, org=org)
+    code, db, sym, spec, dbaddr, imgs, datadir = compila(
+        game, ancho=ancho, org=org, datadir=datadir)
     plano = bytes(code) + bytes(db)
     fin = org + len(plano)
     if fin > SP_NEX - 256:
@@ -693,11 +927,17 @@ def export_nex(game, salida, ancho=COLS, org=ORG, borde=0):
         bancos[bk][a - slot] = b
     bancos = {k: bytes(v) for k, v in bancos.items()}
 
+    # una imagen por banco, a partir de NXIMG, y detras el banco negro
+    for k, lid in enumerate(imgs):
+        bancos[BANK_IMG + k] = open(os.path.join(datadir, lid + '.nxi'), 'rb').read()
+    if imgs:
+        bancos[BANK_IMG + len(imgs)] = bytes(16384)
+
     empaqueta_nex.build_nex(salida, bancos, pc=sym['start'], sp=SP_NEX,
                             border=borde)
     return {'codigo': len(code), 'datos': len(db), 'total': len(plano),
             'org': org, 'fin': fin, 'pc': sym['start'], 'sp': SP_NEX,
-            'bancos': sorted(bancos), 'simbolos': sym,
+            'bancos': sorted(bancos), 'simbolos': sym, 'imagenes': imgs,
             'localizaciones': len(spec['locations']),
             'objetos': len(spec['objects'])}
 
@@ -734,10 +974,13 @@ def main():
     ap.add_argument('nex', nargs='?')
     ap.add_argument('--ancho', type=int, default=COLS)
     ap.add_argument('--org', default=hex(ORG))
+    ap.add_argument('--data', default=None,
+                    help='carpeta con los .nxi/.nxp (por defecto temp/Next/data)')
     a = ap.parse_args()
     game = yaml.safe_load(open(a.yaml, encoding='utf-8'))
     salida = a.nex or (a.yaml.rsplit('.', 1)[0] + '.nex')
-    info = export_nex(game, salida, ancho=a.ancho, org=int(a.org, 0))
+    info = export_nex(game, salida, ancho=a.ancho, org=int(a.org, 0),
+                      datadir=a.data or datadir_por_defecto(a.yaml))
     print('NEX: %s' % salida)
     print('  motor+plataforma : %6d bytes' % info['codigo'])
     print('  base de datos    : %6d bytes' % info['datos'])
@@ -745,8 +988,8 @@ def main():
           % (info['total'], info['org'], info['fin']))
     print('  bancos           : %s   PC=&%04X  SP=&%04X'
           % (info['bancos'], info['pc'], info['sp']))
-    print('  %d localizaciones, %d objetos'
-          % (info['localizaciones'], info['objetos']))
+    print('  %d localizaciones, %d objetos, %d imagenes'
+          % (info['localizaciones'], info['objetos'], len(info['imagenes'])))
 
 
 if __name__ == '__main__':

@@ -61,3 +61,6 @@ Thumbs.db
 # changelog (se sube aunque *.md este ignorado)
 !NOVEDADES.md
 *.odt
+
+# CLAUDE.md si es instrucciones del proyecto, no documentacion suelta
+!CLAUDE.md
