@@ -313,6 +313,69 @@ def verificar(game):
     return res, desc, nco, ndb
 
 
+def teclea(cpu, sym, tec, texto, tope=6000000):
+    """Escribe una orden en el juego. Va cambiando el estado del teclado justo
+    antes de cada entrada en KMREAD: pulsa una tecla, la suelta en la siguiente
+    lectura (que es lo que espera el antirrebote) y pasa a la siguiente."""
+    pendientes = list(texto)
+    soltar = False
+    n = 0
+    while n < tope:
+        if cpu.pc == sym['kmread']:
+            if soltar:
+                tec.suelta()
+                soltar = False
+            elif pendientes:
+                tec.pulsa(pendientes.pop(0))
+                soltar = True
+            else:
+                tec.suelta()
+                return True
+        cpu.step()
+        n += 1
+    return False
+
+
+def corre_hasta(cpu, addr, tope=6000000):
+    n = 0
+    while n < tope and cpu.pc != addr:
+        cpu.step()
+        n += 1
+    return cpu.pc == addr
+
+
+def verificar_nex(game, salida):
+    """Empaqueta el .nex, lo vuelve a leer del disco como lo hace NextZXOS,
+    arranca desde el PC de la cabecera y comprueba que llega a pedir orden con
+    la sala inicial en pantalla. Prueba del empaquetado, no solo del motor."""
+    info = nn.export_nex(game, salida)
+    mem, pc, sp, bancos = nn.carga_nex(salida)
+    sym = info['simbolos']
+    cpu = z80.Z80(mem)
+    cpu.sp = sp
+    Teclado(cpu, mem, sym)          # sin teclas pulsadas
+    cpu.pc = pc
+    cpu.halted = False
+    n = 0
+    while n < 4000000 and cpu.pc != sym['read_line']:
+        cpu.step()
+        n += 1
+    llego = cpu.pc == sym['read_line']
+    pant = [l for l in leer_pantalla(mem, sym) if l.strip()]
+
+    # ---- jugar: escribir una orden y ver la respuesta ----
+    jugadas = []
+    if llego:
+        tec2 = Teclado(cpu, mem, sym)
+        for orden in ('n', 'coger linterna', 'i'):
+            # teclea() vuelve cuando el juego ya esta pidiendo la orden siguiente,
+            # o sea con el turno anterior resuelto y pintado.
+            if not teclea(cpu, sym, tec2, orden + chr(13)):
+                break
+            jugadas.append((orden, [l for l in leer_pantalla(mem, sym) if l.strip()]))
+    return info, llego, n, pant, bancos, jugadas
+
+
 def main():
     base = os.path.dirname(os.path.abspath(__file__))
     path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
@@ -328,6 +391,26 @@ def main():
     print('--- pantalla tras describe ---')
     for l in desc:
         print('|' + l)
+    print()
+    # ---- vuelta completa por el .nex ----
+    import tempfile
+    salida = os.path.join(tempfile.gettempdir(), 'scriba_prueba_nativo.nex')
+    info, llego, pasos, pant, bancos, jugadas = verificar_nex(game, salida)
+    print('--- .nex: %s' % os.path.basename(salida))
+    print('    bancos %s   PC=&%04X   SP=&%04X   %d bytes (&%04X-&%04X)'
+          % (bancos, info['pc'], info['sp'], info['total'], info['org'], info['fin']))
+    print('    arranque -> %s en %d instrucciones'
+          % ('pide orden' if llego else 'NO LLEGA a pedir orden', pasos))
+    for l in pant:
+        print('    |' + l)
+    res.append(('.nex arranca y pide orden', llego))
+    for orden, p in jugadas:
+        print()
+        print('    --- orden: "%s"' % orden)
+        for l in p:
+            print('    |' + l)
+    res.append(('.nex responde a ordenes escritas', len(jugadas) == 3))
+    ok = sum(1 for _, b in res if b)
     print()
     print('%d/%d comprobaciones correctas' % (ok, len(res)))
     sys.exit(0 if ok == len(res) else 1)

@@ -564,3 +564,138 @@ def assemble_engine_next(org=ORG, db_base=None):
         db_base = org
     fuente = prefijo(org, db_base) + _engine_next() + PLAT_ASM + chr(10) + _font_asm() + chr(10)
     return z80asm.assemble(fuente, org=org)
+
+
+# ===========================================================================
+#  Exportacion a .nex
+# ===========================================================================
+#
+# Mapa de memoria (plano, sin paginar):
+#
+#   &0000-&3FFF   ROM de NextZXOS  (no la usamos, pero la dejamos puesta: asi
+#                 la interrupcion IM1 sigue teniendo su gestor en &0038)
+#   &4000-&5AFF   pantalla ULA + atributos
+#   &5B00-&5FFF   libre
+#   &6000-...     motor + capa de plataforma  (ORG)
+#   ...           base de datos del juego, a continuacion
+#   ...-&FFEF     libre
+#   &FFF0         pila
+#
+# En bancos de 16K del .nex: &4000-&7FFF = banco 5, &8000-&BFFF = banco 2,
+# &C000-&FFFF = banco 0. De repartirlo se encarga empaqueta_nex.bin_a_bancos.
+#
+# No mapeamos RAM sobre la ROM todavia. Se puede (la capa de plataforma no toca
+# la ROM para nada), pero implica quedarse sin el gestor de interrupcion de
+# &0038, o sea hacerse cargo del modo de interrupcion. Mientras quepa asi, no
+# compensa. Cuando haga falta: nextreg &50 y &51 con dos paginas de 8K libres.
+
+SP_NEX = 0xFFF0
+
+
+def compila(game, ancho=COLS, org=ORG):
+    """Ensambla motor+plataforma y construye la base de datos del juego.
+    Devuelve (codigo, base_de_datos, simbolos, spec, dir_db)."""
+    import cpc_nativo
+    import nativecc as nc
+    import spectrum_export as sx
+
+    c = sx.recolecta(game)
+    sysm, _sal = cpc_nativo._sys_msgs_y_salidas(game.get('metadata') or {})
+    while len(sysm) < ge.NSYS:
+        sysm.append('')
+    spec, _ = nc.compile_game(c, sysm[:ge.NSYS], width=ancho)
+
+    code, sym = assemble_engine_next(org=org, db_base=org)   # 1a pasada: tamaño
+    dbaddr = org + len(code)
+    code, sym = assemble_engine_next(org=org, db_base=dbaddr)
+    db, _ = ge.build_game_db(
+        spec['messages'], spec['locations'], spec['vocab'], spec['objects'],
+        spec['responses'], spec['startloc'], spec['sysverbs'], spec['width'],
+        load=dbaddr, proc_before=spec['proc_before'], proc_after=spec['proc_after'],
+        proc_onstart=spec['proc_onstart'], hdrbuf=0, imgbuf=0,
+        loc_slot=bytes([255] * len(spec['locations'])), vall=spec['vall'],
+        font_acc=spec['font_acc'], timers=spec['timers'],
+        llevarmax=spec['llevarmax'])
+    return code, db, sym, spec, dbaddr
+
+
+def export_nex(game, salida, ancho=COLS, org=ORG, borde=0):
+    """Compila el juego al motor nativo y lo empaqueta en un .nex arrancable.
+    Sin zxbc, sin Boriel, sin NextBuild: todo en Python."""
+    import empaqueta_nex
+
+    code, db, sym, spec, dbaddr = compila(game, ancho=ancho, org=org)
+    plano = bytes(code) + bytes(db)
+    fin = org + len(plano)
+    if fin > SP_NEX - 256:
+        raise ValueError(
+            'no cabe en el mapa plano: motor+datos llegan a &%04X y la pila esta '
+            'en &%04X. Hacen falta bancos para el texto.' % (fin, SP_NEX))
+
+    bancos = {}
+    for i, b in enumerate(plano):
+        a = org + i
+        slot = a & 0xC000
+        bk = {0x4000: 5, 0x8000: 2, 0xC000: 0}[slot]
+        bancos.setdefault(bk, bytearray(16384))
+        bancos[bk][a - slot] = b
+    bancos = {k: bytes(v) for k, v in bancos.items()}
+
+    empaqueta_nex.build_nex(salida, bancos, pc=sym['start'], sp=SP_NEX,
+                            border=borde)
+    return {'codigo': len(code), 'datos': len(db), 'total': len(plano),
+            'org': org, 'fin': fin, 'pc': sym['start'], 'sp': SP_NEX,
+            'bancos': sorted(bancos), 'simbolos': sym,
+            'localizaciones': len(spec['locations']),
+            'objetos': len(spec['objects'])}
+
+
+def carga_nex(path):
+    """Reconstruye el mapa de 64K de un .nex como lo hace NextZXOS.
+    Devuelve (memoria, pc, sp, bancos_presentes). Sirve para verificar el
+    empaquetado sin emulador."""
+    import struct
+    datos = open(path, 'rb').read()
+    if datos[:4] != b'Next':
+        raise ValueError('no es un .nex')
+    sp = struct.unpack_from('<H', datos, 12)[0]
+    pc = struct.unpack_from('<H', datos, 14)[0]
+    presentes = [b for b in range(112) if datos[18 + b]]
+    orden = [b for b in ([5, 2, 0, 1, 3, 4] + list(range(6, 112))) if b in presentes]
+    mem = bytearray(65536)
+    ranura = {5: 0x4000, 2: 0x8000, 0: 0xC000}
+    off = 512
+    for b in orden:
+        trozo = datos[off:off + 16384]
+        off += 16384
+        if b in ranura:
+            mem[ranura[b]:ranura[b] + 16384] = trozo
+    return mem, pc, sp, presentes
+
+
+def main():
+    import argparse
+    import yaml
+    ap = argparse.ArgumentParser(
+        description='Compila un juego de Scriba a .nex con el motor nativo Z80.')
+    ap.add_argument('yaml')
+    ap.add_argument('nex', nargs='?')
+    ap.add_argument('--ancho', type=int, default=COLS)
+    ap.add_argument('--org', default=hex(ORG))
+    a = ap.parse_args()
+    game = yaml.safe_load(open(a.yaml, encoding='utf-8'))
+    salida = a.nex or (a.yaml.rsplit('.', 1)[0] + '.nex')
+    info = export_nex(game, salida, ancho=a.ancho, org=int(a.org, 0))
+    print('NEX: %s' % salida)
+    print('  motor+plataforma : %6d bytes' % info['codigo'])
+    print('  base de datos    : %6d bytes' % info['datos'])
+    print('  total            : %6d bytes  (&%04X-&%04X)'
+          % (info['total'], info['org'], info['fin']))
+    print('  bancos           : %s   PC=&%04X  SP=&%04X'
+          % (info['bancos'], info['pc'], info['sp']))
+    print('  %d localizaciones, %d objetos'
+          % (info['localizaciones'], info['objetos']))
+
+
+if __name__ == '__main__':
+    main()
