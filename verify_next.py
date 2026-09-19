@@ -25,6 +25,7 @@ import z80
 
 ORG = 0x6000
 ANCHO = 42
+FRAMES_TITULO = 60      # frames de portada antes de que el arnes pulse tecla
 
 
 # ---------------------------------------------------------------------------
@@ -405,11 +406,11 @@ class EspiaNextReg:
         return bytes(reversed(out))
 
 
-def verificar_nex(game, salida, datadir=None):
+def verificar_nex(game, salida, datadir=None, musicdir=None):
     """Empaqueta el .nex, lo vuelve a leer del disco como lo hace NextZXOS,
     arranca desde el PC de la cabecera y comprueba que llega a pedir orden con
     la sala inicial en pantalla. Prueba del empaquetado, no solo del motor."""
-    info = nn.export_nex(game, salida, datadir=datadir)
+    info = nn.export_nex(game, salida, datadir=datadir, musicdir=musicdir)
     mem, pc, sp, bancos = nn.carga_nex(salida)
     sym = info['simbolos']
     cpu = z80.Z80(mem)
@@ -419,23 +420,47 @@ def verificar_nex(game, salida, datadir=None):
     cpu.pc = pc
     cpu.halted = False
 
-    # 1) arranque hasta la primera espera de tecla: ahi esta el mensaje inicial
-    n = 0
-    while n < 4000000 and cpu.pc not in (sym['read_line'], sym['kmread']):
-        cpu.step()
-        n += 1
-    presentacion = []
-    l2_en_intro = cpu.nextreg.get(0x69)
-    l2_banco_intro = cpu.nextreg.get(0x12)
-    fila_intro = mem[sym['nxwt']]
-    if cpu.pc == sym['kmread']:
-        presentacion = [l for l in leer_pantalla(mem, sym) if l.strip()]
-
-    # 2) pulsar para pasar la presentacion y seguir hasta que pida orden
+    # Arranque. Hay hasta dos esperas de tecla antes de que pida orden: la de la
+    # pantalla de titulo (bucle propio, un frame por vuelta en nxframe) y la del
+    # mensaje inicial (PAUSE 0, que va por KMW/KMREAD). Se captura el estado la
+    # primera vez que se llega a cada una y luego se teclea para pasarla.
     tec0 = Teclado(cpu, mem, sym)
+    ay = []
+    cpu.hook_out[0xFFFD] = lambda c, pt, v: ay.append(('sel', v))
+    cpu.hook_out[0xBFFD] = lambda c, pt, v: ay.append(('val', v))
+    presentacion = []
+    titulo = None
+    l2_en_intro = l2_banco_intro = fila_intro = None
+    vista_intro = False
     soltar = False
-    while n < 6000000 and cpu.pc != sym['read_line']:
-        if cpu.pc == sym['kmread']:
+    n = 0
+    frame = sym.get('nxframe')
+    while n < 10000000 and cpu.pc != sym['read_line']:
+        toca = False
+        if frame is not None and cpu.pc == frame:
+            if titulo is None:
+                titulo = {'l2': cpu.nextreg.get(0x69),
+                          'banco': cpu.nextreg.get(0x12),
+                          'clip': cpu.nextreg.get(0x18),
+                          'ay': 0, 'frames': 0}
+            titulo['frames'] += 1
+            # dejar correr unos segundos de portada antes de tocar tecla: si se
+            # pulsa al primer frame no se comprueba que la musica avance
+            toca = titulo['frames'] > FRAMES_TITULO
+        elif cpu.pc == sym['kmread']:
+            if not vista_intro:
+                vista_intro = True
+                if titulo is not None:
+                    titulo['ay'] = len(ay)
+                    titulo['psgpos'] = (mem[sym['psgpos']] |
+                                        (mem[sym['psgpos'] + 1] << 8)) - sym['nxpsg'] \
+                        if 'psgpos' in sym else None
+                presentacion = [l for l in leer_pantalla(mem, sym) if l.strip()]
+                l2_en_intro = cpu.nextreg.get(0x69)
+                l2_banco_intro = cpu.nextreg.get(0x12)
+                fila_intro = mem[sym['nxwt']]
+            toca = True
+        if toca:
             if soltar:
                 tec0.suelta()
                 soltar = False
@@ -445,6 +470,8 @@ def verificar_nex(game, salida, datadir=None):
         cpu.step()
         n += 1
     tec0.suelta()
+    if titulo is not None:
+        titulo['clip_final'] = cpu.nextreg.get(0x18)
     llego = cpu.pc == sym['read_line']
     pant = [l for l in leer_pantalla(mem, sym) if l.strip()]
 
@@ -464,12 +491,11 @@ def verificar_nex(game, salida, datadir=None):
     if info['imagenes'] and llego:
         slotp = mem[sym['locslotp']] | (mem[sym['locslotp'] + 1] << 8)
         slot = mem[slotp + mem[sym['curloc']]] if slotp else 255
-        blank = nn.BANK_IMG + len(info['imagenes'])
-        esperado = blank if slot == 255 else nn.BANK_IMG + slot
+        esperado = None if slot == 255 else nn.BANK_IMG + slot
         # la presentacion sale en la sala INICIAL, que a estas alturas ya no es
         # la actual: hay que mirar su slot aparte
         slot0 = mem[slotp + info['inicio']] if slotp else 255
-        esp0 = blank if slot0 == 255 else nn.BANK_IMG + slot0
+        esp0 = None if slot0 == 255 else nn.BANK_IMG + slot0
         pal_ok = True
         if slot != 255:
             lid = info['imagenes'][slot]
@@ -490,7 +516,7 @@ def verificar_nex(game, salida, datadir=None):
             'fila_intro': fila_intro,
             'esp0': esp0,
         }
-    return info, llego, n, pant, bancos, jugadas, img, presentacion
+    return info, llego, n, pant, bancos, jugadas, img, presentacion, titulo
 
 
 def main():
@@ -512,8 +538,9 @@ def main():
     # ---- vuelta completa por el .nex ----
     import tempfile
     salida = os.path.join(tempfile.gettempdir(), 'scriba_prueba_nativo.nex')
-    info, llego, pasos, pant, bancos, jugadas, img, presentacion = verificar_nex(
-        game, salida, datadir=nn.datadir_por_defecto(path))
+    info, llego, pasos, pant, bancos, jugadas, img, presentacion, titulo = verificar_nex(
+        game, salida, datadir=nn.datadir_por_defecto(path),
+        musicdir=nn.musicdir_por_defecto(path))
     print('--- .nex: %s' % os.path.basename(salida))
     print('    bancos %s   PC=&%04X   SP=&%04X   %d bytes (&%04X-&%04X)'
           % (bancos, info['pc'], info['sp'], info['total'], info['org'], info['fin']))
@@ -528,6 +555,38 @@ def main():
         for l in p:
             print('    |' + l)
     res.append(('.nex responde a ordenes escritas', len(jugadas) == 4))
+
+    if titulo:
+        print()
+        print('    --- pantalla de titulo')
+        print('        Layer 2 $69=%s  banco $12=%s  clip $18=%s -> tras la tecla %s'
+              % (titulo['l2'], titulo['banco'], titulo['clip'], titulo['clip_final']))
+        print('        %d frames mostrados, %d escrituras al AY'
+              % (titulo['frames'], titulo['ay']))
+        res.append(('portada a pantalla completa en Layer 2',
+                    titulo['l2'] == 128 and titulo['clip'] == 191))
+        res.append(('...en el banco de la portada',
+                    titulo['banco'] == nn.BANK_IMG + len(info['imagenes'])))
+        res.append(('...y el clip vuelve al tercio superior al salir',
+                    titulo['clip_final'] == 63))
+        if info['psg'] and titulo.get('psgpos') is not None:
+            # Comprobacion exacta: se simula el mismo recorrido del stream en
+            # Python y se compara donde ha dejado el puntero el reproductor Z80.
+            # Asi se detecta que el player se desincronice, no solo que suene.
+            psg, _ = nn._musica(nn.musicdir_por_defecto(path))
+            pos = 0
+            for _ in range(titulo['frames'] - 1):
+                pos += 1
+                while pos < len(psg) and psg[pos] not in (0xFF, 0xFD):
+                    pos += 2
+                if pos >= len(psg) or psg[pos] == 0xFD:
+                    pos = 0
+                    break
+            print('        puntero del stream: %d (esperado %d)'
+                  % (titulo['psgpos'], pos))
+            res.append(('el reproductor PSG recorre el stream sin desincronizarse',
+                        abs(titulo['psgpos'] - pos) <= 2))
+            res.append(('suenan registros del AY en la portada', titulo['ay'] > 10))
 
     ini = (game.get('metadata') or {}).get('start_message') or ''
     if ini.strip():

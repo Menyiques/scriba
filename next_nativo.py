@@ -39,6 +39,7 @@ BANK_IMG = 16       # primer banco de 16K para imagenes (igual que next_export)
 FILA_TEXTO = 8      # la imagen ocupa las filas 0..7; el texto empieza aqui
 FILAS_CON_IMAGEN = 15   # lineas utiles de presentacion con imagen (8..23)
 FILAS_SIN_IMAGEN = 22   # ...y sin imagen (0..23)
+PSG_MAX = 4480      # tope de musica que cabe plana (igual que el export BASIC)
 FILAS = 24
 
 
@@ -116,12 +117,11 @@ nxl2off:
         out   (c),a
         ret
 
-; NXNOPIC: sin imagen (sala que no tiene, u oscuridad). Layer 2 se apaga y el
-; texto vuelve a disponer de las 24 filas.
+; NXNOPIC: sin imagen (sala que no tiene, u oscuridad). Basta con apagar Layer 2
+; y el texto vuelve a disponer de las 24 filas. Ya no hace falta un banco de 16K
+; en negro al que apuntar: cuando Layer 2 esta apagado no se ve nada, y ese banco
+; eran 16 KB de .nex que no pintaban nada.
 NXNOPIC:
-        ld    d,&12
-        ld    e,NXBLANK
-        call  nxreg
         jp    nxl2off
 
 ; NXPIC: A = slot de imagen. Apunta Layer 2 a su banco, sube su paleta y lo
@@ -132,20 +132,28 @@ NXPIC:
         add   a,NXIMG
         ld    e,a
         call  nxreg
+        pop   af
+        ld    h,a              ; la paleta del slot esta en NXPALS + slot*256
+        ld    l,0
+        ld    de,NXPALS
+        add   hl,de
+        call  nxsubepal
+        jp    nxl2on           ; ya hay imagen: encender Layer 2
+
+; nxsubepal: HL = 256 colores -> paleta de Layer 2. El registro $41 autoincrementa
+; el indice, asi que basta seleccionarlo una vez y soltar los 256 bytes seguidos.
+nxsubepal:
+        push  hl
         ld    d,&43
         ld    e,&10
         call  nxreg            ; paleta de Layer 2
         ld    d,&40
         ld    e,0
         call  nxreg            ; empezando por el indice 0
-        pop   af
-        ld    h,a              ; la paleta del slot esta en NXPALS + slot*256
-        ld    l,0
-        ld    de,NXPALS
-        add   hl,de
+        pop   hl
         ld    bc,&243B
         ld    a,&41
-        out   (c),a            ; $41 autoincrementa el indice de color
+        out   (c),a
         ld    bc,&253B
         ld    d,0              ; 256 colores
 nxpal_l:
@@ -154,7 +162,132 @@ nxpal_l:
         inc   hl
         dec   d
         jr    nz,nxpal_l
-        jp    nxl2on           ; ya hay imagen: encender Layer 2
+        ret
+'''
+
+TITULO_ASM = r'''
+; ===========================================================================
+;  Pantalla de titulo (Layer 2 a pantalla completa) y musica del AY
+; ===========================================================================
+; La portada son 256x192 a un byte por pixel: 49152 bytes, o sea tres bancos
+; seguidos a partir de NXTITLE. Se enseña poniendo el clip a pantalla completa;
+; al pulsar una tecla el clip vuelve al tercio superior y empieza el juego.
+NXTIT:
+        ld    d,&12
+        ld    e,NXTITLE
+        call  nxreg            ; banco activo = el primero de los tres
+        call  nxclip191
+        ld    hl,NXTPAL
+        call  nxsubepal
+        call  nxl2on
+        call  nxespera         ; suena la musica mientras no toquen tecla
+        call  nxl2off
+        jp    nxclip63         ; clip de vuelta al tercio superior
+
+nxclip191:
+        ld    e,191
+        jr    nxclip
+nxclip63:
+        ld    e,63
+nxclip: push  de
+        ld    d,&1C
+        ld    e,2
+        call  nxreg            ; reinicia el indice de clip de Layer 2
+        ld    d,&18
+        ld    e,0
+        call  nxreg
+        ld    e,255
+        call  nxreg
+        ld    e,0
+        call  nxreg
+        pop   de
+        ld    d,&18
+        jp    nxreg
+
+; nxespera: espera a que SUELTEN cualquier tecla y luego a que pulsen una nueva.
+; Sin lo primero, la tecla con la que se arranco saldria del bucle al instante.
+nxespera:
+        call  psginit
+nxe_1:  call  nxframe
+        call  psgframe
+        call  nxscan
+        or    a
+        jr    nz,nxe_1
+nxe_2:  call  nxframe
+        call  psgframe
+        call  nxscan
+        or    a
+        jr    z,nxe_2
+        jp    psgoff
+
+; nxframe: un barrido de pantalla. La ROM sigue paginada y NextZXOS arranca el
+; .nex en IM1, asi que HALT da los 50 Hz sin montar nada.
+nxframe:
+        ei
+        halt
+        ret
+'''
+
+# Musica: reproductor de stream PSG (volcado de registros del AY por frame).
+# Portado tal cual del que ya usan los builds BASIC (spectrum_export._PSG_PLAYER).
+PSG_ASM = r'''
+psginit:
+        ld    hl,NXPSG
+        ld    (psgpos),hl
+        ret
+
+psgframe:
+        ld    hl,(psgpos)
+        inc   hl               ; saltar el marcador de frame (&FF)
+pf_rp:  ld    a,(hl)
+        cp    &FF
+        jr    z,pf_done        ; empieza el frame siguiente
+        cp    &FD
+        jr    z,pf_loop        ; fin de la musica: rebobinar
+        inc   hl
+        ld    d,a              ; registro del AY
+        ld    e,(hl)           ; valor
+        inc   hl
+        ld    bc,&FFFD
+        out   (c),d
+        ld    bc,&BFFD
+        out   (c),e
+        jr    pf_rp
+pf_loop:
+        ld    hl,NXPSG
+        ld    (psgpos),hl
+        ret
+pf_done:
+        ld    (psgpos),hl
+        ret
+psgpos: defw 0
+
+psgoff:
+        ld    bc,&FFFD
+        ld    a,7
+        out   (c),a
+        ld    bc,&BFFD
+        ld    a,&3F
+        out   (c),a            ; mezclador: los tres canales cerrados
+        ld    d,8
+psgo_l: ld    bc,&FFFD
+        out   (c),d
+        ld    bc,&BFFD
+        xor   a
+        out   (c),a            ; volumen 0 en los canales 8, 9 y 10
+        inc   d
+        ld    a,d
+        cp    11
+        jr    nz,psgo_l
+        ret
+'''
+
+# Sin musica: el reproductor no existe y la espera solo mira el teclado.
+PSG_ASM_VACIO = r'''
+psginit:
+psgframe:
+psgoff:
+        ret
 '''
 
 # El juego no trae imagenes: nada de Layer 2, y ni un byte de mas.
@@ -741,7 +874,7 @@ MUSSTOP:
 '''
 
 
-def _engine_next(con_imagenes):
+def _engine_next(con_imagenes, con_titulo=False):
     """ENGINE_ASM con las rutinas irreproducibles del CPC sustituidas.
 
     detect128       sondea los bancos del CPC escribiendo en &4000 (que en el
@@ -753,6 +886,11 @@ def _engine_next(con_imagenes):
                     la desempaqueta a la pantalla. En el Next la imagen ya esta
                     en su banco desde que arranca el .nex, asi que basta con
                     apuntar Layer 2 ahi.
+
+    show_title      en el CPC cambia a Modo 0, engancha el reproductor de musica
+                    a la interrupcion del firmware y restaura el Modo 2. Aqui la
+                    portada es Layer 2 a pantalla completa y la musica se mueve
+                    en el propio bucle de espera.
     """
     src = ge.ENGINE_ASM
 
@@ -772,6 +910,11 @@ def _engine_next(con_imagenes):
     src = (src[:k] +
            '        call  show_loc_image   ; imagen de la sala inicial ya en la intro\n' +
            src[k:])
+
+    i = src.index(chr(10) + 'show_title:') + 1
+    j = src.index(chr(10) + 'set_title_pal:', i) + 1
+    src = src[:i] + ('show_title:\n        jp    NXTIT\n\n' if con_titulo
+                     else 'show_title:\n        ret\n\n') + src[j:]
 
     i = src.index(chr(10) + 'show_loc_image:') + 1
     j = src.index(chr(10) + '; sli_loadfile:', i) + 1
@@ -841,7 +984,7 @@ def prefijo(org, db_base, nimg=0):
          'DBB equ &%04X' % db_base,
          'MTABLE equ &%04X' % MTABLE,
          'NXIMG equ %d' % BANK_IMG,         # primer banco de imagen
-         'NXBLANK equ %d' % (BANK_IMG + nimg)]
+         'NXTITLE equ %d' % (BANK_IMG + nimg)]   # portada: 3 bancos seguidos
     for n in ('SCANTGO', 'SEXITS', 'SNOUND', 'SSEE', 'STAKE', 'SDROP',
               'SNOTHERE', 'SNOTCARR', 'SINVEN', 'SEMPTY', 'SNOTAKE', 'SDARK',
               'SSCORE', 'SHEAVY', 'SSCOREP', 'SSCORES',
@@ -850,23 +993,75 @@ def prefijo(org, db_base, nimg=0):
     return chr(10).join(L) + chr(10)
 
 
-def assemble_engine_next(org=ORG, db_base=None, idioma='es', paletas=b''):
+def assemble_engine_next(org=ORG, db_base=None, idioma='es', paletas=b'',
+                         titulo_pal=b'', psg=b''):
     """Ensambla motor + plataforma Next. Devuelve (bytes, tabla_de_simbolos).
-    paletas: 256 bytes por imagen (un byte por color), en orden de slot."""
+    paletas:    256 bytes por imagen (un byte por color), en orden de slot
+    titulo_pal: 256 bytes de la paleta de la portada (b'' = sin portada)
+    psg:        stream PSG de la musica del titulo (b'' = sin musica)"""
     if db_base is None:
         db_base = org
     nimg = len(paletas) // 256
-    img = IMG_ASM + chr(10) + _pal_asm(paletas) if nimg else IMG_ASM_VACIO
-    fuente = (prefijo(org, db_base, nimg) + _engine_next(nimg > 0) + PLAT_ASM +
-              chr(10) + img + chr(10) + _font_asm(idioma) + chr(10))
+    titulo = bool(titulo_pal)
+    partes = []
+    if nimg or titulo:
+        partes.append(IMG_ASM)
+        partes.append(_datos_asm('NXPALS', paletas) if nimg else 'NXPALS: defw 0')
+    else:
+        partes.append(IMG_ASM_VACIO)
+    if titulo:
+        partes.append(TITULO_ASM)
+        partes.append(_datos_asm('NXTPAL', titulo_pal))
+        partes.append(PSG_ASM + chr(10) + _datos_asm('NXPSG', psg)
+                      if psg else PSG_ASM_VACIO)
+    fuente = (prefijo(org, db_base, nimg) + _engine_next(nimg > 0, titulo) +
+              PLAT_ASM + chr(10) + chr(10).join(partes) + chr(10) +
+              _font_asm(idioma) + chr(10))
     return z80asm.assemble(fuente, org=org)
 
 
-def _pal_asm(paletas):
-    L = ['NXPALS:']
-    for i in range(0, len(paletas), 16):
-        L.append('        defb ' + ','.join(str(b) for b in paletas[i:i + 16]))
+def _datos_asm(etiqueta, datos):
+    L = [etiqueta + ':']
+    for i in range(0, len(datos), 16):
+        L.append('        defb ' + ','.join(str(b) for b in datos[i:i + 16]))
     return chr(10).join(L)
+
+
+def _titulo(datadir):
+    """Portada de 256x192 (49152 bytes = 3 bancos) y su paleta, o (None, None)."""
+    if not datadir:
+        return None, None
+    nxi = os.path.join(datadir, 'screen.nxi')
+    nxp = os.path.join(datadir, 'screen.nxp')
+    if not (os.path.isfile(nxi) and os.path.getsize(nxi) == 49152
+            and os.path.isfile(nxp)):
+        return None, None
+    return open(nxi, 'rb').read(), _paleta256(nxp)
+
+
+def _trunca_psg(stream, tope):
+    """Recorta el stream en un limite de frame (&FF) y lo cierra con &FD para que
+    haga bucle. Asi una cancion larga que no cabe suena igual, solo que su primer
+    tramo y repitiendose."""
+    corte = min(tope, len(stream))
+    while corte > 0 and stream[corte] != 0xFF:
+        corte -= 1
+    if corte <= 0:
+        return stream
+    return stream[:corte] + b'\xfd'
+
+
+def _musica(musicdir):
+    """Stream PSG entero de <juego>/music/ (un .psg a mano, o un .mid convertido),
+    o b''. Del recorte se encarga compila(), que es quien sabe cuanto sitio queda."""
+    try:
+        import spectrum_export as sx
+        stream, nombre = sx._leer_psg(musicdir)
+    except Exception:
+        return b'', None
+    if not stream:
+        return b'', None
+    return bytes(stream), nombre
 
 
 # ===========================================================================
@@ -893,12 +1088,21 @@ def _pal_asm(paletas):
 # compensa. Cuando haga falta: nextreg &50 y &51 con dos paginas de 8K libres.
 
 SP_NEX = 0xFFF0
+# Margen reservado bajo la pila. Medido en el simulador sobre un arranque
+# completo (portada + musica + presentacion) mas media docena de ordenes, el
+# motor no baja de 50 bytes de pila; 128 es 2,5 veces eso.
+PILA_MIN = 128
 
 
 def datadir_por_defecto(yaml_path):
     """Donde deja el editor los .nxi/.nxp de cada localizacion."""
     return os.path.join(os.path.dirname(os.path.abspath(yaml_path)),
                         'temp', 'Next', 'data')
+
+
+def musicdir_por_defecto(yaml_path):
+    """Los assets de musica viven en la raiz del juego, no en temp/."""
+    return os.path.join(os.path.dirname(os.path.abspath(yaml_path)), 'music')
 
 
 def _imagenes(c, datadir):
@@ -922,9 +1126,9 @@ def _paleta256(path):
     return bytes(d[0::2][:256]).ljust(256, b'\x00')
 
 
-def compila(game, ancho=COLS, org=ORG, datadir=None):
+def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None):
     """Ensambla motor+plataforma y construye la base de datos del juego.
-    Devuelve (codigo, base_de_datos, simbolos, spec, dir_db, imagenes, datadir)."""
+    Devuelve (codigo, base_de_datos, simbolos, spec, dir_db, extras)."""
     import cpc_nativo
     import nativecc as nc
     import spectrum_export as sx
@@ -937,6 +1141,26 @@ def compila(game, ancho=COLS, org=ORG, datadir=None):
     # imagenes: una por localizacion, cada una en su banco de 16K
     imgs = _imagenes(c, datadir)
     paletas = b''.join(_paleta256(os.path.join(datadir, lid + '.nxp')) for lid in imgs)
+
+    # Efectos de sonido por AY: se embeben SOLO los que dispara algun PLAY. El
+    # reloj del AY del Next es el del Spectrum, 1,7734 MHz, que es el valor por
+    # defecto de pack_ay_fx (el CPC va a 1 MHz y por eso alli se reescalan).
+    fx_blob = b''
+    try:
+        import capabilities
+        import fx_engine
+        _used = capabilities.used_fx(game)
+        if _used:
+            fx_blob = fx_engine.pack_ay_fx(game.get('fx', []) or [], _used)
+    except Exception:
+        fx_blob = b''
+
+    # Portada de 256x192 (3 bancos) y musica del AY. La musica solo tiene sentido
+    # con portada: es lo que suena mientras se mira, igual que en el export BASIC.
+    titulo_bin, titulo_pal = _titulo(datadir)
+    psg_bruto, psg_nom = (b'', None)
+    if titulo_bin is not None:
+        psg_bruto, psg_nom = _musica(musicdir)
 
     # Cuantas lineas puede usar la presentacion antes de parar a esperar tecla.
     # Con imagen el texto vive en las filas 8..23, o sea 16; sin imagen tiene las
@@ -958,11 +1182,43 @@ def compila(game, ancho=COLS, org=ORG, datadir=None):
     for k, lid in enumerate(imgs):
         loc_slot[pos[lid]] = k
 
-    code, sym = assemble_engine_next(org=org, db_base=org, idioma=idioma,
-                                     paletas=paletas)
+    def _ensambla(psg, base):
+        return assemble_engine_next(org=org, db_base=base, idioma=idioma,
+                                    paletas=paletas,
+                                    titulo_pal=titulo_pal or b'', psg=psg)
+
+    def _db(dbaddr):
+        return ge.build_game_db(
+            spec['messages'], spec['locations'], spec['vocab'], spec['objects'],
+            spec['responses'], spec['startloc'], spec['sysverbs'], spec['width'],
+            load=dbaddr, proc_before=spec['proc_before'],
+            proc_after=spec['proc_after'], proc_onstart=spec['proc_onstart'],
+            hdrbuf=0, imgbuf=0, loc_slot=bytes(loc_slot), vall=spec['vall'],
+            font_acc=spec['font_acc'], timers=spec['timers'],
+            llevarmax=spec['llevarmax'], fx=fx_blob)[0]
+
+    # La musica es lo unico elastico del binario plano, asi que se mide primero
+    # todo lo demas y se le da el hueco que quede, en vez de asumir un tope fijo
+    # y reventar. Un juego con muchas imagenes y FX se queda con menos cancion,
+    # pero se queda con cancion.
+    psg = b''
+    aviso_psg = None
+    if psg_bruto:
+        code0, _ = _ensambla(b'', org)
+        hueco = SP_NEX - PILA_MIN - (org + len(code0) + len(_db(org + len(code0))))
+        tope = min(PSG_MAX, max(0, hueco))
+        if tope < 64:
+            aviso_psg = ('no queda sitio plano para la musica (%d bytes libres); '
+                         'se omite' % max(0, hueco))
+        else:
+            psg = _trunca_psg(psg_bruto, tope)
+            if len(psg) < len(psg_bruto):
+                aviso_psg = ('musica recortada de %d a %d bytes (~%d s) y en bucle'
+                             % (len(psg_bruto), len(psg), psg.count(0xFF) // 50))
+
+    code, sym = _ensambla(psg, org)
     dbaddr = org + len(code)
-    code, sym = assemble_engine_next(org=org, db_base=dbaddr, idioma=idioma,
-                                     paletas=paletas)
+    code, sym = _ensambla(psg, dbaddr)
     db, _ = ge.build_game_db(
         spec['messages'], spec['locations'], spec['vocab'], spec['objects'],
         spec['responses'], spec['startloc'], spec['sysverbs'], spec['width'],
@@ -970,23 +1226,30 @@ def compila(game, ancho=COLS, org=ORG, datadir=None):
         proc_onstart=spec['proc_onstart'], hdrbuf=0, imgbuf=0,
         loc_slot=bytes(loc_slot), vall=spec['vall'],
         font_acc=spec['font_acc'], timers=spec['timers'],
-        llevarmax=spec['llevarmax'])
-    return code, db, sym, spec, dbaddr, imgs, datadir
+        llevarmax=spec['llevarmax'], fx=fx_blob)
+    extras = {'imgs': imgs, 'datadir': datadir, 'fx': fx_blob,
+              'titulo': titulo_bin, 'psg': psg, 'psg_nom': psg_nom,
+              'aviso_psg': aviso_psg}
+    return code, db, sym, spec, dbaddr, extras
 
 
-def export_nex(game, salida, ancho=COLS, org=ORG, borde=0, datadir=None):
+def export_nex(game, salida, ancho=COLS, org=ORG, borde=0, datadir=None,
+               musicdir=None):
     """Compila el juego al motor nativo y lo empaqueta en un .nex arrancable.
     Sin zxbc, sin Boriel, sin NextBuild: todo en Python."""
     import empaqueta_nex
 
-    code, db, sym, spec, dbaddr, imgs, datadir = compila(
-        game, ancho=ancho, org=org, datadir=datadir)
+    code, db, sym, spec, dbaddr, ex = compila(
+        game, ancho=ancho, org=org, datadir=datadir, musicdir=musicdir)
+    imgs, datadir, fx_blob = ex['imgs'], ex['datadir'], ex['fx']
     plano = bytes(code) + bytes(db)
     fin = org + len(plano)
-    if fin > SP_NEX - 256:
+    if fin > SP_NEX - PILA_MIN:
         raise ValueError(
             'no cabe en el mapa plano: motor+datos llegan a &%04X y la pila esta '
-            'en &%04X. Hacen falta bancos para el texto.' % (fin, SP_NEX))
+            'en &%04X (con %d bytes de margen). Para mas sitio habria que mapear '
+            'RAM sobre la ROM y ganar los 16K de &0000-&3FFF.'
+            % (fin, SP_NEX, PILA_MIN))
 
     bancos = {}
     for i, b in enumerate(plano):
@@ -1000,15 +1263,20 @@ def export_nex(game, salida, ancho=COLS, org=ORG, borde=0, datadir=None):
     # una imagen por banco, a partir de NXIMG, y detras el banco negro
     for k, lid in enumerate(imgs):
         bancos[BANK_IMG + k] = open(os.path.join(datadir, lid + '.nxi'), 'rb').read()
-    if imgs:
-        bancos[BANK_IMG + len(imgs)] = bytes(16384)
+    if ex['titulo'] is not None:                             # portada: 3 bancos
+        base = BANK_IMG + len(imgs)
+        for k in range(3):
+            bancos[base + k] = ex['titulo'][k * 16384:(k + 1) * 16384]
 
     empaqueta_nex.build_nex(salida, bancos, pc=sym['start'], sp=SP_NEX,
                             border=borde)
     return {'codigo': len(code), 'datos': len(db), 'total': len(plano),
             'org': org, 'fin': fin, 'pc': sym['start'], 'sp': SP_NEX,
             'bancos': sorted(bancos), 'simbolos': sym, 'imagenes': imgs,
-            'inicio': spec['startloc'],
+            'inicio': spec['startloc'], 'fx': len(fx_blob),
+            'titulo': ex['titulo'] is not None,
+            'psg': len(ex['psg']), 'psg_nom': ex['psg_nom'],
+            'aviso_psg': ex['aviso_psg'],
             'localizaciones': len(spec['locations']),
             'objetos': len(spec['objects'])}
 
@@ -1047,11 +1315,14 @@ def main():
     ap.add_argument('--org', default=hex(ORG))
     ap.add_argument('--data', default=None,
                     help='carpeta con los .nxi/.nxp (por defecto temp/Next/data)')
+    ap.add_argument('--music', default=None,
+                    help='carpeta con la musica (por defecto music/ del juego)')
     a = ap.parse_args()
     game = yaml.safe_load(open(a.yaml, encoding='utf-8'))
     salida = a.nex or (a.yaml.rsplit('.', 1)[0] + '.nex')
     info = export_nex(game, salida, ancho=a.ancho, org=int(a.org, 0),
-                      datadir=a.data or datadir_por_defecto(a.yaml))
+                      datadir=a.data or datadir_por_defecto(a.yaml),
+                      musicdir=a.music or musicdir_por_defecto(a.yaml))
     print('NEX: %s' % salida)
     print('  motor+plataforma : %6d bytes' % info['codigo'])
     print('  base de datos    : %6d bytes' % info['datos'])
@@ -1059,8 +1330,14 @@ def main():
           % (info['total'], info['org'], info['fin']))
     print('  bancos           : %s   PC=&%04X  SP=&%04X'
           % (info['bancos'], info['pc'], info['sp']))
-    print('  %d localizaciones, %d objetos, %d imagenes'
-          % (info['localizaciones'], info['objetos'], len(info['imagenes'])))
+    print('  %d localizaciones, %d objetos, %d imagenes, %d bytes de FX'
+          % (info['localizaciones'], info['objetos'], len(info['imagenes']),
+             info['fx']))
+    if info['aviso_psg']:
+        print('  aviso: ' + info['aviso_psg'])
+    print('  portada: %s   musica: %s'
+          % ('si (3 bancos)' if info['titulo'] else 'no',
+             ('%s, %d bytes' % (info['psg_nom'], info['psg'])) if info['psg'] else 'no'))
 
 
 if __name__ == '__main__':
