@@ -567,10 +567,34 @@ def verificar_nex(game, salida, datadir=None, musicdir=None):
         cpu.step = _vigilado
         # se llama a show_loc_image directamente en vez de escribir "mirar": el
         # verbo cambia con el idioma y esto no
+        mem[sym['nxultimo']] = 255        # como si vinieramos de otra sala
         ejecutar(cpu, mem, sym['show_loc_image'], pasos=3000000)
-        cpu.step = paso
+        primera = barridos[0]
         cortes = [v for r, v in espia.flujo if r == 0x18][3::4]
-        revelado = {'barridos': barridos[0], 'cortes': cortes}
+        barridos[0] = 0
+        ejecutar(cpu, mem, sym['show_loc_image'], pasos=3000000)
+        segunda = barridos[0]             # misma sala: no deberia revelar otra vez
+        cpu.step = paso
+        revelado = {'barridos': primera, 'cortes': cortes, 'repetido': segunda}
+
+    # ---- ritmo de dibujado del texto ----
+    ritmo = None
+    if llego:
+        cuenta = {'chars': 0, 'barridos': 0}
+        paso = cpu.step
+
+        def _mide():
+            if cpu.pc == sym.get('char_lento'):
+                cuenta['chars'] += 1
+            if mem[cpu.pc] == 0x76:              # HALT = un barrido de espera
+                cuenta['barridos'] += 1
+            paso()
+
+        cpu.step = _mide
+        mem[sym['nxultimo']] = 255
+        ejecutar(cpu, mem, sym['describe'], pasos=4000000)
+        cpu.step = paso
+        ritmo = dict(cuenta)
 
     # ---- Layer 2: comprobar el banco activo y la paleta de la sala actual ----
     img = None
@@ -602,7 +626,8 @@ def verificar_nex(game, salida, datadir=None, musicdir=None):
             'fila_intro': fila_intro,
             'esp0': esp0,
         }
-    return info, llego, n, pant, bancos, jugadas, img, presentacion, titulo, revelado
+    return (info, llego, n, pant, bancos, jugadas, img, presentacion, titulo,
+            revelado, ritmo)
 
 
 def main():
@@ -626,7 +651,7 @@ def main():
     import tempfile
     salida = os.path.join(tempfile.gettempdir(), 'scriba_prueba_nativo.nex')
     (info, llego, pasos, pant, bancos, jugadas, img, presentacion, titulo,
-     revelado) = verificar_nex(
+     revelado, ritmo) = verificar_nex(
         game, salida, datadir=nn.datadir_por_defecto(path),
         musicdir=nn.musicdir_por_defecto(path))
     print('--- .nex: %s' % os.path.basename(salida))
@@ -649,9 +674,20 @@ def main():
         print('    --- revelado de la imagen al entrar en una sala')
         print('        %d barridos, lineas de corte %s'
               % (revelado['barridos'], revelado['cortes']))
+        print('        al repetir la misma imagen: %d barridos' % revelado['repetido'])
         esperado = list(range(0, 64, nn.REVELADO_PASO)) + [63]
         res.append(('la imagen se descubre de arriba abajo, no de golpe',
                     revelado['cortes'] == esperado))
+        res.append(('...y no se vuelve a revelar si ya estaba puesta esa imagen',
+                    revelado['repetido'] == 0))
+
+    if ritmo and ritmo['chars']:
+        print()
+        print('    --- ritmo de dibujado (describir la sala)')
+        print('        %d caracteres, %d barridos -> %.2f s a 50 Hz'
+              % (ritmo['chars'], ritmo['barridos'], ritmo['barridos'] / 50.0))
+        res.append(('el texto se escribe a ritmo, no de golpe',
+                    ritmo['barridos'] >= ritmo['chars'] // nn.TEXTO_RITMO))
 
     if titulo:
         print()

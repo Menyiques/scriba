@@ -41,6 +41,7 @@ FILAS_CON_IMAGEN = 15   # lineas utiles de presentacion con imagen (8..23)
 FILAS_SIN_IMAGEN = 22   # ...y sin imagen (0..23)
 PSG_MAX = 4480      # tope de musica que cabe plana (igual que el export BASIC)
 REVELADO_PASO = 4   # lineas por barrido al descubrir la imagen (64/4 = 16 frames)
+TEXTO_RITMO = 4     # caracteres por barrido al escribir (~2 s una descripcion)
 FILAS = 24
 
 
@@ -171,11 +172,22 @@ nxrev_l:
 ; en negro al que apuntar: cuando Layer 2 esta apagado no se ve nada, y ese banco
 ; eran 16 KB de .nex que no pintaban nada.
 NXNOPIC:
+        ld    a,255
+        ld    (nxultimo),a     ; al volver hay que revelarla de nuevo
         jp    nxl2off
 
 ; NXPIC: A = slot de imagen. Apunta Layer 2 a su banco, sube su paleta y lo
 ; enciende.
 NXPIC:
+        ld    b,a
+        ld    a,(nxultimo)
+        cp    b
+        ret   z                ; ya esta esa misma imagen puesta: no tocar nada.
+                               ; Al acabar la intro se describe la sala inicial,
+                               ; que es la que ya se estaba viendo, y volver a
+                               ; revelarla canta mucho.
+        ld    a,b
+        ld    (nxultimo),a
         push  af
         ld    d,&12
         add   a,NXIMG
@@ -362,6 +374,8 @@ nxmh:    defb 0            ; mascara AND del primer byte de pantalla
 nxml:    defb 0            ; mascara AND del segundo
 nxfil:   defb 0            ; contador de lineas de pixeles
 nxpcnt:  defb 0            ; lineas desplazadas desde la ultima pausa
+nxritmo: defb 0            ; caracteres impresos en el barrido actual
+nxultimo: defb 255         ; slot de imagen que hay puesta (255 = ninguna)
 nxcaps:  defb 0            ; CAPS SHIFT pulsado en el ultimo escaneo
 
 ; ---------------------------------------------------------------------------
@@ -471,6 +485,25 @@ nx_bs:  ld    a,(nxcol)
         dec   b
         ld    a,b
         ld    (nxcol),a
+        ret
+
+; ---------------------------------------------------------------------------
+; char_lento: imprime un caracter y marca el paso. Cada NXLENTO caracteres se
+; espera un barrido, asi que el texto se dibuja a un ritmo fijo en lugar de
+; aparecer entero de golpe: una descripcion de sala tarda un par de segundos y
+; una respuesta corta sigue siendo instantanea. El eco de lo que teclea el
+; jugador NO pasa por aqui (usa char_raw), faltaria mas.
+; ---------------------------------------------------------------------------
+char_lento:
+        call  char_raw
+        ld    a,(nxritmo)
+        inc   a
+        cp    NXLENTO
+        jr    c,nxr_g
+        ei
+        halt
+        xor   a
+nxr_g:  ld    (nxritmo),a
         ret
 
 ; ---------------------------------------------------------------------------
@@ -990,6 +1023,13 @@ def _engine_next(con_imagenes, con_titulo=False):
            '        call  show_loc_image   ; imagen de la sala inicial ya en la intro\n' +
            src[k:])
 
+    # Solo wrap_print pasa a char_lento: es el camino por el que salen los
+    # mensajes. char_raw lo siguen usando el eco del teclado y print_dec.
+    a = src.index(chr(10) + 'wrap_print:')
+    b = src.index(chr(10) + 'char_raw:', a)
+    src = (src[:a] + src[a:b].replace('call  char_raw', 'call  char_lento') +
+           src[b:])
+
     i = src.index(chr(10) + 'show_title:') + 1
     j = src.index(chr(10) + 'set_title_pal:', i) + 1
     src = src[:i] + ('show_title:\n        jp    NXTIT\n\n' if con_titulo
@@ -1066,7 +1106,8 @@ def prefijo(org, db_base, nimg=0, titulo=False):
          'NXTITLE equ %d' % (BANK_IMG + nimg),   # portada: 3 bancos seguidos
          'NXPALPG equ %d' % (2 * (BANK_IMG + nimg + (3 if titulo else 0))),
          'NXPALTIT equ %d' % nimg,              # slot de la paleta de la portada
-         'NXREVPASO equ %d' % REVELADO_PASO]    # lineas por barrido al revelar
+         'NXREVPASO equ %d' % REVELADO_PASO,    # lineas por barrido al revelar
+         'NXLENTO equ %d' % TEXTO_RITMO]        # caracteres por barrido al escribir
     for n in ('SCANTGO', 'SEXITS', 'SNOUND', 'SSEE', 'STAKE', 'SDROP',
               'SNOTHERE', 'SNOTCARR', 'SINVEN', 'SEMPTY', 'SNOTAKE', 'SDARK',
               'SSCORE', 'SHEAVY', 'SSCOREP', 'SSCORES',
