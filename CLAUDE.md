@@ -140,6 +140,7 @@ Formato `.pru`:
 | `$ PUNTOS = 110` | una variable (`=`, `<>`, `>`, `<`, `>=`, `<=`) |
 | `@ @playa` | dónde está el jugador |
 | `% #linterna = INVEN` | dónde está un objeto: `@sala`, `INVEN`, `PUESTO`, `NADA` o `#contenedor` |
+| `* 40 I` | repite una orden 40 veces (dejar pasar turnos) |
 | `<< fichero : 21` | mete las 21 primeras órdenes de un walkthrough |
 
 Los dos aceptan `-v` (cuenta cada orden según pasa: dónde acaba el jugador, la
@@ -149,8 +150,13 @@ del emulador **según sale**, no al terminar, así que con `-v` se ve la partida
 avanzar en vivo.
 
 El emulador se corta en cuanto el guion llega al final, así que `--frames` solo
-tiene que ser generoso, no exacto: las 288 órdenes de *Tifón Negro* tardan unos
-14 s.
+tiene que ser generoso, no exacto: las 690 órdenes de *Tifón Negro* tardan unos
+30 s. El texto se compara **sin acentos**, que en pantalla son códigos propios
+de la fuente.
+
+El guion va en su propio banco, paginado sobre la ROM en `&2000`: caben 8 KB de
+teclas. Si no cabe, la batería lo dice; `* 40 I` en vez de repetir una orden
+larga cuarenta veces suele bastar.
 
 Las comprobaciones miran la respuesta a la **última orden**, no la pantalla
 entera. Los nombres de variable se escriben sin guiones bajos (`_PILAS_CARGA`
@@ -207,7 +213,7 @@ se comprueba como `$ PILASCARGA`), que es como los indexa el motor.
 
 ## Estado
 
-Rama de trabajo: `fix/predicados-objeto-v2.44`. Scriba 2.47.
+Rama de trabajo: `fix/predicados-objeto-v2.44`. Scriba 2.48.
 
 El camino `.nex` con Boriel está **parado**: `next_export.moduliza_texto()` está
 escrito pero no lo llama nadie, bloqueado por `EmbeddedMmuSwitchAssembleError`

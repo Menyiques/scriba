@@ -20,6 +20,7 @@ Formato del fichero de pruebas (.pru), una cosa por linea:
     % #linterna = INVEN         donde tiene que estar un objeto: una
                                 localizacion (@sala), INVEN, PUESTO, NADA o un
                                 contenedor (#objeto)
+    * 40 ESPERAR                repite una orden 40 veces (dejar pasar turnos)
     << fichero                  mete las ordenes de otro fichero (un walkthrough)
 
 Las comprobaciones miran el estado de DESPUES de la ultima orden. El texto se
@@ -37,6 +38,7 @@ import os
 import re
 import sys
 import tempfile
+import unicodedata
 import time
 
 import yaml
@@ -54,7 +56,12 @@ CMP = {'=': lambda a, b: a == b, '==': lambda a, b: a == b,
 
 
 def _norm(t):
-    return ' '.join(str(t).split()).lower()
+    """Para comparar texto: sin mayusculas, sin acentos y con un solo espacio.
+    Lo de los acentos no es pereza: en pantalla salen como codigos propios de
+    la fuente del juego, y obligar a escribirlos en el .pru solo sirve para que
+    una prueba falle por una tilde."""
+    t = unicodedata.normalize('NFD', ' '.join(str(t).split()).lower())
+    return ''.join(c for c in t if unicodedata.category(c) != 'Mn')
 
 
 class Juego:
@@ -262,7 +269,16 @@ def corre(juego, path_pru, nivel=0, salida=None):
             n = 0
             cuenta('(arranque)')
         try:
-            if linea.startswith('<<'):
+            if linea.startswith('*'):
+                # '* 40 ESPERAR' repite una orden 40 veces. Dejar pasar
+                # turnos es lo que mas se repite en una bateria, y el
+                # guion viaja DENTRO del .nex: conviene que ocupe poco.
+                m = re.match(r'\*\s*(\d+)\s+(.+)', linea)
+                if not m:
+                    raise ValueError('no entiendo la repeticion: %s' % linea)
+                for _ in range(int(m.group(1))):
+                    mete(m.group(2).strip())
+            elif linea.startswith('<<'):
                 # "<< fichero" mete todas las ordenes; "<< fichero : 21" solo las
                 # 21 primeras, que sirve para dejar la partida en un punto
                 # concreto sin repetir medio walkthrough en cada prueba.

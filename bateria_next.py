@@ -31,6 +31,7 @@ FORMATO DEL FICHERO DE PRUEBAS (.pru) -- el mismo que probar_juego.py
     % #linterna = INVEN         donde tiene que estar un objeto: una
                                 localizacion (@sala), INVEN, PUESTO, NADA o un
                                 contenedor (#objeto)
+    * 40 ESPERAR                repite una orden 40 veces (dejar pasar turnos)
     << fichero                  mete las ordenes de otro fichero (un walkthrough)
     << fichero : 21             solo las 21 primeras
 
@@ -64,6 +65,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import threading
 import time
 
@@ -89,7 +91,12 @@ FRAMES_ARRANQUE = 240
 
 
 def _norm(t):
-    return ' '.join(str(t).split()).lower()
+    """Para comparar texto: sin mayusculas, sin acentos y con un solo espacio.
+    Lo de los acentos no es pereza: en pantalla salen como codigos propios de
+    la fuente del juego, y obligar a escribirlos en el .pru solo sirve para que
+    una prueba falle por una tilde."""
+    t = unicodedata.normalize('NFD', ' '.join(str(t).split()).lower())
+    return ''.join(c for c in t if unicodedata.category(c) != 'Mn')
 
 
 def _mapa_acentos(pt):
@@ -153,6 +160,16 @@ def lee_pru(path):
         if linea.startswith('==='):
             actual = (linea.lstrip('= ').strip() or '(sin nombre)', [])
             pruebas.append(actual)
+            continue
+        if linea.startswith('*'):
+            # '* 40 ESPERAR' repite una orden 40 veces. Dejar pasar
+            # turnos es lo que mas se repite en una bateria, y el
+            # guion viaja DENTRO del .nex: conviene que ocupe poco.
+            m = re.match(r'\*\s*(\d+)\s+(.+)', linea)
+            if not m:
+                raise ValueError('no entiendo la repeticion: %s' % linea)
+            for _ in range(int(m.group(1))):
+                pon('orden', m.group(2).strip())
             continue
         if linea.startswith('<<'):
             arg, tope = linea[2:].strip(), None
@@ -682,10 +699,24 @@ def main():
 
     nex = os.path.join(tempfile.gettempdir(), 'scriba_bateria_next.nex')
     t0 = time.time()
-    info = nn.export_nex(game, nex,
-                         datadir=os.path.join(raiz, 'temp', 'Next', 'data'),
-                         musicdir=os.path.join(raiz, 'music'),
-                         guion=guion)
+    try:
+        info = nn.export_nex(game, nex,
+                             datadir=os.path.join(raiz, 'temp', 'Next', 'data'),
+                             musicdir=os.path.join(raiz, 'music'),
+                             guion=guion)
+    except ValueError as e:
+        # El guion viaja DENTRO del .nex, asi que una bateria larga puede no
+        # caber. Decirlo con todas las letras en vez de soltar el error del
+        # exportador, que habla de direcciones y no de pruebas.
+        if 'no cabe en el mapa plano' not in str(e):
+            raise
+        print('\nEl guion de la bateria (%d bytes, %d ordenes) no cabe en el .nex '
+              'junto al juego.\n%s\n\nSale mas barato acortarlo que agrandar el '
+              'mapa:\n'
+              '  - usa \'* 40 I\' en vez de repetir una orden larga 40 veces\n'
+              '    (cada orden ocupa sus letras + 1, y I pasa turno igual)\n'
+              '  - parte la bateria en dos ficheros .pru' % (len(guion), nordenes, e))
+        sys.exit(2)
     print('compilado  %d loc, %d obj, %d imagenes; %d bytes de motor + %d de '
           'datos; guion de %d bytes (%.1fs)'
           % (info['localizaciones'], info['objetos'], len(info['imagenes']),

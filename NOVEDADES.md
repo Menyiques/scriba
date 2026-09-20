@@ -18,6 +18,31 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
 
 ---
 
+## 2.48 — 2026-09-20 — El guion de la bateria, fuera del mapa plano
+
+### Novedades
+- **El guion del modo prueba viaja en su propio banco**, paginado sobre la ROM
+  en `&2000-&3FFF` (la ranura de abajo no vale: `nxsubepal` la usa un instante
+  para leer las paletas). Antes iba en el mapa plano y una bateria de 690
+  ordenes —6,5 KB de teclas— no cabia junto al juego; ahora el tope son 8 KB de
+  guion y el binario no se entera. Es, literalmente, el truco de mapear RAM
+  sobre la ROM que el Next permite.
+- **`* 40 ORDEN` en el `.pru`**: repite una orden N veces. Dejar pasar turnos es
+  lo que mas se repite en una bateria y el guion viaja dentro del `.nex`, asi
+  que conviene que ocupe poco (`* 103 I` son 206 bytes; 103 `PUNTUACION`, 1133).
+- **Las comprobaciones de texto ya no miran los acentos.** En pantalla los
+  acentos son codigos propios de la fuente del juego y obligar a escribirlos en
+  el `.pru` solo servia para que una prueba fallara por una tilde.
+- Cuando el guion no cabe, la bateria lo dice con todas las letras en vez de
+  soltar el error del exportador, que habla de direcciones y no de pruebas.
+
+### Correcciones
+- **La puntuacion salia pegada al eco de la orden** en el motor nativo
+  (`puntuacionPuntuacion: 25`): el condact `SCORE` imprimia sin saltar de linea
+  antes, al reves que `MESSAGE` y que el export de 128K.
+
+---
+
 ## 2.47 — 2026-09-20 — Baterias de prueba sobre el .nex real
 
 ### Novedades

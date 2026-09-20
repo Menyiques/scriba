@@ -1318,7 +1318,13 @@ def _modo_prueba(src, guion):
     # 4. la CPU, a 28 MHz (NextREG 7 = 3): ocho veces mas partida por barrido
     src = cambia('detect128:\n        xor   a\n',
                  'detect128:\n'
-                 '        ld    bc,&243B      ; modo prueba: CPU a 28 MHz\n'
+                 '        ld    bc,&243B      ; modo prueba: el guion, sobre la ROM\n'
+                 '        ld    a,&51\n'
+                 '        out   (c),a\n'
+                 '        ld    b,&25\n'
+                 '        ld    a,NXGUIONPG\n'
+                 '        out   (c),a\n'
+                 '        ld    bc,&243B      ; y la CPU a 28 MHz\n'
                  '        ld    a,7\n'
                  '        out   (c),a\n'
                  '        ld    b,&25\n'
@@ -1338,9 +1344,19 @@ def _modo_prueba(src, guion):
 
     if faltan:
         raise ValueError('modo prueba: no encuentro ' + '; '.join(faltan))
-    return (('NXTRAZA equ &%04X\nNXSP equ &%04X\n' % (PUERTO_TRAZA, SP_NEX)) +
-            src + PRUEBA_ASM +
-            '\n' + _datos_asm('NXGUION', bytes(guion) + b'\x00') + '\n')
+    # El guion NO va en el mapa plano: una bateria larga son varios KB y ahi no
+    # sobran. Va en su propio banco, paginado sobre la ROM en &2000, que en modo
+    # prueba no hace falta para nada.
+    return (('NXTRAZA equ &%04X\nNXSP equ &%04X\nNXGUION equ &2000\n'
+             % (PUERTO_TRAZA, SP_NEX)) + src + PRUEBA_ASM + '\n')
+
+
+def banco_guion(nimg, titulo):
+    """Banco de 16K donde viaja el guion del modo prueba: el siguiente al de
+    las paletas. Su primera mitad se pagina sobre la ROM en &2000-&3FFF, que es
+    sitio que el motor no usa para nada -- la ranura de abajo, &0000-&1FFF, si
+    la usa un instante nxsubepal para leer las paletas."""
+    return BANK_IMG + nimg + (3 if titulo else 0) + 1
 
 
 def prefijo(org, db_base, nimg=0, titulo=False, borde=7):
@@ -1352,6 +1368,7 @@ def prefijo(org, db_base, nimg=0, titulo=False, borde=7):
          'NXIMG equ %d' % BANK_IMG,         # primer banco de imagen
          'NXTITLE equ %d' % (BANK_IMG + nimg),   # portada: 3 bancos seguidos
          'NXPALPG equ %d' % (2 * (BANK_IMG + nimg + (3 if titulo else 0))),
+         'NXGUIONPG equ %d' % (2 * banco_guion(nimg, titulo)),
          'NXPALTIT equ %d' % nimg,              # slot de la paleta de la portada
          'NXREVPASO equ %d' % REVELADO_PASO,    # lineas por barrido al revelar
          'NXLENTO equ %d' % TEXTO_RITMO,        # caracteres por barrido al escribir
@@ -1611,7 +1628,8 @@ def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None,
         llevarmax=spec['llevarmax'], fx=fx_blob)
     extras = {'imgs': imgs, 'datadir': datadir, 'fx': fx_blob, 'borde': borde,
               'titulo': titulo_bin, 'titulo_pal': titulo_pal, 'paletas': paletas,
-              'psg': psg, 'psg_nom': psg_nom, 'aviso_psg': aviso_psg}
+              'psg': psg, 'psg_nom': psg_nom, 'aviso_psg': aviso_psg,
+              'guion': None if guion is None else bytes(guion) + b'\x00'}
     return code, db, sym, spec, dbaddr, extras
 
 
@@ -1650,6 +1668,14 @@ def export_nex(game, salida, ancho=COLS, org=ORG, borde=None, datadir=None,
         base = BANK_IMG + len(imgs)
         for k in range(3):
             bancos[base + k] = ex['titulo'][k * 16384:(k + 1) * 16384]
+    if ex['guion'] is not None:            # modo prueba: el guion, en su banco
+        if len(ex['guion']) > 8192:
+            raise ValueError(
+                'el guion de la bateria son %d bytes y en su pagina caben 8192. '
+                'Acortalo (p. ej. "* 40 I" en vez de repetir una orden larga) o '
+                'partelo en dos ficheros .pru' % len(ex['guion']))
+        bancos[banco_guion(len(imgs), ex['titulo'] is not None)] = \
+            ex['guion'].ljust(16384, b'\x00')
     if ex['paletas'] or ex['titulo'] is not None:            # banco de paletas
         pal = ex['paletas'] + (ex['titulo_pal'] or b'')
         if len(pal) > 16384:
