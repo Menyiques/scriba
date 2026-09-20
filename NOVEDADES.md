@@ -58,6 +58,14 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
   ve que haga falta. Ademas se corta a los `--paciencia` segundos sin noticias
   (120 por defecto) y se cuenta lo que dijo el emulador, con la pista de la
   tarjeta si es lo que falla. Opciones nuevas: `--bajar-sd`, `--paciencia`.
+- **Arreglado en Windows**: el puerto magico sale por la salida de error de
+  jnext y alli el runtime de C convierte cada `\n` en `\r\n`, asi que las marcas
+  del volcado llegaban como `\r\n#RESET\r\n` y no casaba ninguna: la bateria se
+  tiraba la partida entera sin enterarse de nada y daba las 12 pruebas por no
+  alcanzadas. Ahora se tiran los retornos de carro al descodificar. De paso, el
+  aviso de la tarjeta SD mira donde la busca jnext de verdad (`$JNEXT_CONFIG_DIR`,
+  `$HOME/.jnext` y, si HOME no esta puesta, `.jnext` de la carpeta desde la que
+  se lance), no la carpeta del usuario a secas.
 - **Y va seis veces mas rapida**: el emulador se corta en cuanto el guion llega
   al final, en lugar de seguir barriendo hasta el tope. Las 288 ordenes de
   *Tifon Negro* pasan de 91 s a 14 s.

@@ -218,31 +218,71 @@ def busca_jnext(ruta=None):
         'https://github.com/jorgegv/jnext/releases')
 
 
+# Las marcas del volcado. El \r es de rigor: el motor manda 13 y 10 para saltar
+# de linea, y ademas en Windows el runtime de C convierte en \r\n cada \n que
+# jnext escribe, o sea que una marca puede llegar como \r\n#RESET\r\n. Se tiran
+# los retornos al descodificar y aun asi las expresiones los toleran, que esto
+# ya costo una tarde.
 FOTO_RE = re.compile(
-    r'\n#VARS ([0-9A-F ]*)\n#OBJLOC ([0-9A-F ]*)\n#OBJIN ([0-9A-F ]*)\n#LOC ([0-9A-F ]*)\n')
-RESET_RE = re.compile(r'\n#RESET\n')
+    r'\r?\n#VARS ([0-9A-F ]*)\r?\n#OBJLOC ([0-9A-F ]*)\r?\n#OBJIN ([0-9A-F ]*)'
+    r'\r?\n#LOC ([0-9A-F ]*)\r?\n')
+RESET_RE = re.compile(r'\r?\n#RESET\r?\n')
+FIN_RE = re.compile(r'\r?\n#FIN\r?\n')
+
+
+def descodifica(trozo, acc):
+    """Bytes del puerto -> texto. Los acentos vienen en 224-239, y el retorno
+    de carro sobra: la linea la corta el 10 que va detras."""
+    return ''.join(acc.get(b, chr(b) if 10 <= b < 127 else '?')
+                   for b in trozo if b != 13)
 
 
 def _hex(s):
     return [int(x, 16) for x in s.split()]
 
 
-def ruta_sdcard_por_defecto():
-    """Donde deja jnext la imagen de tarjeta SD que se baja el solo."""
-    return os.path.join(os.path.expanduser('~'), '.jnext', 'sdcard',
-                        'cspect-next-1gb-fixed.img')
+def rutas_sdcard():
+    """Donde puede estar la imagen de tarjeta SD, con las mismas reglas que usa
+    jnext (sdcard_provisioner.cpp): $JNEXT_CONFIG_DIR, si no $HOME/.jnext, y si
+    no hay HOME, .jnext en el directorio desde el que se lance. Ojo a lo
+    ultimo: en Windows HOME no suele estar puesta, asi que la imagen acaba en
+    la carpeta desde la que se ejecuto jnext la primera vez, no en la del
+    usuario."""
+    dirs = []
+    d = os.environ.get('JNEXT_CONFIG_DIR')
+    if d:
+        dirs.append(d)
+    h = os.environ.get('HOME')
+    if h:
+        dirs.append(os.path.join(h, '.jnext'))
+    else:
+        dirs.append(os.path.join(os.getcwd(), '.jnext'))
+    # y por si acaso, la carpeta del usuario, que es donde la busca todo el
+    # mundo cuando no la encuentra
+    casa = os.path.join(os.path.expanduser('~'), '.jnext')
+    if casa not in dirs:
+        dirs.append(casa)
+    return [os.path.join(d, 'sdcard', 'cspect-next-1gb-fixed.img') for d in dirs]
+
+
+def hay_sdcard():
+    return any(os.path.exists(r) for r in rutas_sdcard())
 
 
 def pista_sdcard(sdcard):
     """Lo que hay que hacer si el emulador no arranca por falta de tarjeta."""
-    if sdcard or os.path.exists(ruta_sdcard_por_defecto()):
+    if sdcard or hay_sdcard():
         return ''
     return ('\nLo mas probable: jnext no tiene todavia la imagen de tarjeta SD, '
-            'de donde\nsaca las ROMs igual que una maquina de verdad. Cualquiera '
-            'de estas tres vale:\n'
-            '  - ejecuta jnext a mano una vez y acepta la descarga\n'
+            'de donde\nsaca las ROMs igual que una maquina de verdad. He mirado '
+            'en:\n'
+            + ''.join('  %s\n' % r for r in rutas_sdcard()) +
+            'Cualquiera de estas tres vale:\n'
             '  - vuelve a lanzar la bateria con --bajar-sd (son 1 GB)\n'
-            '  - pasale una imagen que ya tengas con --sdcard FICHERO\n')
+            '  - pasale una imagen que ya tengas con --sdcard FICHERO\n'
+            '  - ejecuta jnext a mano una vez y acepta la descarga (pero ojo: si '
+            'HOME\n    no esta puesta, la deja en la carpeta desde la que lo '
+            'lances)\n')
 
 
 def ejecuta(jnext, nex, frames, sdcard=None, alvuelo=None, pt=False,
@@ -314,8 +354,7 @@ def ejecuta(jnext, nex, frames, sdcard=None, alvuelo=None, pt=False,
                     if not trozo:
                         break
                     rearma()
-                    texto = ''.join(acc.get(b, chr(b) if 10 <= b < 127 else '?')
-                                    for b in trozo)
+                    texto = descodifica(trozo, acc)
                     partes.append(texto)
                     if alvuelo:
                         alvuelo(texto)
@@ -323,7 +362,7 @@ def ejecuta(jnext, nex, frames, sdcard=None, alvuelo=None, pt=False,
                     # emulador sigue barriendo hasta su tope. Como ya no va a
                     # salir nada mas, se corta aqui: el tope de barridos solo
                     # tiene que ser generoso, no exacto.
-                    if '\n#FIN\n' in ''.join(partes[-2:]):
+                    if FIN_RE.search(''.join(partes[-2:])):
                         p.kill()
                         break
             finally:
@@ -354,7 +393,7 @@ def trocea(texto):
     se imprimio hasta esa foto, o sea la respuesta a la orden que la precede."""
     pruebas = []
     for trozo in RESET_RE.split(texto)[1:]:
-        trozo = trozo.split('\n#FIN\n')[0]
+        trozo = FIN_RE.split(trozo)[0]
         pasos, ini = [], 0
         for m in FOTO_RE.finditer(trozo):
             pasos.append((trozo[ini:m.start()], _foto(m)))
@@ -656,11 +695,14 @@ def main():
         FRAMES_ARRANQUE * max(1, len(pruebas)) + FRAMES_POR_ORDEN * nordenes)
     sdcard = _opcion(argv, '--sdcard')
     bajar = '--bajar-sd' in argv
-    if not sdcard and not bajar and not os.path.exists(ruta_sdcard_por_defecto()):
-        print('AVISO      jnext no parece tener la imagen de tarjeta SD en %s.\n'
-              '           De ahi saca las ROMs, igual que una maquina de verdad.\n'
-              '           Si no arranca: --bajar-sd (son 1 GB) o --sdcard FICHERO.'
-              % ruta_sdcard_por_defecto())
+    if not sdcard and not bajar and not hay_sdcard():
+        print('AVISO      no encuentro la imagen de tarjeta SD de jnext, de donde\n'
+              '           saca las ROMs igual que una maquina de verdad. He mirado\n'
+              + ''.join('             %s\n' % r for r in rutas_sdcard())
+              + '           Si no arranca: --bajar-sd (son 1 GB) o --sdcard FICHERO.\n'
+                '           (jnext la busca en $HOME/.jnext, y si HOME no esta\n'
+                '           puesta -lo normal en Windows- en .jnext de la carpeta\n'
+                '           desde la que se le lance.)', end='')
     print('jugando    %d barridos de emulador como mucho\n' % frames)
     sys.stdout.flush()
 
@@ -673,13 +715,21 @@ def main():
     tardado = time.time() - t0
     if traza_out:
         io.open(traza_out, 'w', encoding='utf-8').write(texto)
-    if '#RESET' not in texto:
-        # Ni la primera partida empezo: no tiene sentido dar por fallada cada
-        # prueba, lo unico que importa es lo que dijo el emulador.
-        print('\nEl emulador no llego a arrancar el juego (%.0fs). Dijo esto:\n'
-              % tardado)
-        print(texto.strip()[:2000] or '(nada)')
+    if rel.t < 0:
+        # Ni una sola partida llego a empezar: no tiene sentido dar por fallada
+        # cada prueba una por una, lo unico que importa es que salio de ahi.
+        print('\nNinguna partida llego a empezar (%.0fs). Esto es lo que solto '
+              'el emulador:\n' % tardado)
+        print((texto.strip()[:2000] or '(nada)'))
         print(pista_sdcard(sdcard))
+        if texto.strip() and '#RESET' in texto:
+            # Salio traza, pero sin las marcas donde se esperaban: no es el
+            # emulador, es que la traza no se esta leyendo bien.
+            print('OJO: la traza trae "#RESET" pero no donde se espera, o sea '
+                  'que el fallo es de la bateria leyendola, no del juego.\n'
+                  'Guardala con --traza traza.txt y mandala.')
+        elif not traza_out:
+            print('Si hace falta mirarla entera: --traza traza.txt')
         sys.exit(1)
     rel.cierra()
 
@@ -693,7 +743,7 @@ def main():
             print('        FALLA %s' % detalle)
         if rel.fallos:
             print()
-    if '#FIN' not in texto:
+    if not FIN_RE.search(texto):
         print('AVISO: el guion no llego al final en %d barridos; reintenta con '
               '--frames %d' % (frames, frames * 2))
     print('%d comprobacion(es) en %d prueba(s), %s  (%.0fs de emulador)'

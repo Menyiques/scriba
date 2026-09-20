@@ -103,10 +103,19 @@ python bateria_next.py 'Games\Operacion Tifon Negro\Operacion Tifon Negro.yaml' 
   Z80N. Se baja de <https://github.com/jorgegv/jnext/releases>; la ruta va en
   `--jnext`, en la variable de entorno `JNEXT` o en el `PATH`.
 
+**La traza llega con los saltos de línea del sistema.** El puerto mágico sale
+por la salida de error de jnext, y en Windows el runtime de C convierte cada
+`\n` en `\r\n`, así que una marca llega como `\r\n#RESET\r\n`. `descodifica()`
+tira los retornos de carro y las expresiones los toleran igualmente. Si se
+vuelve a tocar el troceo de la traza, **probarlo con CRLF**, no solo en Linux:
+esto costó una tarde.
+
 **La primera vez en una máquina, jnext no tiene la imagen de tarjeta SD** — de
 ahí saca las ROMs, igual que una máquina real — y pregunta si se la baja. Se
 resuelve con `--bajar-sd` (1 GB), con `--sdcard FICHERO` si ya se tiene una, o
-ejecutando jnext a mano una vez. `bateria_next.py` lanza el emulador con la
+ejecutando jnext a mano una vez. Ojo a **dónde** la deja: jnext lee `$HOME`, y
+si no está puesta —lo normal en Windows— usa `.jnext` **de la carpeta desde la
+que se le lance**, no la del usuario. `$JNEXT_CONFIG_DIR` manda sobre las dos. `bateria_next.py` lanza el emulador con la
 entrada estándar cerrada a propósito, para que esa pregunta se responda sola
 que no y salga con su mensaje en vez de quedarse colgada esperando una tecla
 que nadie ve que haga falta; y corta si pasan `--paciencia` segundos (120 por
