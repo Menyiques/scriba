@@ -171,7 +171,7 @@ se comprueba como `$ PILASCARGA`), que es como los indexa el motor.
 | `img/Original/<id>.png\|jpg` | máster, y fallback de todo | lo que sea; se autocontrasta |
 | `img/Spectrum/<id>.scr` | 48/128K | 6912 o 2304 bytes |
 | `img/Spectrum/<id>.jpg\|png\|bmp` | 48/128K | **4:1** (256×64); se convierte **sin** autocontraste |
-| `temp/Next/data/<id>.nxi` | Next | Layer 2, lo genera el editor |
+| `temp/Next/data/<id>.nxi` | Next | Layer 2, lo genera el editor; manda la grafía **con** arroba |
 
 El nombre vale **con arroba y sin ella** (`@playa.jpg` = `playa.jpg`): los
 másteres se guardan con la del id y el arte de `img/Spectrum`, históricamente,
@@ -241,7 +241,7 @@ los másteres de `img/Original`, en cambio, se escalan sin protestar. Margen del
 
 ## Estado
 
-Rama de trabajo: `fix/predicados-objeto-v2.44`. Scriba 2.51.
+Rama de trabajo: `fix/predicados-objeto-v2.44`. Scriba 2.52.
 
 El camino `.nex` con Boriel está **parado**: `next_export.moduliza_texto()` está
 escrito pero no lo llama nadie, bloqueado por `EmbeddedMmuSwitchAssembleError`

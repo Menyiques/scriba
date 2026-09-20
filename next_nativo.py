@@ -1504,19 +1504,32 @@ def musicdir_por_defecto(yaml_path):
     return os.path.join(os.path.dirname(os.path.abspath(yaml_path)), 'music')
 
 
+def nombre_imagen(datadir, lid):
+    """Nombre base del .nxi/.nxp de una localizacion, o None si no esta listo.
+
+    Se prueban las dos grafias del id, con y sin la arroba, porque las hay de
+    las dos epocas: el editor las escribe con ella desde que existe la
+    convencion de prefijos, y antes no. Cuando estan las dos manda la de la
+    arroba, que es la que el editor mantiene al dia; la otra es un resto de
+    antes y dejarla ganar es como acabo la version portuguesa de Tifon Negro
+    sacando las imagenes de junio, con su borde blanco.
+    """
+    pelado = lid.lstrip('@')
+    for nombre in ('@' + pelado, pelado):
+        nxi = os.path.join(datadir, nombre + '.nxi')
+        nxp = os.path.join(datadir, nombre + '.nxp')
+        if (os.path.isfile(nxi) and os.path.getsize(nxi) == 16384
+                and os.path.isfile(nxp)):
+            return nombre
+    return None
+
+
 def _imagenes(c, datadir):
     """Localizaciones con imagen lista: <id>.nxi de 16K (un banco exacto) y su
     paleta <id>.nxp. Mismo criterio que el export Next en BASIC."""
     if not datadir or not os.path.isdir(datadir):
         return []
-    out = []
-    for lid in c.locids:
-        nxi = os.path.join(datadir, lid + '.nxi')
-        nxp = os.path.join(datadir, lid + '.nxp')
-        if (os.path.isfile(nxi) and os.path.getsize(nxi) == 16384
-                and os.path.isfile(nxp)):
-            out.append(lid)
-    return out
+    return [lid for lid in c.locids if nombre_imagen(datadir, lid)]
 
 
 def _paleta256(path):
@@ -1540,7 +1553,9 @@ def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None,
 
     # imagenes: una por localizacion, cada una en su banco de 16K
     imgs = _imagenes(c, datadir)
-    paletas = b''.join(_paleta256(os.path.join(datadir, lid + '.nxp')) for lid in imgs)
+    paletas = b''.join(
+        _paleta256(os.path.join(datadir, nombre_imagen(datadir, lid) + '.nxp'))
+        for lid in imgs)
 
     # Efectos de sonido por AY: se embeben SOLO los que dispara algun PLAY. El
     # reloj del AY del Next es el del Spectrum, 1,7734 MHz, que es el valor por
@@ -1663,7 +1678,8 @@ def export_nex(game, salida, ancho=COLS, org=ORG, borde=None, datadir=None,
 
     # una imagen por banco, a partir de NXIMG, y detras el banco negro
     for k, lid in enumerate(imgs):
-        bancos[BANK_IMG + k] = open(os.path.join(datadir, lid + '.nxi'), 'rb').read()
+        bancos[BANK_IMG + k] = open(
+            os.path.join(datadir, nombre_imagen(datadir, lid) + '.nxi'), 'rb').read()
     if ex['titulo'] is not None:                             # portada: 3 bancos
         base = BANK_IMG + len(imgs)
         for k in range(3):

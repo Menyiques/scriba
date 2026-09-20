@@ -18,6 +18,19 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
 
 ---
 
+## 2.52 — 2026-09-21 — Las imagenes del Next, por el nombre bueno
+
+### Correcciones
+- **El Next cogia imagenes viejas cuando el id de la localizacion no llevaba
+  arroba.** Los `.nxi`/`.nxp` se buscaban con el id tal cual, y en `temp/Next/
+  data` conviven las dos epocas: las que escribe el editor hoy, con arroba, y
+  un resto de antes de la convencion de prefijos, sin ella. Un juego con ids
+  sin arroba -la version portuguesa de Tifon Negro- se llevaba las de junio,
+  con su borde blanco. Ahora se prueban las dos grafias y manda la de la
+  arroba, que es la que el editor mantiene al dia.
+
+---
+
 ## 2.51 — 2026-09-21 — Los comodines del manual, y COGER TODO como debe
 
 ### Novedades
