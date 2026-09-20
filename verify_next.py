@@ -600,6 +600,7 @@ def verificar_nex(game, salida, datadir=None, musicdir=None):
         ejecutar(cpu, mem, sym['describe'], pasos=4000000)
         cpu.step = paso
         ritmo = dict(cuenta)
+        ritmo['pantalla'] = [l for l in leer_pantalla(mem, sym) if l.strip()]
 
     # ---- Layer 2: comprobar el banco activo y la paleta de la sala actual ----
     img = None
@@ -737,6 +738,19 @@ def main():
         clave = ini.split(chr(10))[0].strip()[:20]
         res.append(('presentacion mostrada y esperando tecla',
                     bool(presentacion) and any(clave in l for l in presentacion)))
+
+    # ---- orden de la descripcion: las salidas van las ultimas ----
+    # Se mira la pantalla que deja describe() llamado a pelo, no la de una orden
+    # cualquiera: si la orden no redescribe la sala (porque no es salida valida,
+    # por ejemplo) la ultima linea es otra cosa y la comprobacion no valdria.
+    if ritmo and ritmo.get('pantalla'):
+        import cpc_nativo
+        sm, _ = cpc_nativo._sys_msgs_y_salidas(game.get('metadata') or {})
+        etiqueta = str(sm[ge.SEXITS]).strip()
+        pd = ritmo['pantalla']
+        idx = [k for k, l in enumerate(pd) if l.startswith(etiqueta)]
+        res.append(('las salidas se imprimen al final, tras los objetos',
+                    bool(idx) and idx[-1] == len(pd) - 1))
 
     # ---- mensajes iniciales de objeto ----
     objs = (game.get('objects') or {}).values()

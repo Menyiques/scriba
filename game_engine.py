@@ -516,17 +516,18 @@ d_nonom:
         inc   hl
         ld    d,(hl)
         inc   hl
-        push  hl
-        call  print_msg
+        push  hl               ; HL apunta al numero de salidas del registro;
+        call  print_msg        ; descripcion
+        call  list_here        ; objetos que hay aqui
         call  newline
-        ld    de,SEXITS
-        call  print_msg
-        pop   hl
+        ld    de,SEXITS        ; y las salidas al final, como en el export de
+        call  print_msg        ; 128K: descripcion, objetos, salidas
+        pop   hl               ; ...se recupera aqui, que print_msg se lo lleva
         ld    a,(hl)
         inc   hl
         ld    b,a
         or    a
-        jr    z,d_noex
+        ret   z
 d_ex:   ld    a,(hl)
         inc   hl
         push  hl
@@ -536,7 +537,7 @@ d_ex:   ld    a,(hl)
         pop   hl
         inc   hl
         djnz  d_ex
-d_noex: jp    list_here
+        ret
 d_dark: ld    de,SDARK
         call  print_msg
         ret
