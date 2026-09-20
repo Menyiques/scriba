@@ -18,6 +18,23 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
 
 ---
 
+## Sin publicar — correccion de Tifon Negro (YAML 1.5)
+
+### Correcciones
+- **Tifon Negro se volvia inacabable si vaciabas la caja fuerte con `COGER
+  TODO`.** El flag del pase y el de los codigos solo se ponian en las
+  respuestas de `COGER PASE` y `COGER CODIGOS` exactas; con cualquier otra
+  forma de cogerlos se los llevaba el `GET` generico y los flags se quedaban a
+  cero: con el pase en la mano el Bootsmann no te dejaba subir al submarino, y
+  con los codigos encima el amanecer te mataba igual. Ahora `after_turn` mira
+  **lo que llevas**, no como lo cogiste, y ahi se ponen el flag y el punto.
+  Mas visible en 128K, porque alli `COGER TODO` **si** vacia los contenedores
+  abiertos (el motor nativo no), asi que era el camino natural.
+- Tres pruebas nuevas en `tifon.pru`: los objetos de la caja cuentan se cojan
+  como se cojan, con el pase se sube a la torre y sin el no.
+
+---
+
 ## 2.5 — 2026-09-20 — Arte de Spectrum en JPG, PNG o BMP
 
 ### Novedades
