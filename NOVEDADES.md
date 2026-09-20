@@ -18,6 +18,57 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
 
 ---
 
+## 2.47 — 2026-09-20 — Baterias de prueba sobre el .nex real
+
+### Novedades
+- **`bateria_next.py`: bateria de pruebas del juego sobre un emulador de Next
+  de verdad.** Ejecuta el `.nex` en [jnext](https://github.com/jorgegv/jnext)
+  en modo *headless* y comprueba lo que el juego contesta. No lee pixeles ni
+  cuenta barridos: el `.nex` se compila en **modo prueba**, que le mete dentro
+  el guion de la partida — se teclea solo — y hace que copie cada caracter que
+  imprime a un puerto de E/S; jnext vuelca ese puerto a su salida de error
+  (`--magic-port`), asi que una partida entera sale como texto plano. El guion
+  lleva ademas dos bytes de control: uno pide una foto del estado del motor
+  (variables, donde esta cada objeto, dentro de que contenedor, sala actual) y
+  otro vuelve a empezar la partida, con lo que toda la bateria cabe en una sola
+  ejecucion del emulador. **El `.nex` que se distribuye no lleva nada de esto**:
+  son parches que solo se aplican cuando `compila()` recibe un guion.
+  En modo prueba la CPU se pone a 28 MHz y se quitan las esperas de barrido
+  decorativas: 288 ordenes de *Tifon Negro* tardan minuto y medio.
+- **`probar_juego.py`: la misma bateria sin emulador**, dentro del simulador Z80
+  de Python, leyendo la pantalla de los pixeles. Mas comoda para el dia a dia
+  (no hay que instalar nada); la de jnext prueba ademas el cargador NEX, la ROM,
+  la MMU, Layer 2 y el Z80N.
+- **Formato `.pru`** compartido por las dos: `===` abre una prueba (y reinicia
+  la partida), una linea suelta es una orden, `?` / `!?` comprueban el texto de
+  la respuesta, `$` una variable, `@` la localizacion, `%` donde esta un objeto
+  (incluido «dentro de tal contenedor») y `<<` mete las ordenes de un
+  walkthrough, entero o solo las N primeras.
+- **`Games/Operacion Tifon Negro/tifon.pru`**: 12 pruebas del juego, entre ellas
+  que se puede acabar con 110/110 siguiendo la ruta optima.
+
+### Correcciones
+Las tres las encontro la bateria nueva.
+
+- **`ISAT #objeto #contenedor` no estaba soportado en el motor nativo**, y
+  *Tifon Negro* **no se podia acabar** por eso: coger los codigos Enigma o el
+  pase del muelle de dentro de la caja fuerte se rechazaba siempre. Un objeto
+  dentro de un contenedor guarda `OBJLOC = CONTAINED` y el contenedor aparte, en
+  `OBJIN`, asi que no cabe en el byte de destino que compara `ISAT`; ahora
+  `nativecc` emite un opcode propio (`ISIN`) cuando el destino es un `#objeto`.
+- **Ni la oscuridad ni las fuentes de luz han funcionado nunca en el motor
+  nativo** (ni en Next ni en CPC). El motor leia las tablas `locdark`,
+  `objlight` y `objlit` dos bytes por encima de donde las deja el constructor de
+  la base de datos, de modo que ninguna sala era oscura y ningun objeto
+  alumbraba: en *Tifon Negro* el tunel de escape se veia sin linterna.
+- **`PRINT "...{_VARIABLE}..."` imprimia las llaves tal cual** en el motor
+  nativo, en vez del valor: salia `[0{_HORA_H}:{_HORA_M}]` y `(Carga restante:
+  {_PILAS_CARGA} turnos.)`. Ahora `nativecc` parte el texto por las llaves y va
+  alternando mensaje y variable, con un condact nuevo (`PRVAR`) que imprime el
+  valor en decimal — lo mismo que hacen los exports BASIC con `STR$()`.
+
+---
+
 ## 2.46 — 2026-09-20 — Motor nativo para ZX Spectrum Next
 
 ### Novedades

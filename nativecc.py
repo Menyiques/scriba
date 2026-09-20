@@ -49,6 +49,19 @@ def _destval(ctx,dst):
     if u in ('NADA','NOWHERE','@NOWHERE'): return ge.NOWHERE
     return ctx.loc(dst)
 
+def _isat_rpn(ctx,o,dst):
+    # ISAT admite tres clases de destino: sentinel, localizacion (@id) y
+    # contenedor (#id).  El tercero no cabe en un byte de OBJLOC, porque un
+    # objeto dentro de un contenedor guarda OBJLOC=CONTAINED y el contenedor
+    # en OBJIN; por eso lleva su propio opcode (ISIN).
+    s=str(dst); u=s.upper()
+    if u in ('INVEN','@INVEN'):        return [('ISAT',o,ge.CARRIED)]
+    if u in ('PUESTO','WORN','@ONME'): return [('ISAT',o,ge.WORN)]
+    if u in ('NADA','NOWHERE','@NOWHERE'): return [('ISAT',o,ge.NOWHERE)]
+    if s in ctx.locs:                  return [('ISAT',o,ctx.locs[s])]
+    if s.startswith('#'):              return [('ISIN',o,ctx.obj(s))]
+    return [('ISAT',o,ctx.loc(s))]
+
 def cond_rpn(a,ctx):
     t=a[0]
     if t=='pred':
@@ -58,7 +71,7 @@ def cond_rpn(a,ctx):
         if nm in ('AT','NOTAT'): return [(op,ctx.loc(args[0]))]
         if nm in ('ZERO','NOTZERO'): return [(op,ctx.var(args[0]))]
         if nm=='DARK': return [('DARK',)]
-        if nm=='ISAT': return [('ISAT',ctx.obj(args[0]),_destval(ctx,args[1]))]
+        if nm=='ISAT': return _isat_rpn(ctx,ctx.obj(args[0]),args[1])
         if nm=='CHANCE': return [('CHANCE',int(args[0])&0xFF)]
         if nm=='TIMER': return [('TIMER',ctx.timers.get(str(args[0]).upper(),0),int(args[1])&0xFF)]
         if nm in ('WORN','NOTWORN'): return [(op,ctx.obj(args[0]))]
@@ -104,9 +117,48 @@ def gather_if(lines,i):
         cur.append(lines[i]); i+=1
     return then,els,i
 
+def _print_rpn(texto, ctx):
+    """PRINT "...{_VARIABLE}..." -> mensaje, variable, mensaje, variable...
+
+    Los exports BASIC parten el texto por las llaves y concatenan STR$(v). Aqui
+    se hace lo mismo con condacts: el primer trozo va como MESSAGE (que es el
+    que mete el salto de linea de delante), los siguientes como MES, y cada
+    variable como PRVAR. Un nombre que el juego no declara se deja tal cual,
+    con sus llaves, que es lo que hacia el motor antes de existir PRVAR.
+    """
+    partes = re.split(r'\{([A-Z_][A-Z0-9_]*)\}', texto)
+    if len(partes) == 1:
+        mi = ctx.msg(texto)
+        return bytes([COP['MESSAGE'], mi & 0xFF, (mi >> 8) & 0xFF])
+    out = bytearray()
+    primero = True                      # el salto de linea aun no ha salido
+    pendiente = ''
+    for i, p in enumerate(partes):
+        if i % 2 == 0:
+            pendiente += p
+            continue
+        if p.upper().replace('_', '') not in ctx.vars:
+            pendiente += '{%s}' % p     # variable desconocida: literal
+            continue
+        if pendiente:
+            mi = ctx.msg(pendiente)
+            out += bytes([COP['MESSAGE'] if primero else COP['MES'],
+                          mi & 0xFF, (mi >> 8) & 0xFF])
+            pendiente = ''
+        elif primero:
+            out += bytes([COP['NEWLINE']])
+        primero = False
+        out += bytes([ge.COP_EXTRA['PRVAR'], ctx.var(p)])
+    if pendiente or primero:
+        mi = ctx.msg(pendiente)
+        out += bytes([COP['MESSAGE'] if primero else COP['MES'],
+                      mi & 0xFF, (mi >> 8) & 0xFF])
+    return bytes(out)
+
+
 def compile_stmt(ln, up, ctx):
     if up.startswith('PRINT'):
-        mi=ctx.msg(translit(_string(ln))); return bytes([COP['MESSAGE'],mi&0xFF,(mi>>8)&0xFF])
+        return _print_rpn(translit(_string(ln)), ctx)
     if up.startswith('LET'):
         m=re.match(r'LET\s+(\w+)\s*=\s*(.+)',ln,re.I)
         v=ctx.var(m.group(1)); eb=ge.enc_expr(expr_rpn(pl.parse_expr(m.group(2)),ctx))

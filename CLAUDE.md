@@ -83,6 +83,53 @@ juegos donde no es así (NIVEL7, "1") fallan dos comprobaciones **en los dos**.
 Eso es del arnés, no del motor: antes de perseguir un fallo del Next, comprueba
 si el CPC falla igual.
 
+### Baterías del juego, no del motor
+
+Los arneses de arriba prueban el **motor**. Para probar **una aventura** —¿se
+puede acabar?, ¿la linterna luce sin pilas?— hay dos corredores que comparten
+formato de fichero (`.pru`):
+
+```powershell
+python probar_juego.py 'Games\Operacion Tifon Negro\Operacion Tifon Negro.yaml' `
+                       'Games\Operacion Tifon Negro\tifon.pru'
+python bateria_next.py 'Games\Operacion Tifon Negro\Operacion Tifon Negro.yaml' `
+                       'Games\Operacion Tifon Negro\tifon.pru' --jnext 'C:\...\jnext.exe'
+```
+
+- `probar_juego.py` juega dentro del simulador Z80 de Python y lee la pantalla
+  de los píxeles. No hace falta instalar nada.
+- `bateria_next.py` ejecuta el `.nex` en **jnext** (`--headless`), un emulador
+  de Next de verdad: prueba además el cargador NEX, la ROM, la MMU, Layer 2 y el
+  Z80N. Se baja de <https://github.com/jorgegv/jnext/releases>; la ruta va en
+  `--jnext`, en la variable de entorno `JNEXT` o en el `PATH`. La primera vez
+  jnext pide bajarse la imagen de tarjeta SD (de ahí saca las ROMs, igual que
+  una máquina real); en CI se pasa `--sdcard` con la imagen ya bajada.
+
+Cómo lo hace `bateria_next.py`: `next_nativo._modo_prueba()` compila un `.nex`
+**de pruebas** que lleva el guion dentro y se teclea solo (parchea `KMREAD`),
+copia cada carácter impreso a un puerto de E/S (parchea `TXTO`) que jnext vuelca
+con `--magic-port`, no gasta guion en las esperas de tecla (parchea `KMW`), pone
+la CPU a 28 MHz y se salta las esperas de barrido decorativas. Dos bytes de
+control en el guion: `1` vuelca el estado del motor (variables, `OBJLOC`,
+`OBJIN`, sala) y `2` reinicia la partida, así que **toda la batería cabe en una
+sola ejecución del emulador**. El `.nex` que se distribuye no lleva nada de esto.
+
+Formato `.pru`:
+
+| línea | qué hace |
+|---|---|
+| `=== nombre` | abre una prueba y **reinicia** la partida |
+| `MIRAR` | una orden, tal cual la teclearía el jugador |
+| `? texto` / `!? texto` | la respuesta debe / no debe contener ese texto |
+| `$ PUNTOS = 110` | una variable (`=`, `<>`, `>`, `<`, `>=`, `<=`) |
+| `@ @playa` | dónde está el jugador |
+| `% #linterna = INVEN` | dónde está un objeto: `@sala`, `INVEN`, `PUESTO`, `NADA` o `#contenedor` |
+| `<< fichero : 21` | mete las 21 primeras órdenes de un walkthrough |
+
+Las comprobaciones miran la respuesta a la **última orden**, no la pantalla
+entera. Los nombres de variable se escriben sin guiones bajos (`_PILAS_CARGA`
+se comprueba como `$ PILASCARGA`), que es como los indexa el motor.
+
 ---
 
 ## Trampas que ya han mordido
@@ -104,6 +151,20 @@ si el CPC falla igual.
 - **Borrar en la carpeta conectada está desactivado por defecto.** Si aparece un
   `.git/index.lock` huérfano, hay que pedir permiso de borrado antes.
 
+- **Los offsets de la cabecera de la base de datos son el final de cada campo,
+  no el principio.** En `build_game_db` el comentario `# 55` de `w16(locdark)`
+  quiere decir «después de esto `len(out)` vale 55», o sea que `locdark` empieza
+  en 53. El motor leía `locdark`, `objlight` y `objlit` dos bytes más arriba y
+  **la oscuridad no funcionó nunca**, ni en Next ni en CPC. Al añadir un campo,
+  comprobar los `ld hl,(DBB+n)` de `init` contra la tabla, no contra los
+  comentarios.
+
+- **`ISAT` tiene tres clases de destino, no dos**: sentinel (`INVEN`/`PUESTO`/
+  `NADA`), localización (`@sala`) y **contenedor** (`#objeto`). El tercero no
+  cabe en el byte de `OBJLOC` — un objeto contenido guarda `CONTAINED` ahí y el
+  contenedor en `OBJIN` — y por eso lleva opcode propio (`ISIN`). Si vuelve a
+  caer en `ctx.loc()`, el juego se queda sin poder sacar nada de una caja.
+
 - **Los glifos `_` y `q` de `print42_es.bas` / `print42_pt.bas` están mal**: el
   subrayado apunta al índice de la `á`, y la cola de la `q` invade un píxel del
   carácter siguiente. `genera_font42.py` los corrige para el motor nativo, pero
@@ -113,7 +174,7 @@ si el CPC falla igual.
 
 ## Estado
 
-Rama de trabajo: `fix/predicados-objeto-v2.44`. Scriba 2.46.
+Rama de trabajo: `fix/predicados-objeto-v2.44`. Scriba 2.47.
 
 El camino `.nex` con Boriel está **parado**: `next_export.moduliza_texto()` está
 escrito pero no lo llama nadie, bloqueado por `EmbeddedMmuSwitchAssembleError`

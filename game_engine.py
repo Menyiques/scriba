@@ -21,9 +21,9 @@ EOP={'END':0,'CONST':1,'VAR':2,'ADD':3,'SUB':4,'EQ':5,'NE':6,'LT':7,'GT':8,
  'AND':9,'OR':10,'NOT':11,'AT':12,'NOTAT':13,'ZERO':14,'NOTZERO':15,'DARK':16,
  'CARRIED':17,'PRESENT':18,'ABSENT':19,'NOTCARR':20,
  'ISAT':21,'CHANCE':22,'WORN':23,'NOTWORN':24,'VERB':25,'NOUN1':26,
- 'TIMER':27,'HASOBJOPEN':28,'NOUN2':29}
+ 'TIMER':27,'HASOBJOPEN':28,'NOUN2':29,'ISIN':30}
 # condacts extra: LETX (var,expr) e IF (expr -> salta cuerpo si falso)
-COP_EXTRA={'SHOWPIC':50,
+COP_EXTRA={'SHOWPIC':50,'PRVAR':51,
  'LETX':26,'IF':27,'JMP':28,
  'INK':29,'PAPER':30,'BORDER':31,'PAUSE':32,'CLS':33,
  'WEAR':34,'REMOVE':35,'LIT':36,'UNLIT':37,'SCORE':38,
@@ -279,9 +279,9 @@ init:   ld    hl,(DBB+0)
         ld    (objlocsrc),hl
         ld    hl,(DBB+51)
         ld    (objfixp),hl
-        ld    hl,(DBB+55)
+        ld    hl,(DBB+53)
         ld    (locdarkp),hl
-        ld    hl,(DBB+57)
+        ld    hl,(DBB+55)
         ld    (objlightp),hl
         ld    a,(DBB+59)
         ld    (ntimers),a
@@ -358,7 +358,7 @@ ic_l:   ld    a,(hl)
         djnz  ic_l
         ld    a,(nobj)        ; copia OBJLIT (estado de encendido) a RAM
         ld    b,a
-        ld    hl,(DBB+59)
+        ld    hl,(DBB+57)
         ld    de,OBJLIT
 icl2_l: ld    a,(hl)
         ld    (de),a
@@ -2080,7 +2080,7 @@ rc_loop:
         cp    e
         jr    nc,rc_end
 rc_go:  call  getop
-        cp    51
+        cp    52
         jr    nc,rc_loop
         add   a,a
         ld    e,a
@@ -2383,7 +2383,7 @@ eval_expr:
         xor   a
         ld    (esp),a
 ev_l:   call  getop
-        cp    30
+        cp    31
         jr    nc,ev_l
         add   a,a
         ld    e,a
@@ -2578,6 +2578,25 @@ ex_isat:
         cp    c
         jp    z,ex_t
         jp    ex_f
+; ex_isin: obj dentro del contenedor C -> OBJLOC[obj]=CONTAINED y OBJIN[obj]=C+1
+ex_isin:
+        call  getop          ; obj
+        ld    (ctmp),a
+        call  obj_addr
+        ld    a,(hl)
+        cp    CONTAINED
+        jr    nz,exin_no
+        ld    a,(ctmp)
+        call  objin_get      ; a = contenedor+1 (0 = ninguno)
+        ld    c,a
+        call  getop          ; contenedor
+        inc   a
+        cp    c
+        jp    z,ex_t
+        jp    ex_f
+exin_no:
+        call  getop          ; hay que consumir el operando igual
+        jp    ex_f
 ex_chance:
         call  getop          ; n (0..100)
         ld    c,a
@@ -2665,7 +2684,16 @@ ex_f:   xor   a
 ETAB:   defw ex_end,ex_const,ex_var,ex_add,ex_sub,ex_eq,ex_ne,ex_lt,ex_gt,ex_and
         defw ex_or,ex_not,ex_at,ex_notat,ex_zero,ex_nzero,ex_dark,ex_carr,ex_pres,ex_abs,ex_ncar
         defw ex_isat,ex_chance,ex_worn,ex_nworn,ex_verb,ex_noun1,ex_timer,ex_hasopen
-        defw ex_noun2
+        defw ex_noun2,ex_isin
+; c_prvar: imprime el valor de una variable en decimal, donde este el cursor.
+; Es la mitad que le faltaba a PRINT "...{_VARIABLE}...": nativecc parte el
+; texto por las llaves y va alternando trozo de mensaje y variable.
+c_prvar:
+        call  getop
+        call  flag_addr
+        ld    a,(hl)
+        call  print_dec
+        jp    rc_loop
 c_letx: call  getop
         ld    (ctmp),a
         call  eval_expr
@@ -2845,7 +2873,7 @@ CTAB:   defw c_at,c_notat,c_present,c_absent,c_carried,c_notcarr,c_zero,c_notzer
         defw c_score,c_tstart,c_tstop,c_treset
         defw c_open,c_close,c_lock,c_unlock,c_putin,c_takeout
         defw c_play,c_addscore
-        defw c_showpic
+        defw c_showpic,c_prvar
 
 show_title:
         ld    a,(hastitle)

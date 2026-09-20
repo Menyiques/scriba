@@ -1111,6 +1111,238 @@ sli_cls:
     return src[:i] + nuevo + src[j:]
 
 
+# ---------------------------------------------------------------------------
+#  Modo prueba: el .nex se juega solo y cuenta lo que hace
+# ---------------------------------------------------------------------------
+#  Un .nex compilado en modo prueba lleva dentro el guion de la partida y se
+#  teclea solo, y copia cada caracter que imprime a un puerto de E/S que el
+#  emulador (jnext --magic-port) vuelca a su salida de error. Asi una partida
+#  entera sale como texto plano, sin leer la pantalla pixel a pixel y sin
+#  depender de cuantos barridos tarde cada cosa.
+#
+#  El .nex que se distribuye NO lleva nada de esto: son parches que solo se
+#  aplican cuando compila() recibe un guion.
+# ---------------------------------------------------------------------------
+PUERTO_TRAZA = 0xCAFE      # el mismo que usa el demo del propio jnext
+
+PRUEBA_ASM = r"""
+; --- modo prueba: teclado de guion y traza por puerto ----------------------
+nxgp:    defw NXGUION          ; siguiente tecla del guion
+
+; nxtrc: manda el caracter de A al puerto de traza.
+nxtrc:
+        push  bc
+        ld    bc,NXTRAZA
+        out   (c),a
+        pop   bc
+        ret
+
+; nxtrs: manda al puerto la cadena de HL, terminada en 0.
+nxtrs:
+        ld    a,(hl)
+        or    a
+        ret   z
+        call  nxtrc
+        inc   hl
+        jr    nxtrs
+
+; nxtrhex: manda al puerto B bytes desde HL, en hexadecimal y separados por
+; espacios. Asi el guion puede comprobar variables y posiciones de objeto sin
+; tener que deducirlas de lo que se ve en pantalla.
+nxtrhex:
+        ld    a,(hl)
+        push  hl
+        push  bc
+        rrca
+        rrca
+        rrca
+        rrca
+        call  nxtrnib
+        pop   bc
+        pop   hl
+        ld    a,(hl)
+        push  hl
+        push  bc
+        call  nxtrnib
+        ld    a,32
+        call  nxtrc
+        pop   bc
+        pop   hl
+        inc   hl
+        djnz  nxtrhex
+        ld    a,10
+        jp    nxtrc
+nxtrnib:
+        and   15
+        cp    10
+        jr    c,nxtrn_d
+        add   a,55
+        jp    nxtrc
+nxtrn_d:
+        add   a,48
+        jp    nxtrc
+
+; NXDUMP: vuelca el estado del motor por el puerto de traza. Lo dispara el
+; byte 1 del guion, asi que el que escribe la bateria pide una foto justo
+; donde la quiere comprobar y luego la lee del texto.
+NXDUMP:
+        push  af
+        push  bc
+        push  de
+        push  hl
+        ld    hl,NXT_VAR
+        call  nxtrs
+        ld    hl,FLAGS
+        ld    b,64
+        call  nxtrhex
+        ld    hl,NXT_OBJ
+        call  nxtrs
+        ld    hl,OBJLOC
+        ld    b,64
+        call  nxtrhex
+        ld    hl,NXT_IN
+        call  nxtrs
+        ld    hl,OBJIN
+        ld    b,64
+        call  nxtrhex
+        ld    hl,NXT_LOC
+        call  nxtrs
+        ld    a,(curloc)
+        ld    (nxtmp1),a
+        ld    hl,nxtmp1
+        ld    b,1
+        call  nxtrhex
+        pop   hl
+        pop   de
+        pop   bc
+        pop   af
+        ret
+
+; NXFIN: se acabo el guion. Ultimo volcado y se para la CPU; el emulador sale
+; solo al llegar a su tope de barridos.
+NXFIN:
+        di
+        ld    hl,NXT_FIN
+        call  nxtrs
+        call  NXDUMP
+nxfin_p:
+        halt
+        jr    nxfin_p
+nxtmp1:  defb 0
+NXT_FIN: defb 10,"#FIN",10,0
+NXT_RES: defb 10,"#RESET",10,0
+NXT_VAR: defb 10,"#VARS ",0
+NXT_OBJ: defb "#OBJLOC ",0
+NXT_IN:  defb "#OBJIN ",0
+NXT_LOC: defb "#LOC ",0
+"""
+
+
+def _modo_prueba(src, guion):
+    """Devuelve el fuente con los parches del modo prueba aplicados.
+
+    KMREAD  pasa a sacar las teclas del guion embebido en vez de la matriz.
+            Es el unico sitio por donde el motor lee teclas de verdad
+            (read_line), asi que con cambiarlo la partida se teclea sola. El
+            byte 1 no es una tecla: pide un volcado del estado y sigue.
+
+    KMW     (espera bloqueante) devuelve al instante SIN gastar guion. Lo usan
+            la pausa de pagina y PAUSE 0, que no son ordenes del jugador: si
+            gastaran guion, cada pausa se comeria una letra de la orden
+            siguiente y todo lo de detras iria descolocado.
+
+    TXTO    copia al puerto de traza cada caracter que imprime, antes de
+            pintarlo. Es el unico punto de salida de texto del motor.
+
+    Ademas se pone la CPU a 28 MHz y se quitan las esperas de barrido que solo
+    estan por estetica (el ritmo de escritura, el revelado de la imagen y la
+    espera de la portada): no cambian nada de la partida, y entre unas cosas y
+    otras la bateria tarda cerca de dos ordenes de magnitud menos.
+    """
+    faltan = []
+
+    def cambia(viejo, nuevo, obligatorio=True):
+        n = src.count(viejo)
+        if n == 0:
+            if obligatorio:
+                faltan.append(viejo[:40])
+            return src
+        if n != 1:
+            raise ValueError('modo prueba: %r aparece %d veces' % (viejo[:40], n))
+        return src.replace(viejo, nuevo, 1)
+
+    # 1. traza de cada caracter impreso
+    src = cambia('TXTO:\n        push  af\n',
+                 'TXTO:\n'
+                 '        push  bc\n'
+                 '        ld    bc,NXTRAZA\n'
+                 '        out   (c),a         ; modo prueba: copia al puerto\n'
+                 '        pop   bc\n'
+                 '        push  af\n')
+
+    # 2. el teclado sale del guion
+    i = src.index('\nKMREAD:\n')
+    j = src.index('\nKMW:', i)
+    src = src[:i + 1] + ('KMREAD:\n'
+                         '        push  hl\n'
+                         'nxg_l:  ld    hl,(nxgp)\n'
+                         '        ld    a,(hl)\n'
+                         '        or    a\n'
+                         '        jr    z,nxg_fin\n'
+                         '        inc   hl\n'
+                         '        ld    (nxgp),hl\n'
+                         '        cp    1\n'
+                         '        jr    z,nxg_vol    ; 1 = foto del estado, no es tecla\n'
+                         '        cp    2\n'
+                         '        jr    z,nxg_res    ; 2 = volver a empezar la partida\n'
+                         '        pop   hl\n'
+                         '        scf\n'
+                         '        ret\n'
+                         'nxg_vol:\n'
+                         '        call  NXDUMP\n'
+                         '        jr    nxg_l\n'
+                         'nxg_res:\n'
+                         '        ld    hl,NXT_RES\n'
+                         '        call  nxtrs\n'
+                         '        ld    sp,NXSP      ; la pila de la partida anterior se tira\n'
+                         '        jp    start\n'
+                         'nxg_fin:\n'
+                         '        pop   hl\n'
+                         '        jp    NXFIN\n') + src[j + 1:]
+
+    # 3. la espera bloqueante no gasta guion
+    src = cambia('KMW:    call  KMREAD\n        jr    nc,KMW\n        ret\n',
+                 'KMW:    ld    a,32          ; modo prueba: ni espera ni gasta\n'
+                 '        ret\n')
+
+    # 4. la CPU, a 28 MHz (NextREG 7 = 3): ocho veces mas partida por barrido
+    src = cambia('detect128:\n        xor   a\n',
+                 'detect128:\n'
+                 '        ld    bc,&243B      ; modo prueba: CPU a 28 MHz\n'
+                 '        ld    a,7\n'
+                 '        out   (c),a\n'
+                 '        ld    b,&25\n'
+                 '        ld    a,3\n'
+                 '        out   (c),a\n'
+                 '        xor   a\n')
+
+    # 5. fuera las esperas de barrido decorativas
+    src = cambia('        ei\n        halt\n        xor   a\nnxr_g:',
+                 '        xor   a\nnxr_g:')
+    src = cambia('nxrframe:\n        ei\n        halt\n        ret\n',
+                 'nxrframe:\n        ret\n', obligatorio=False)
+    if '\nnxespera:\n' in src:
+        i = src.index('\nnxespera:\n')
+        j = src.index('        jp    psgoff\n', i) + len('        jp    psgoff\n')
+        src = src[:i + 1] + 'nxespera:\n        ret\n' + src[j:]
+
+    if faltan:
+        raise ValueError('modo prueba: no encuentro ' + '; '.join(faltan))
+    return (('NXTRAZA equ &%04X\nNXSP equ &%04X\n' % (PUERTO_TRAZA, SP_NEX)) +
+            src + PRUEBA_ASM +
+            '\n' + _datos_asm('NXGUION', bytes(guion) + b'\x00') + '\n')
+
+
 def prefijo(org, db_base, nimg=0, titulo=False, borde=7):
     """Constantes que el motor espera resueltas. A diferencia del CPC, aqui NO
     se declaran TXTO/KMW/... como equ: son etiquetas de PLAT_ASM."""
@@ -1133,7 +1365,7 @@ def prefijo(org, db_base, nimg=0, titulo=False, borde=7):
 
 
 def assemble_engine_next(org=ORG, db_base=None, idioma='es', paletas=b'',
-                         titulo_pal=b'', psg=b'', borde=7):
+                         titulo_pal=b'', psg=b'', borde=7, guion=None):
     """Ensambla motor + plataforma Next. Devuelve (bytes, tabla_de_simbolos).
     paletas:    256 bytes por imagen (un byte por color), en orden de slot
     titulo_pal: 256 bytes de la paleta de la portada (b'' = sin portada)
@@ -1155,6 +1387,8 @@ def assemble_engine_next(org=ORG, db_base=None, idioma='es', paletas=b'',
               _engine_next(nimg > 0, titulo) +
               PLAT_ASM + chr(10) + chr(10).join(partes) + chr(10) +
               _font_asm(idioma) + chr(10))
+    if guion is not None:
+        fuente = _modo_prueba(fuente, guion)
     return z80asm.assemble(fuente, org=org)
 
 
@@ -1274,7 +1508,8 @@ def _paleta256(path):
     return bytes(d[0::2][:256]).ljust(256, b'\x00')
 
 
-def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None):
+def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None,
+            guion=None):
     """Ensambla motor+plataforma y construye la base de datos del juego.
     Devuelve (codigo, base_de_datos, simbolos, spec, dir_db, extras)."""
     import cpc_nativo
@@ -1332,7 +1567,7 @@ def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None):
         return assemble_engine_next(org=org, db_base=base, idioma=idioma,
                                     paletas=paletas,
                                     titulo_pal=titulo_pal or b'', psg=psg,
-                                    borde=borde)
+                                    borde=borde, guion=guion)
 
     def _db(dbaddr):
         return ge.build_game_db(
@@ -1381,13 +1616,14 @@ def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None):
 
 
 def export_nex(game, salida, ancho=COLS, org=ORG, borde=None, datadir=None,
-               musicdir=None):
+               musicdir=None, guion=None):
     """Compila el juego al motor nativo y lo empaqueta en un .nex arrancable.
     Sin zxbc, sin Boriel, sin NextBuild: todo en Python."""
     import empaqueta_nex
 
     code, db, sym, spec, dbaddr, ex = compila(
-        game, ancho=ancho, org=org, datadir=datadir, musicdir=musicdir)
+        game, ancho=ancho, org=org, datadir=datadir, musicdir=musicdir,
+        guion=guion)
     imgs, datadir, fx_blob = ex['imgs'], ex['datadir'], ex['fx']
     plano = bytes(code) + bytes(db)
     fin = org + len(plano)

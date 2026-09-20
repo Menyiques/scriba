@@ -403,14 +403,19 @@ def teclea(cpu, sym, tec, texto, tope=6000000):
     pendientes = list(texto)
     soltar = False
     en_pausa = False
+    tecla_pausa = ['a']
     kmw = sym.get('kmw')
     n = 0
     while n < tope:
         if kmw is not None and cpu.pc == kmw:
             # El juego se ha parado a que leamos (pausa de pagina al desplazar, o
             # un PAUSE 0). Eso NO es el comando: se le da una tecla cualquiera y
-            # la cola de caracteres se queda como estaba.
-            tec.pulsa(' ')
+            # la cola de caracteres se queda como estaba. La tecla ALTERNA: si se
+            # repitiera, el antirrebote de KMREAD la daria por la misma y la
+            # pausa no se soltaria nunca (dos paradas seguidas colgaban la
+            # partida).
+            tecla_pausa[0] = 'b' if tecla_pausa[0] == 'a' else 'a'
+            tec.pulsa(tecla_pausa[0])
             en_pausa = True
             soltar = True
         elif cpu.pc == sym['kmread']:
