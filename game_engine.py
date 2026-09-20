@@ -2250,6 +2250,8 @@ c_unlit:
         ld    (hl),0
         jp    rc_loop
 c_score:
+        call  newline        ; en linea nueva, como MESSAGE: si no, la
+                             ; puntuacion sale pegada al eco de la orden
         call  getop          ; indice del flag PUNTOS
         call  flag_addr
         ld    a,(hl)

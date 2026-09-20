@@ -44,7 +44,7 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
   la respuesta, `$` una variable, `@` la localizacion, `%` donde esta un objeto
   (incluido «dentro de tal contenedor») y `<<` mete las ordenes de un
   walkthrough, entero o solo las N primeras.
-- **`Games/Operacion Tifon Negro/tifon.pru`**: 12 pruebas del juego, entre ellas
+- **`Games/Operacion Tifon Negro/tifon.pru`**: 14 pruebas del juego, entre ellas
   que se puede acabar con 110/110 siguiendo la ruta optima.
 - **Modo verboso en las dos** (`-v`, `-vv`): cuenta cada orden segun pasa
   — donde acaba el jugador, la puntuacion y el principio de la respuesta — y
@@ -90,6 +90,10 @@ Las tres las encontro la bateria nueva.
   escribia sobre la matriz siguiente sin dar error. Ahora se corta al compilar
   con un mensaje claro. (Las **localizaciones** si llegan a 255: no llevan
   matriz en RAM.)
+
+- **La puntuacion salia pegada al eco de la orden** en el motor nativo
+  (`puntuacionPuntuacion: 25`): el condact `SCORE` imprimia sin saltar de linea
+  antes, al reves que `MESSAGE` y que el export de 128K.
 
 - **`PRINT "...{_VARIABLE}..."` imprimia las llaves tal cual** en el motor
   nativo, en vez del valor: salia `[0{_HORA_H}:{_HORA_M}]` y `(Carga restante:
