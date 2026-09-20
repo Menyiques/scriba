@@ -6,9 +6,33 @@ exactamente el formato que consume imagenes_128k (= _carga_scr de un .scr 2304).
 
 Hace dithering ordenado (Bayer 8x8) eligiendo 2 colores por bloque de 8x8 (un
 INK y un PAPER, con el bit BRIGHT comun), como impone el hardware del Spectrum.
-Es el fallback para localizaciones sin .scr propio en img/Spectrum: convierte
-el master de img/Original, igual que el export de Amstrad.
+Sirve para dos cosas:
+
+  - fallback de las localizaciones sin .scr propio: convierte el master de
+    img/Original, igual que el export de Amstrad, con autocontraste;
+  - y para los .jpg/.bmp/.png que se dejen en img/Spectrum, que son arte YA
+    preparado para la maquina: esos se convierten tal cual, sin tocar niveles,
+    y tienen que venir en 4:1 (la tira de 256x64 del tercio superior).
 """
+
+RATIO_TIRA = 4.0        # 256x64: la franja de imagen de una localizacion
+TOL_RATIO = 0.02        # 2% de margen, que recortar a mano nunca sale exacto
+
+
+def comprueba_ratio(path, ratio=RATIO_TIRA, tol=TOL_RATIO):
+    """Falla si la imagen no tiene la proporcion pedida. Se usa con lo que se
+    deja en img/Spectrum: ahi la imagen es definitiva, y escalarla a la fuerza
+    la achataria sin avisar."""
+    from PIL import Image
+    with Image.open(path) as im:
+        an, al = im.size
+    if not al:
+        raise ValueError('imagen vacia')
+    r = an / float(al)
+    if abs(r - ratio) > ratio * tol:
+        raise ValueError('mide %dx%d (%.2f:1) y hace falta %.0f:1 '
+                         '(p. ej. %dx%d)' % (an, al, r, ratio,
+                                             int(ratio * 64), 64))
 
 # Paleta ZX Spectrum: 8 tonos x 2 brillos. Indice 0-7 (negro,azul,rojo,magenta,
 # verde,cian,amarillo,blanco). Normal = 0xD7, brillo = 0xFF.
@@ -60,9 +84,15 @@ def _pick2(block):
     return ink, paper, bright
 
 
-def to_scr_topthird(path, contrast=True):
-    """PNG/JPG -> (bmp 2048, att 256) del tercio superior del Spectrum."""
+def to_scr_topthird(path, contrast=True, exigir_ratio=False):
+    """PNG/JPG/BMP -> (bmp 2048, att 256) del tercio superior del Spectrum.
+
+    contrast=True autocontrasta antes de convertir, que es lo que conviene a un
+    master fotografico. Para arte ya preparado (img/Spectrum) se pasa False.
+    exigir_ratio=True rechaza lo que no venga en 4:1 en vez de achatarlo."""
     from PIL import Image
+    if exigir_ratio:
+        comprueba_ratio(path)
     im = Image.open(path).convert('RGB')
     if contrast:
         try:

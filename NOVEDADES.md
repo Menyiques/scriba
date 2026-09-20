@@ -18,6 +18,32 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
 
 ---
 
+## 2.5 — 2026-09-20 — Arte de Spectrum en JPG, PNG o BMP
+
+### Novedades
+- **`img/Spectrum` ya no obliga a trabajar en `.scr`.** Ademas del `.scr` de
+  siempre, la carpeta admite `.jpg`, `.png` y `.bmp` **en 4:1** —la tira de
+  256x64 del tercio superior—, que se incrustan como si fueran un `.scr`: se
+  pasan a tinta y papel con el mismo dithering Bayer de 2 colores por bloque de
+  8x8. Igual para la pantalla de carga (`screen.*`, esa a pantalla completa).
+  - Lo que se deja en `img/Spectrum` es arte **ya preparado para la maquina**,
+    asi que se convierte **sin tocar niveles**. El autocontraste se queda donde
+    tiene sentido: en el fallback de los masteres fotograficos de `img/Original`.
+  - Y si no viene en 4:1 **se rechaza con un error que dice cuanto mide y cuanto
+    deberia medir**, en vez de achatarlo en silencio. Hay un 2% de margen, que
+    recortar a mano nunca sale exacto.
+  - El orden de preferencia queda: `Spectrum/<id>.scr`, luego
+    `Spectrum/<id>.jpg|png|bmp`, y por ultimo el master de `Original/<id>.*`.
+- **El nombre vale con arroba y sin ella**: `@playa.jpg` y `playa.jpg` valen los
+  dos. Los masteres de `img/Original` se guardan con la arroba del id y el arte
+  de `img/Spectrum`, historicamente, sin ella; buscar solo una de las dos formas
+  dejaba fuera media carpeta sin decir nada.
+- El editor previsualiza estas imagenes **exactamente como van a salir**, con el
+  mismo tratamiento que el export, y si una no cumple el 4:1 lo dice en el hueco
+  de la imagen en vez de dibujar algo que luego no sera.
+
+---
+
 ## 2.48 — 2026-09-20 — El guion de la bateria, fuera del mapa plano
 
 ### Novedades

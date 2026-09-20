@@ -164,6 +164,25 @@ se comprueba como `$ PILASCARGA`), que es como los indexa el motor.
 
 ---
 
+## Imágenes por plataforma
+
+| carpeta | para | formato |
+|---|---|---|
+| `img/Original/<id>.png\|jpg` | máster, y fallback de todo | lo que sea; se autocontrasta |
+| `img/Spectrum/<id>.scr` | 48/128K | 6912 o 2304 bytes |
+| `img/Spectrum/<id>.jpg\|png\|bmp` | 48/128K | **4:1** (256×64); se convierte **sin** autocontraste |
+| `temp/Next/data/<id>.nxi` | Next | Layer 2, lo genera el editor |
+
+El nombre vale **con arroba y sin ella** (`@playa.jpg` = `playa.jpg`): los
+másteres se guardan con la del id y el arte de `img/Spectrum`, históricamente,
+sin ella. Lo que está en `img/Spectrum` es la versión definitiva, así que si no
+cumple el 4:1 **se corta la exportación** con un error que dice cuánto mide;
+los másteres de `img/Original`, en cambio, se escalan sin protestar. Margen del
+2% en la proporción. La pantalla de carga (`screen.*`) va a pantalla completa,
+4:3, y no se le exige proporción.
+
+---
+
 ## Trampas que ya han mordido
 
 - **`startswith('REM')` se come `REMOVE`.** Fue un bug real en cinco sitios. Al
@@ -213,7 +232,7 @@ se comprueba como `$ PILASCARGA`), que es como los indexa el motor.
 
 ## Estado
 
-Rama de trabajo: `fix/predicados-objeto-v2.44`. Scriba 2.48.
+Rama de trabajo: `fix/predicados-objeto-v2.44`. Scriba 2.5.
 
 El camino `.nex` con Boriel está **parado**: `next_export.moduliza_texto()` está
 escrito pero no lo llama nadie, bloqueado por `EmbeddedMmuSwitchAssembleError`

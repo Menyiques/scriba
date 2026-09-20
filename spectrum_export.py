@@ -1740,12 +1740,39 @@ def dzx0_simula(comp, max_out=65536):
             estado = 'cp'
 
 # ─── Imagenes de localizacion (modo 128K) ────────────────────────────────
-# img/<loc_id>.scr junto al .bas exportado. Formatos admitidos:
-#   6912 bytes (SCR completo): se usa el tercio superior + 8 filas de attrs
-#   2304 bytes: 2048 de bitmap + 256 de atributos, ya recortado
+# img/Spectrum/<loc_id>.* junto al .bas exportado. Por orden de preferencia:
+#   <loc_id>.scr de 6912 bytes: se usa el tercio superior + 8 filas de attrs
+#   <loc_id>.scr de 2304 bytes: 2048 de bitmap + 256 de atributos, ya recortado
+#   <loc_id>.png/.jpg/.bmp EN 4:1: arte ya preparado para la maquina; se pasa a
+#     tinta/papel con el mismo dithering, pero SIN tocar niveles, y si no viene
+#     en 4:1 se rechaza en vez de achatarlo
+#   y si no hay nada de eso, el master de img/Original, con autocontraste
 # Cada imagen se comprime con ZX0 en dos streams (bitmap y atributos) que
 # nunca cruzan un limite de banco de 16K (dzx0 lee secuencialmente por la
 # ventana $C000 de un solo banco).
+
+# Imagenes que se admiten en img/Spectrum ademas del .scr. Son arte YA
+# preparado para la maquina: se convierten sin autocontraste y, en el caso de
+# las tiras de localizacion, tienen que venir en 4:1.
+IMG_ZX_EXT = ('.png', '.jpg', '.jpeg', '.bmp')
+
+
+def busca_img(carpeta, lid, exts):
+    """Primer fichero de la localizacion lid en carpeta, probando exts.
+
+    Se admiten las dos grafias del nombre, con y sin la arroba del id
+    (@playa.jpg y playa.jpg): los masteres de img/Original se guardan con ella
+    y el arte de img/Spectrum, historicamente, sin ella."""
+    import os
+    for nombre in (lid, lid.lstrip('@')):
+        for ext in exts:
+            p = os.path.join(carpeta, nombre + ext)
+            if os.path.isfile(p):
+                return p
+        if not lid.startswith('@'):
+            break
+    return None
+
 
 def _carga_scr(path):
     with open(path, 'rb') as f:
@@ -1764,15 +1791,17 @@ def imagenes_128k(img_dir, locids, locidx, texto_len, progreso=None):
     origdir = os.path.join(os.path.dirname(img_dir), 'Original')
     encontradas = []
     for lid in locids:
-        scrp = os.path.join(img_dir, lid + '.scr')
-        if os.path.isfile(scrp):
+        scrp = busca_img(img_dir, lid, ('.scr',))
+        if scrp:
             encontradas.append((locidx[lid], lid, scrp, 'scr'))
             continue
-        for ext in ('.png', '.jpg', '.jpeg'):     # fallback: master de img/Original
-            pp = os.path.join(origdir, lid + ext)
-            if os.path.isfile(pp):
-                encontradas.append((locidx[lid], lid, pp, 'png'))
-                break
+        pp = busca_img(img_dir, lid, IMG_ZX_EXT)   # arte ya preparado en Spectrum/
+        if pp:
+            encontradas.append((locidx[lid], lid, pp, 'zx'))
+            continue
+        pp = busca_img(origdir, lid, ('.png', '.jpg', '.jpeg'))   # master
+        if pp:
+            encontradas.append((locidx[lid], lid, pp, 'png'))
     scr_path = os.path.join(img_dir, 'screen.scr')
     scr_raw = None
     if os.path.isfile(scr_path):
@@ -1782,17 +1811,22 @@ def imagenes_128k(img_dir, locids, locidx, texto_len, progreso=None):
             lineas.append('  - img/screen.scr IGNORADA: debe medir 6912 bytes '
                           '(mide %d)' % len(scr_raw))
             scr_raw = None
-    if scr_raw is None:                        # fallback: master de img/Original
-        for ext in ('.png', '.jpg', '.jpeg'):
-            sp = os.path.join(origdir, 'screen' + ext)
-            if os.path.isfile(sp):
+    if scr_raw is None:      # arte ya preparado en Spectrum/, y si no, Original
+        for carpeta, exts, contr in ((img_dir, IMG_ZX_EXT, False),
+                                     (origdir, ('.png', '.jpg', '.jpeg'), True)):
+            for ext in exts:
+                sp = os.path.join(carpeta, 'screen' + ext)
+                if not os.path.isfile(sp):
+                    continue
                 try:
                     import png2spectrum
-                    scr_raw = png2spectrum.to_scr_full(sp)
-                    lineas.append('  - pantalla de carga: Original/screen%s '
-                                  '(dithering)' % ext)
+                    scr_raw = png2spectrum.to_scr_full(sp, contrast=contr)
+                    lineas.append('  - pantalla de carga: %s/screen%s (dithering)'
+                                  % (os.path.basename(carpeta), ext))
                 except Exception as e:
                     lineas.append('  - screen IGNORADA: %s' % e)
+                break
+            if scr_raw is not None:
                 break
     if not encontradas and scr_raw is None:
         return b'', {}, None, ['imagenes: ninguna (carpeta img/ sin '
@@ -1824,10 +1858,19 @@ def imagenes_128k(img_dir, locids, locidx, texto_len, progreso=None):
         try:
             if kind == 'scr':
                 bmp, att = _carga_scr(ruta)
+            elif kind == 'zx':      # arte de img/Spectrum: tal cual, y en 4:1
+                import png2spectrum
+                bmp, att = png2spectrum.to_scr_topthird(
+                    ruta, contrast=False, exigir_ratio=True)
             else:                                   # convertir master de Original
                 import png2spectrum
                 bmp, att = png2spectrum.to_scr_topthird(ruta)
         except Exception as e:
+            if kind == 'zx':
+                # Lo de img/Spectrum es la version definitiva: si no sirve, mas
+                # vale parar que exportar el juego con una imagen de menos.
+                raise ValueError('img/Spectrum/%s: %s'
+                                 % (os.path.basename(ruta), e))
             lineas.append('  - %s IGNORADA: %s' % (lid, e))
             continue
         offs = []
@@ -1844,6 +1887,8 @@ def imagenes_128k(img_dir, locids, locidx, texto_len, progreso=None):
         tabla[k] = (offs[0][0], offs[1][0])
         originales[k] = (bmp, att, offs)
         _src = ('Spectrum/%s.scr' % lid if kind == 'scr'
+                else 'Spectrum/%s (dithering)' % os.path.basename(ruta)
+                if kind == 'zx'
                 else 'Original/%s (dithering)' % os.path.basename(ruta))
         lineas.append('  - img/%s: 2304 -> %d bytes (banco %d)'
                       % (_src, offs[0][1] + offs[1][1], offs[0][0] // 16384))

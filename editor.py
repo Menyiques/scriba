@@ -21,6 +21,12 @@ import copy
 
 # ─── Versión del IDE (incrementar AQUÍ cuando se pida) ──────────────────
 import scriba_info                    # fuente unica de version (la lee build_exe.bat)
+
+# Ademas del .scr, en img/Spectrum vale arte ya preparado para la maquina: se
+# convierte sin autocontraste y, en las tiras de localizacion, exigiendo 4:1.
+# spectrum_export tiene la misma lista, pero se importa tarde (se recarga en
+# desarrollo) y aqui hace falta desde el arranque.
+IMG_ZX_EXT = ('.png', '.jpg', '.jpeg', '.bmp')
 SCRIBA_VERSION   = scriba_info.SCRIBA_VERSION
 SCRIBA_COPYRIGHT = '(c) 2026 Menyiques Soft'
 
@@ -541,12 +547,13 @@ class ScribaEditor:
                                variable=self._zx_cols, value=nc,
                                command=self._apply_zx_cols)
         # Plataforma de imágenes a PREVISUALIZAR (no afecta a la exportación):
-        # 128K usa img/Spectrum/<id>.scr (ULA, o dithering de img/Original si no hay);
+        # 128K usa img/Spectrum/<id>.scr o .jpg/.bmp en 4:1 (o dithering del
+        # master de img/Original si no hay nada propio);
         # Next previsualiza siempre img/Original/<id>.png|jpg (master en color).
         self._plataforma = tk.StringVar(value='next')
         pm = tk.Menu(fm, tearoff=0)
         fm.add_cascade(label="Imágenes a previsualizar", menu=pm)
-        pm.add_radiobutton(label="128K  (img/Spectrum .scr, o dithering)",
+        pm.add_radiobutton(label="128K  (img/Spectrum .scr o .jpg/.bmp 4:1)",
                            variable=self._plataforma, value='128k',
                            command=self._apply_plataforma)
         pm.add_radiobutton(label="Next  (img/Original, .png/.jpg)",
@@ -924,7 +931,7 @@ class ScribaEditor:
                                          highlightbackground="#44556a")
         self.menu_img_canvas.pack(pady=4)
         ttk.Label(mfr, foreground='#667788', justify=tk.LEFT,
-                  text="128K: img/Spectrum/screen.scr (o dithering de Original)"
+                  text="128K: img/Spectrum/screen.scr o .jpg/.bmp (o Original)"
                        "\nNext: img/Original/screen.png|jpg"
                   ).pack(anchor=tk.W)
         fr.columnconfigure(1, weight=1)
@@ -2391,7 +2398,7 @@ class ScribaEditor:
         base = os.path.join(os.path.dirname(os.path.abspath(self.filepath)), 'img')
         if self._plat() == 'next':
             return os.path.join(base, 'Original'), ('.png', '.jpg', '.jpeg')
-        return os.path.join(base, 'Spectrum'), ('.scr',)
+        return os.path.join(base, 'Spectrum'), ('.scr',) + IMG_ZX_EXT
 
     def _img_file_for(self, lid):
         """Ruta del fichero de imagen de la localizacion lid (o None).
@@ -2399,18 +2406,30 @@ class ScribaEditor:
         Si no existe, cae al master de img/Original (.png/.jpg)."""
         d, exts = self._img_dir_loc()
         if d:
-            for ext in exts:
-                p = os.path.join(d, lid + ext)
-                if os.path.isfile(p):
-                    return p
+            p = self._busca_img(d, lid, exts)
+            if p:
+                return p
         # Fallback: master en img/Original
         if self.filepath:
             orig = os.path.join(os.path.dirname(os.path.abspath(self.filepath)),
                                 'img', 'Original')
-            for ext in ('.png', '.jpg', '.jpeg'):
-                p = os.path.join(orig, lid + ext)
+            p = self._busca_img(orig, lid, ('.png', '.jpg', '.jpeg'))
+            if p:
+                return p
+        return None
+
+    @staticmethod
+    def _busca_img(carpeta, lid, exts):
+        """Primer fichero de lid en carpeta. Admite las dos grafias del nombre,
+        con y sin la arroba del id: los masteres de img/Original se guardan con
+        ella y el arte de img/Spectrum, historicamente, sin ella."""
+        for nombre in (lid, lid.lstrip('@')):
+            for ext in exts:
+                p = os.path.join(carpeta, nombre + ext)
                 if os.path.isfile(p):
                     return p
+            if not lid.startswith('@'):
+                break
         return None
 
     def _apply_plataforma(self):
@@ -2498,13 +2517,23 @@ class ScribaEditor:
             except OSError:
                 filas = None
         elif path and self._plat() != 'next':
-            # 128K sin .scr propio: mostramos la conversion dithered (Spectrum),
-            # exactamente como saldra en el export. En Next se ve el master tal cual.
+            # 128K: se muestra la conversion dithered, exactamente como saldra en
+            # el export. Lo que esta en img/Spectrum es arte ya preparado y va sin
+            # autocontraste y exigiendo 4:1; el master de Original, al reves.
+            d, _ = self._img_dir_loc()
+            propio = bool(d and os.path.dirname(os.path.abspath(path))
+                          == os.path.abspath(d))
             try:
                 import png2spectrum
-                bmp, att = png2spectrum.to_scr_topthird(path)
+                bmp, att = png2spectrum.to_scr_topthird(
+                    path, contrast=not propio, exigir_ratio=propio)
                 filas = self._scr_top_third(bytes(bmp) + bytes(att))
-            except Exception:
+            except Exception as e:
+                if propio:
+                    cv.create_text(256, 64, width=480, justify=tk.CENTER,
+                                   text='%s:\n%s' % (os.path.basename(path), e),
+                                   fill='#c06060', font=self.fnt_ui)
+                    return
                 filas = self._img_top_third(path)
         elif path:
             filas = self._img_top_third(path)
@@ -2578,9 +2607,12 @@ class ScribaEditor:
                         break
             else:
                 for nm in ('screen', 'menu'):
-                    p = os.path.join(base, 'Spectrum', nm + '.scr')
-                    if os.path.isfile(p):
-                        path = p
+                    for ext in ('.scr',) + IMG_ZX_EXT:
+                        p = os.path.join(base, 'Spectrum', nm + ext)
+                        if os.path.isfile(p):
+                            path = p
+                            break
+                    if path:
                         break
                 if not path:                      # fallback: master de Original
                     for nm in ('screen', 'menu'):
