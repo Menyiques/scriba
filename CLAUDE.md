@@ -126,6 +126,12 @@ Formato `.pru`:
 | `% #linterna = INVEN` | dónde está un objeto: `@sala`, `INVEN`, `PUESTO`, `NADA` o `#contenedor` |
 | `<< fichero : 21` | mete las 21 primeras órdenes de un walkthrough |
 
+Los dos aceptan `-v` (cuenta cada orden según pasa: dónde acaba el jugador, la
+puntuación y el principio de la respuesta, y cada comprobación con su `ok` o su
+`FALLA`) y `-vv` (además la respuesta entera). `bateria_next.py` lee la salida
+del emulador **según sale**, no al terminar, así que con `-v` se ve la partida
+avanzar en vivo.
+
 Las comprobaciones miran la respuesta a la **última orden**, no la pantalla
 entera. Los nombres de variable se escriben sin guiones bajos (`_PILAS_CARGA`
 se comprueba como `$ PILASCARGA`), que es como los indexa el motor.

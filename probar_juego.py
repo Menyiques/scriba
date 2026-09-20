@@ -26,13 +26,18 @@ Las comprobaciones miran el estado de DESPUES de la ultima orden. El texto se
 busca sin distinguir mayusculas y con los espacios normalizados, porque en
 pantalla viene partido en lineas de 42 columnas.
 
-    python probar_juego.py juego.yaml pruebas.pru
+    python probar_juego.py juego.yaml pruebas.pru [-v | -vv]
+
+Con -v se va contando la partida orden a orden (donde acaba el jugador, la
+puntuacion y el final de la pantalla) y cada comprobacion con su ok o su fallo;
+con -vv, ademas, la pantalla entera despues de cada orden.
 """
 import io
 import os
 import re
 import sys
 import tempfile
+import time
 
 import yaml
 
@@ -185,16 +190,57 @@ def ordenes_de(path):
     return out
 
 
-def corre(juego, path_pru, verboso=False):
-    """Ejecuta un fichero de pruebas. Devuelve [(prueba, ok, detalle), ...]."""
+def corre(juego, path_pru, nivel=0, salida=None):
+    """Ejecuta un fichero de pruebas. Devuelve [(prueba, ok, detalle), ...].
+
+    nivel 0 = callado (al final se listan los fallos), 1 = cuenta cada orden y
+    cada comprobacion segun pasan, 2 = ademas la pantalla entera tras la orden.
+    """
+    out = salida or sys.stdout
+
+    def di(s):
+        if nivel:
+            out.write(s + '\n')
+            out.flush()
+
     base = os.path.dirname(os.path.abspath(path_pru))
     res = []
     nombre = '(sin nombre)'
     activa = False
     ultima = ''
+    n = 0
 
     def falla(txt):
         res.append((nombre, False, txt))
+        di('        FALLA %s' % txt)
+
+    def bien(txt):
+        di('        ok    %s' % txt)
+
+    def cuenta(orden):
+        """Una linea por orden: donde acaba el jugador, puntos y la respuesta."""
+        if not nivel:
+            return
+        etiqueta = ('  .  %s' % orden) if orden.startswith('(') else ('%3d. %s' % (n, orden))
+        estado = juego.donde().ljust(16)
+        try:
+            estado += ' puntos=%-3d' % juego.var('PUNTOS')
+        except KeyError:
+            pass
+        # el final de la pantalla, que es donde esta la respuesta a esta orden
+        t = ' '.join(' '.join(juego.pantalla()[-3:]).replace('>', ' ').split())
+        di('%s %s %s' % (etiqueta.ljust(31)[:31], estado,
+                         ('...' + t[-67:]) if len(t) > 70 else t))
+        if nivel >= 2:
+            for linea in juego.pantalla():
+                di('          | %s' % linea.rstrip())
+
+    def mete(orden):
+        nonlocal ultima, n
+        ultima = orden
+        n += 1
+        juego.escribe(orden)
+        cuenta(orden)
 
     for cruda in io.open(path_pru, encoding='utf-8'):
         linea = cruda.rstrip('\n').strip()
@@ -204,11 +250,17 @@ def corre(juego, path_pru, verboso=False):
             nombre = linea.lstrip('= ').strip() or '(sin nombre)'
             juego.arranca()
             activa = True
+            n = 0
+            ultima = ''
             res.append((nombre, None, 'inicio'))
+            di('=== %s' % nombre)
+            cuenta('(arranque)')
             continue
         if not activa:
             juego.arranca()
             activa = True
+            n = 0
+            cuenta('(arranque)')
         try:
             if linea.startswith('<<'):
                 # "<< fichero" mete todas las ordenes; "<< fichero : 21" solo las
@@ -217,19 +269,23 @@ def corre(juego, path_pru, verboso=False):
                 arg = linea[2:].strip()
                 tope = None
                 if ':' in arg:
-                    arg, _, n = arg.rpartition(':')
-                    arg, tope = arg.strip(), int(n)
+                    arg, _, cuantas = arg.rpartition(':')
+                    arg, tope = arg.strip(), int(cuantas)
                 for o in ordenes_de(os.path.join(base, arg))[:tope]:
-                    ultima = o
-                    juego.escribe(o)
+                    mete(o)
             elif linea.startswith('!?'):
                 busca = _norm(linea[2:])
                 if busca in juego.texto():
-                    falla('sale y no deberia: "%s" (tras "%s")' % (linea[2:].strip(), ultima))
+                    falla('!? %s   -> sale y no deberia (tras "%s")'
+                          % (linea[2:].strip(), ultima))
+                else:
+                    bien('!? %s' % linea[2:].strip())
             elif linea.startswith('?'):
                 busca = _norm(linea[1:])
                 if busca not in juego.texto():
-                    falla('no sale: "%s" (tras "%s")' % (linea[1:].strip(), ultima))
+                    falla('? %s   -> no sale (tras "%s")' % (linea[1:].strip(), ultima))
+                else:
+                    bien('? %s' % linea[1:].strip())
             elif linea.startswith('$'):
                 m = re.match(r'\$\s*(\w+)\s*(=|==|<>|!=|>=|<=|>|<)\s*(\d+)', linea)
                 if not m:
@@ -237,7 +293,10 @@ def corre(juego, path_pru, verboso=False):
                     continue
                 v = juego.var(m.group(1))
                 if not CMP[m.group(2)](v, int(m.group(3))):
-                    falla('%s vale %d, no %s %s' % (m.group(1), v, m.group(2), m.group(3)))
+                    falla('$ %s %s %s   -> vale %d (tras "%s")'
+                          % (m.group(1), m.group(2), m.group(3), v, ultima))
+                else:
+                    bien('$ %s %s %s' % (m.group(1), m.group(2), m.group(3)))
             elif linea.startswith('%'):
                 m = re.match(r'%\s*(\S+)\s*(=|==|<>|!=)\s*(\S+)', linea)
                 if not m:
@@ -246,45 +305,57 @@ def corre(juego, path_pru, verboso=False):
                 esta = juego.donde_obj(m.group(1))
                 igual = esta.upper() == m.group(3).upper()
                 if (m.group(2) in ('=', '==')) != igual:
-                    falla('%s esta en %s, y se esperaba %s %s'
-                          % (m.group(1), esta, m.group(2), m.group(3)))
+                    falla('%% %s %s %s   -> esta en %s (tras "%s")'
+                          % (m.group(1), m.group(2), m.group(3), esta, ultima))
+                else:
+                    bien('%% %s %s %s' % (m.group(1), m.group(2), m.group(3)))
             elif linea.startswith('@'):
                 esperada = linea[1:].strip()
                 if juego.donde() != esperada:
-                    falla('esta en %s, no en %s' % (juego.donde(), esperada))
+                    falla('@ %s   -> esta en %s (tras "%s")'
+                          % (esperada, juego.donde(), ultima))
+                else:
+                    bien('@ %s' % esperada)
             else:
-                ultima = linea
-                juego.escribe(linea)
-                if verboso:
-                    print('    > %s' % linea)
+                mete(linea)
         except Exception as e:
             falla('%s: %s' % (type(e).__name__, e))
     return res
 
 
 def main():
-    if len(sys.argv) < 3:
+    argv = sys.argv[1:]
+    sueltos = [a for a in argv if not a.startswith('-')]
+    if len(sueltos) < 2:
         print(__doc__)
         sys.exit(2)
-    juego = Juego(sys.argv[1])
-    print('%s -> %d localizaciones, %d objetos, %d imagenes'
-          % (os.path.basename(sys.argv[1]), juego.info['localizaciones'],
+    nivel = 2 if '-vv' in argv else (1 if '-v' in argv else 0)
+    juego = Juego(sueltos[0])
+    print('juego      %s -> %d localizaciones, %d objetos, %d imagenes'
+          % (os.path.basename(sueltos[0]), juego.info['localizaciones'],
              juego.info['objetos'], len(juego.info['imagenes'])))
-    print()
-    res = corre(juego, sys.argv[2], verboso='-v' in sys.argv)
-    fallos = 0
-    for nombre, ok, detalle in res:
-        if ok is None:
-            print('=== %s' % nombre)
-        elif not ok:
-            fallos += 1
-            print('   FALLA  %s' % detalle)
+    print('bateria    %s\n' % os.path.basename(sueltos[1]))
+    sys.stdout.flush()
+    t0 = time.time()
+    res = corre(juego, sueltos[1], nivel)
+    tardado = time.time() - t0
+
+    fallos = [(n, d) for n, ok, d in res if ok is False]
     pruebas = sum(1 for _, ok, _ in res if ok is None)
+    comprobadas = len(res) - pruebas
     print()
-    if fallos:
-        print('%d prueba(s), %d fallo(s)' % (pruebas, fallos))
-    else:
-        print('%d prueba(s), todo correcto' % pruebas)
+    if not nivel:
+        anterior = None
+        for nombre, detalle in fallos:
+            if nombre != anterior:
+                print('=== %s' % nombre)
+                anterior = nombre
+            print('        FALLA %s' % detalle)
+        if fallos:
+            print()
+    print('%d prueba(s), %s  (%.0fs)'
+          % (pruebas, '%d fallo(s)' % len(fallos) if fallos else 'todo correcto',
+             tardado))
     sys.exit(1 if fallos else 0)
 
 

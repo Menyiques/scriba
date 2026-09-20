@@ -46,6 +46,11 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
   walkthrough, entero o solo las N primeras.
 - **`Games/Operacion Tifon Negro/tifon.pru`**: 12 pruebas del juego, entre ellas
   que se puede acabar con 110/110 siguiendo la ruta optima.
+- **Modo verboso en las dos** (`-v`, `-vv`): cuenta cada orden segun pasa
+  — donde acaba el jugador, la puntuacion y el principio de la respuesta — y
+  cada comprobacion con su `ok` o su `FALLA` en su sitio, en vez de una lista
+  al final. `bateria_next.py` lee la salida del emulador **segun sale**, asi
+  que la partida se ve avanzar en vivo.
 
 ### Correcciones
 Las tres las encontro la bateria nueva.
