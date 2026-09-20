@@ -375,6 +375,9 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False):
                         'light':light,'lit':lit,'open':op,'locked':lk,'incont':incont,
                         'weight':wt})
     # contexto con indices de recolecta
+    if len(c.vars)>ge.NRAM:
+        raise ValueError('el motor nativo admite %d variables como mucho '
+                         '(FLAGS), y el juego declara %d'%(ge.NRAM,len(c.vars)))
     ctx=Ctx(msgbase=len(messages)); ctx.strict=True
     ctx.vars={k.upper().replace('_',''):i for i,k in enumerate(c.vars.keys())}
     ctx.locs={name:(c.locidx[name]-1) for name in c.locidx}

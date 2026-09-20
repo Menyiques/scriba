@@ -159,6 +159,13 @@ se comprueba como `$ PILASCARGA`), que es como los indexa el motor.
   comprobar los `ld hl,(DBB+n)` de `init` contra la tabla, no contra los
   comentarios.
 
+- **El motor nativo no admite mas de 64 objetos ni 64 variables.** `FLAGS`,
+  `OBJLOC`, `OBJLIT`, `OBJOPEN`, `OBJLOCK` y `OBJIN` son `defs 64` fijos y
+  pasarse no daba error: escribia sobre la matriz siguiente. Desde 2.47
+  `build_game_db` y `nativecc` cortan con un mensaje claro
+  (`game_engine.NRAM`). Las **localizaciones** si llegan a 255: no tienen
+  matriz en RAM. Subir el tope cuesta ~1,1 KB de RAM por las seis matrices.
+
 - **`ISAT` tiene tres clases de destino, no dos**: sentinel (`INVEN`/`PUESTO`/
   `NADA`), localización (`@sala`) y **contenedor** (`#objeto`). El tercero no
   cabe en el byte de `OBJLOC` — un objeto contenido guarda `CONTAINED` ahí y el

@@ -10,6 +10,7 @@ SHEAVY=13
 SSCOREP=14                       # prefijo de "+N puntos" (ADDSCORE)
 SSCORES=15                       # sufijo de "+N puntos"
 NSYS=16
+NRAM=64                          # tamano de las matrices de estado en RAM
 CARRIED=255
 NOWHERE=254
 WORN=253                         # objeto puesto (sentinel en OBJLOC); CARRIED incluye WORN
@@ -46,6 +47,13 @@ def enc_condacts(clist):
     return bytes(out)
 
 def build_game_db(messages, locations, vocab, objects, responses, startloc, sysverbs, width=40, load=DB, proc_before=b'', proc_after=b'', proc_onstart=b'', title_pal=b'', has_music=False, has_title=False, hdrbuf=0, imgbuf=0, loc_slot=b'', vall=0, font_acc=b'', timers=(), llevarmax=0, fx=b'', exit_names=None):
+    # Las matrices de estado del motor (FLAGS, OBJLOC, OBJLIT, OBJOPEN, OBJLOCK,
+    # OBJIN) son 'defs 64' fijos, asi que pasarse no da error: escribe encima de
+    # la siguiente. Mejor parar aqui que depurar luego por que se mueve solo un
+    # objeto al encender una linterna.
+    if len(objects)>NRAM:
+        raise ValueError('el motor nativo admite %d objetos como mucho, y el '
+                         'juego trae %d' % (NRAM, len(objects)))
     # Tokens 128..223 (96 max); los codigos 224..239 quedan para los acentos.
     dic=txtpack.build_dict(''.join(messages),96)
     exps=txtpack.expansions(dic); ntok=len(exps)

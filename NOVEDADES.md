@@ -61,6 +61,13 @@ Las tres las encontro la bateria nueva.
   `objlight` y `objlit` dos bytes por encima de donde las deja el constructor de
   la base de datos, de modo que ninguna sala era oscura y ningun objeto
   alumbraba: en *Tifon Negro* el tunel de escape se veia sin linterna.
+- **El motor nativo se pasaba de largo con mas de 64 objetos o 64 variables.**
+  Las matrices de estado en RAM (`FLAGS`, `OBJLOC`, `OBJLIT`, `OBJOPEN`,
+  `OBJLOCK`, `OBJIN`) son de 64 y no habia ninguna comprobacion: el objeto 65
+  escribia sobre la matriz siguiente sin dar error. Ahora se corta al compilar
+  con un mensaje claro. (Las **localizaciones** si llegan a 255: no llevan
+  matriz en RAM.)
+
 - **`PRINT "...{_VARIABLE}..."` imprimia las llaves tal cual** en el motor
   nativo, en vez del valor: salia `[0{_HORA_H}:{_HORA_M}]` y `(Carga restante:
   {_PILAS_CARGA} turnos.)`. Ahora `nativecc` parte el texto por las llaves y va
