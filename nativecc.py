@@ -262,7 +262,7 @@ def desplaza_acentos(s):
     translit_disp convierte cada acento en '?'."""
     return ''.join(chr(ord(ch)+80) if 144<=ord(ch)<160 else ch for ch in s)
 
-def compile_game(c, sysm, width=40, filas=0, ficha=None):
+def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False):
     g=c.game
     # idioma para los acentos (es/pt). Fija el set de acentos de translit_disp.
     lang=str((getattr(c,'meta',{}) or {}).get('language','') or '').lower()
@@ -373,6 +373,11 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None):
         _filas = int(filas or 0)
         _usadas = 0
         _b = bytearray()
+        if imagen_intro:
+            # La imagen de la sala se pone AQUI, no en start: asi el on_start del
+            # autor (que suele fijar borde, tinta y papel, y limpiar) ya ha
+            # corrido, y no se ve el borde cambiar despues de pintar la imagen.
+            _b += bytes([ge.COP_EXTRA['SHOWPIC']])
         for _p in _ini:
             if _filas:
                 _n = 1 if not _p else (len(_p) + _anc - 1) // _anc

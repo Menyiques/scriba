@@ -525,12 +525,17 @@ def verificar_nex(game, salida, datadir=None, musicdir=None):
     cpu.hook_out[0xBFFD] = lambda c, pt, v: ay.append(('val', v))
     presentacion = []
     titulo = None
+    bordes = []
+    cpu.hook_out[0xFE] = lambda c, pt, v: bordes.append(v & 7)
+    arranque = {'showpic': 0}
     l2_en_intro = l2_banco_intro = fila_intro = None
     vista_intro = False
     soltar = False
     n = 0
     frame = sym.get('nxframe')
     while n < 10000000 and cpu.pc != sym['read_line']:
+        if cpu.pc == sym.get('c_showpic'):
+            arranque['showpic'] += 1
         toca = False
         if frame is not None and cpu.pc == frame:
             if titulo is None:
@@ -565,6 +570,7 @@ def verificar_nex(game, salida, datadir=None, musicdir=None):
         cpu.step()
         n += 1
     tec0.suelta()
+    arranque['bordes'] = bordes
     if titulo is not None:
         titulo['clip_final'] = cpu.nextreg.get(0x18)
     llego = cpu.pc == sym['read_line']
@@ -664,7 +670,7 @@ def verificar_nex(game, salida, datadir=None, musicdir=None):
             'esp0': esp0,
         }
     return (info, llego, n, pant, bancos, jugadas, img, presentacion, titulo,
-            revelado, ritmo, reinicia)
+            revelado, ritmo, reinicia, arranque)
 
 
 def main():
@@ -688,7 +694,7 @@ def main():
     import tempfile
     salida = os.path.join(tempfile.gettempdir(), 'scriba_prueba_nativo.nex')
     (info, llego, pasos, pant, bancos, jugadas, img, presentacion, titulo,
-     revelado, ritmo, reinicia) = verificar_nex(
+     revelado, ritmo, reinicia, arranque) = verificar_nex(
         game, salida, datadir=nn.datadir_por_defecto(path),
         musicdir=nn.musicdir_por_defecto(path))
     print('--- .nex: %s' % os.path.basename(salida))
@@ -717,6 +723,17 @@ def main():
                     revelado['cortes'] == esperado))
         res.append(('...y no se vuelve a revelar si ya estaba puesta esa imagen',
                     revelado['repetido'] == 0))
+
+    ini_txt = (game.get('metadata') or {}).get('start_message') or ''
+    if info['imagenes'] and ini_txt.strip():
+        res.append(('la imagen de la intro la pone el guion (SHOWPIC), no el arranque',
+                    arranque['showpic'] >= 1))
+    b = arranque.get('bordes') or []
+    if b:
+        print()
+        print('    --- borde: %s' % ' -> '.join(str(x) for x in b[:4]))
+        res.append(('el borde ya arranca con el del guion, sin cambiar despues',
+                    len(set(b)) == 1 and b[0] == nn.borde_inicial(game)))
 
     if reinicia is not None:
         res.append(('la cuenta de pagina se reinicia con cada orden',

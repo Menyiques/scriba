@@ -23,7 +23,8 @@ EOP={'END':0,'CONST':1,'VAR':2,'ADD':3,'SUB':4,'EQ':5,'NE':6,'LT':7,'GT':8,
  'ISAT':21,'CHANCE':22,'WORN':23,'NOTWORN':24,'VERB':25,'NOUN1':26,
  'TIMER':27,'HASOBJOPEN':28,'NOUN2':29}
 # condacts extra: LETX (var,expr) e IF (expr -> salta cuerpo si falso)
-COP_EXTRA={'LETX':26,'IF':27,'JMP':28,
+COP_EXTRA={'SHOWPIC':50,
+ 'LETX':26,'IF':27,'JMP':28,
  'INK':29,'PAPER':30,'BORDER':31,'PAUSE':32,'CLS':33,
  'WEAR':34,'REMOVE':35,'LIT':36,'UNLIT':37,'SCORE':38,
  'TSTART':39,'TSTOP':40,'TRESET':41,
@@ -2079,7 +2080,7 @@ rc_loop:
         cp    e
         jr    nc,rc_end
 rc_go:  call  getop
-        cp    50
+        cp    51
         jr    nc,rc_loop
         add   a,a
         ld    e,a
@@ -2828,6 +2829,13 @@ c_addscore:
         call  print_msg
         call  newline
         jp    rc_loop
+; c_showpic: pinta la imagen de la localizacion actual sin describirla. Sirve
+; para que la portada de la sala este puesta ANTES del mensaje inicial, o sea
+; despues de que el on_start del autor haya dejado borde y colores como quiere.
+c_showpic:
+        call  show_loc_image
+        jp    rc_loop
+
 CTAB:   defw c_at,c_notat,c_present,c_absent,c_carried,c_notcarr,c_zero,c_notzero,c_eq
         defw c_goto,c_message,c_mes,c_get,c_drop,c_destroy,c_create,c_place,c_set
         defw c_clear,c_let,c_plus,c_minus,c_done,c_desc,c_inven,c_newline
@@ -2837,6 +2845,7 @@ CTAB:   defw c_at,c_notat,c_present,c_absent,c_carried,c_notcarr,c_zero,c_notzer
         defw c_score,c_tstart,c_tstop,c_treset
         defw c_open,c_close,c_lock,c_unlock,c_putin,c_takeout
         defw c_play,c_addscore
+        defw c_showpic
 
 show_title:
         ld    a,(hastitle)

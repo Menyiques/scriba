@@ -842,7 +842,7 @@ NXCOL:  defb 0,0,1,1,1,2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,5,5,5,6,6,6,7
 ; (borde 7, papel 7, tinta 0), y luego Layer 2 si el juego trae imagenes.
 ; ---------------------------------------------------------------------------
 NXINIT:
-        ld    a,7
+        ld    a,NXBORDE
         out   (254),a
         ld    a,56             ; papel 7, tinta 0
         ld    (nxattr),a
@@ -1031,16 +1031,6 @@ def _engine_next(con_imagenes, con_titulo=False):
                      '        ld    (has128),a      ; sin cache de imagenes en banco\n'
                      '        jp    NXINIT') + src[j:]
 
-    # La imagen de la sala inicial se pone ANTES de la presentacion, no al
-    # describir la sala: asi la intro se lee con su ilustracion ya puesta y el
-    # texto colocado en las filas 8..23, en vez de a pantalla completa y con la
-    # imagen apareciendo de golpe al final.
-    k = src.index('call  setup_acc')
-    k = src.index(chr(10), k) + 1
-    src = (src[:k] +
-           '        call  show_loc_image   ; imagen de la sala inicial ya en la intro\n' +
-           src[k:])
-
     # La cuenta de pagina se reinicia al leer cada orden.
     k = src.index('call  read_line')
     k = src.index(chr(10), k) + 1
@@ -1121,7 +1111,7 @@ sli_cls:
     return src[:i] + nuevo + src[j:]
 
 
-def prefijo(org, db_base, nimg=0, titulo=False):
+def prefijo(org, db_base, nimg=0, titulo=False, borde=7):
     """Constantes que el motor espera resueltas. A diferencia del CPC, aqui NO
     se declaran TXTO/KMW/... como equ: son etiquetas de PLAT_ASM."""
     L = ['ORIGIN equ &%04X' % org,          # el motor lleva dentro 'org ORIGIN'
@@ -1132,7 +1122,8 @@ def prefijo(org, db_base, nimg=0, titulo=False):
          'NXPALPG equ %d' % (2 * (BANK_IMG + nimg + (3 if titulo else 0))),
          'NXPALTIT equ %d' % nimg,              # slot de la paleta de la portada
          'NXREVPASO equ %d' % REVELADO_PASO,    # lineas por barrido al revelar
-         'NXLENTO equ %d' % TEXTO_RITMO]        # caracteres por barrido al escribir
+         'NXLENTO equ %d' % TEXTO_RITMO,        # caracteres por barrido al escribir
+         'NXBORDE equ %d' % borde]              # color de borde al arrancar
     for n in ('SCANTGO', 'SEXITS', 'SNOUND', 'SSEE', 'STAKE', 'SDROP',
               'SNOTHERE', 'SNOTCARR', 'SINVEN', 'SEMPTY', 'SNOTAKE', 'SDARK',
               'SSCORE', 'SHEAVY', 'SSCOREP', 'SSCORES',
@@ -1142,7 +1133,7 @@ def prefijo(org, db_base, nimg=0, titulo=False):
 
 
 def assemble_engine_next(org=ORG, db_base=None, idioma='es', paletas=b'',
-                         titulo_pal=b'', psg=b''):
+                         titulo_pal=b'', psg=b'', borde=7):
     """Ensambla motor + plataforma Next. Devuelve (bytes, tabla_de_simbolos).
     paletas:    256 bytes por imagen (un byte por color), en orden de slot
     titulo_pal: 256 bytes de la paleta de la portada (b'' = sin portada)
@@ -1160,7 +1151,8 @@ def assemble_engine_next(org=ORG, db_base=None, idioma='es', paletas=b'',
         partes.append(TITULO_ASM)
         partes.append(PSG_ASM + chr(10) + _datos_asm('NXPSG', psg)
                       if psg else PSG_ASM_VACIO)
-    fuente = (prefijo(org, db_base, nimg, titulo) + _engine_next(nimg > 0, titulo) +
+    fuente = (prefijo(org, db_base, nimg, titulo, borde) +
+              _engine_next(nimg > 0, titulo) +
               PLAT_ASM + chr(10) + chr(10).join(partes) + chr(10) +
               _font_asm(idioma) + chr(10))
     return z80asm.assemble(fuente, org=org)
@@ -1171,6 +1163,16 @@ def _datos_asm(etiqueta, datos):
     for i in range(0, len(datos), 16):
         L.append('        defb ' + ','.join(str(b) for b in datos[i:i + 16]))
     return chr(10).join(L)
+
+
+def borde_inicial(game, por_defecto=7):
+    """Color de borde con el que arrancar, sacado del BORDER que el on_start del
+    autor pone (si lo pone). Se usa para la cabecera del .nex y para el arranque
+    del motor, de modo que la portada salga ya con SU borde: si no, se ve blanco
+    durante el titulo y cambia de golpe en cuanto corre on_start."""
+    guion = str(((game.get('condacts') or {}).get('on_start') or ''))
+    m = re.search(r'(?mi)^\s*BORDER\s+(\d+)', guion)
+    return (int(m.group(1)) & 7) if m else por_defecto
 
 
 def _titulo(datadir):
@@ -1313,7 +1315,7 @@ def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None):
     import scriba_info
     ficha = scriba_info.ficha(game, 'next', scriba_info.ahora())
     spec, _ = nc.compile_game(c, sysm[:ge.NSYS], width=ancho, filas=0,
-                              ficha=ficha)
+                              ficha=ficha, imagen_intro=True)
 
     idioma = str((game.get('metadata') or {}).get('language', '') or 'es')
     # la tabla loc_slot dice, por localizacion, que slot de imagen le toca (255 =
@@ -1324,10 +1326,13 @@ def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None):
     for k, lid in enumerate(imgs):
         loc_slot[pos[lid]] = k
 
+    borde = borde_inicial(game)
+
     def _ensambla(psg, base):
         return assemble_engine_next(org=org, db_base=base, idioma=idioma,
                                     paletas=paletas,
-                                    titulo_pal=titulo_pal or b'', psg=psg)
+                                    titulo_pal=titulo_pal or b'', psg=psg,
+                                    borde=borde)
 
     def _db(dbaddr):
         return ge.build_game_db(
@@ -1369,13 +1374,13 @@ def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None):
         loc_slot=bytes(loc_slot), vall=spec['vall'],
         font_acc=spec['font_acc'], timers=spec['timers'],
         llevarmax=spec['llevarmax'], fx=fx_blob)
-    extras = {'imgs': imgs, 'datadir': datadir, 'fx': fx_blob,
+    extras = {'imgs': imgs, 'datadir': datadir, 'fx': fx_blob, 'borde': borde,
               'titulo': titulo_bin, 'titulo_pal': titulo_pal, 'paletas': paletas,
               'psg': psg, 'psg_nom': psg_nom, 'aviso_psg': aviso_psg}
     return code, db, sym, spec, dbaddr, extras
 
 
-def export_nex(game, salida, ancho=COLS, org=ORG, borde=0, datadir=None,
+def export_nex(game, salida, ancho=COLS, org=ORG, borde=None, datadir=None,
                musicdir=None):
     """Compila el juego al motor nativo y lo empaqueta en un .nex arrancable.
     Sin zxbc, sin Boriel, sin NextBuild: todo en Python."""
@@ -1417,7 +1422,7 @@ def export_nex(game, salida, ancho=COLS, org=ORG, borde=0, datadir=None,
             pal.ljust(16384, b'\x00')
 
     empaqueta_nex.build_nex(salida, bancos, pc=sym['start'], sp=SP_NEX,
-                            border=borde)
+                            border=ex['borde'] if borde is None else borde)
     return {'codigo': len(code), 'datos': len(db), 'total': len(plano),
             'org': org, 'fin': fin, 'pc': sym['start'], 'sp': SP_NEX,
             'bancos': sorted(bancos), 'simbolos': sym, 'imagenes': imgs,
