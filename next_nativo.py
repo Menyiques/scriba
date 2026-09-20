@@ -489,6 +489,17 @@ nx_bs:  ld    a,(nxcol)
         ret
 
 ; ---------------------------------------------------------------------------
+; nxpreset: pone a cero la cuenta de pagina. Se llama nada mas leer una orden:
+; todo lo que hay por encima del prompt ya lo ha leido el jugador, asi que las
+; 16 lineas vuelven a contar desde ahi. Es lo que hace el export de 128K con
+; pcnt justo despues de leeLinea$().
+; ---------------------------------------------------------------------------
+nxpreset:
+        xor   a
+        ld    (nxpcnt),a
+        ret
+
+; ---------------------------------------------------------------------------
 ; char_lento: imprime un caracter y marca el paso. Cada NXLENTO caracteres se
 ; espera un barrido, asi que el texto se dibuja a un ritmo fijo en lugar de
 ; aparecer entero de golpe: una descripcion de sala tarda un par de segundos y
@@ -1022,6 +1033,13 @@ def _engine_next(con_imagenes, con_titulo=False):
     k = src.index(chr(10), k) + 1
     src = (src[:k] +
            '        call  show_loc_image   ; imagen de la sala inicial ya en la intro\n' +
+           src[k:])
+
+    # La cuenta de pagina se reinicia al leer cada orden.
+    k = src.index('call  read_line')
+    k = src.index(chr(10), k) + 1
+    src = (src[:k] +
+           '        call  nxpreset        ; lo de arriba del prompt ya esta leido\n' +
            src[k:])
 
     # Solo wrap_print pasa a char_lento: es el camino por el que salen los

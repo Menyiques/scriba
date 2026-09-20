@@ -557,6 +557,13 @@ def verificar_nex(game, salida, datadir=None, musicdir=None):
                 break
             jugadas.append((orden, [l for l in leer_pantalla(mem, sym) if l.strip()]))
 
+    # ---- la cuenta de pagina se reinicia al leer cada orden ----
+    reinicia = None
+    if llego and jugadas:
+        mem[sym['nxpcnt']] = 99            # valor imposible, a ver si lo borra
+        teclea(cpu, sym, tec2, 'i' + chr(13))
+        reinicia = mem[sym['nxpcnt']] < 99
+
     # ---- revelado progresivo al entrar en una sala con imagen ----
     revelado = None
     if info['imagenes'] and llego:
@@ -633,7 +640,7 @@ def verificar_nex(game, salida, datadir=None, musicdir=None):
             'esp0': esp0,
         }
     return (info, llego, n, pant, bancos, jugadas, img, presentacion, titulo,
-            revelado, ritmo)
+            revelado, ritmo, reinicia)
 
 
 def main():
@@ -657,7 +664,7 @@ def main():
     import tempfile
     salida = os.path.join(tempfile.gettempdir(), 'scriba_prueba_nativo.nex')
     (info, llego, pasos, pant, bancos, jugadas, img, presentacion, titulo,
-     revelado, ritmo) = verificar_nex(
+     revelado, ritmo, reinicia) = verificar_nex(
         game, salida, datadir=nn.datadir_por_defecto(path),
         musicdir=nn.musicdir_por_defecto(path))
     print('--- .nex: %s' % os.path.basename(salida))
@@ -686,6 +693,10 @@ def main():
                     revelado['cortes'] == esperado))
         res.append(('...y no se vuelve a revelar si ya estaba puesta esa imagen',
                     revelado['repetido'] == 0))
+
+    if reinicia is not None:
+        res.append(('la cuenta de pagina se reinicia con cada orden',
+                    bool(reinicia)))
 
     if ritmo and ritmo['chars']:
         print()
