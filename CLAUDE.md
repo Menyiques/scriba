@@ -185,6 +185,15 @@ los másteres de `img/Original`, en cambio, se escalan sin protestar. Margen del
 
 ## Trampas que ya han mordido
 
+- **`run_condacts` recibe la longitud del cuerpo en DE.** `run_response` la
+  deja ahí y cualquier `ld de,...` por el medio la destruye: el cuerpo de la
+  respuesta se ejecuta con un final absurdo y la regla parece no casar. Costó
+  una tarde y no da ningún error, solo «No entiendo eso».
+
+- **Comodines de sustantivo (manual):** `_` = hueco vacío, o sea que NO puede
+  haber palabra; `*` = cualquier palabra o ninguna. En la tabla de respuestas
+  se codifican 254 y 255, y 0 es la ranura que la regla no declara.
+
 - **`startswith('REM')` se come `REMOVE`.** Fue un bug real en cinco sitios. Al
   detectar comentarios, `upper == 'REM' or upper.startswith('REM ')`.
 
@@ -232,7 +241,7 @@ los másteres de `img/Original`, en cambio, se escalan sin protestar. Margen del
 
 ## Estado
 
-Rama de trabajo: `fix/predicados-objeto-v2.44`. Scriba 2.5.
+Rama de trabajo: `fix/predicados-objeto-v2.44`. Scriba 2.51.
 
 El camino `.nex` con Boriel está **parado**: `next_export.moduliza_texto()` está
 escrito pero no lo llama nadie, bloqueado por `EmbeddedMmuSwitchAssembleError`

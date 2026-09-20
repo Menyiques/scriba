@@ -140,16 +140,28 @@ def texto_pantalla(mem, sym):
 # ---------------------------------------------------------------------------
 # ejecucion acotada de una rutina
 # ---------------------------------------------------------------------------
-def ejecutar(cpu, mem, addr, pasos=800000):
+def ejecutar(cpu, mem, addr, pasos=800000, sym=None, tec=None):
+    """Llama a una rutina del motor y vuelve. Con sym y tec, ademas pulsa una
+    tecla cada vez que el motor se queda esperandola: una descripcion larga
+    llena la ventana y se para sola en la pausa de pagina, y sin esto el arnes
+    se quedaba dando vueltas hasta agotar los pasos."""
     mem[0xFFFE] = 0xC9
     cpu.sp = 0xFFEE
     mem[0xFFEE] = 0xFE
     mem[0xFFEF] = 0xFF
     cpu.pc = addr
     cpu.halted = False
+    espera = sym.get('kmread') if (sym and tec) else None
+    suelta = [False]
     n = 0
     while n < pasos and cpu.pc != 0xFFFE:
         n += 1
+        if espera is not None and cpu.pc == espera:
+            if suelta[0]:
+                tec.suelta()
+            else:
+                tec.pulsa(' ')
+            suelta[0] = not suelta[0]
         cpu.step()
     if n >= pasos:
         raise RuntimeError('sin terminar en %d pasos desde %04X' % (pasos, addr))
@@ -639,7 +651,7 @@ def verificar_nex(game, salida, datadir=None, musicdir=None):
 
         cpu.step = _mide
         mem[sym['nxultimo']] = 255
-        ejecutar(cpu, mem, sym['describe'], pasos=4000000)
+        ejecutar(cpu, mem, sym['describe'], pasos=4000000, sym=sym, tec=tec2)
         cpu.step = paso
         ritmo = dict(cuenta)
         ritmo['pantalla'] = [l for l in leer_pantalla(mem, sym) if l.strip()]

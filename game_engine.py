@@ -103,9 +103,16 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     objlit=p; p+=nobj            # 1 si la fuente de luz esta encendida (inicial)
     resptab=p
     rbytes=bytearray()
-    for (vb,nn,cl) in responses:
+    for _r in responses:
+        # (verbo, sustantivo1, cuerpo) o (verbo, sustantivo1, sustantivo2,
+        # cuerpo). 0 = ranura no declarada (vale cualquier cosa), 254 = '_'
+        # (hueco vacio: no puede haber palabra), 255 = '*' (cualquiera o
+        # ninguna), y si no, el id del sustantivo.
+        if len(_r)==4: vb,nn,n2,cl=_r
+        else:          (vb,nn,cl),n2=_r,0
         cb=bytes(cl) if isinstance(cl,(bytes,bytearray)) else enc_condacts(cl)
-        rbytes.append(vb&0xFF); rbytes.append(nn&0xFF); rbytes.append(len(cb)&0xFF); rbytes+=cb
+        rbytes.append(vb&0xFF); rbytes.append(nn&0xFF); rbytes.append(n2&0xFF)
+        rbytes.append(len(cb)&0xFF); rbytes+=cb
     rbytes.append(255)
     p+=len(rbytes)
     def mkblk(b): return (bytes([len(b)&0xFF,(len(b)>>8)&0xFF])+bytes(b)) if b else b''
@@ -529,6 +536,7 @@ d_nonom:
         call  print_msg        ; descripcion
         call  list_here        ; objetos que hay aqui
         call  newline
+        call  newline          ; una linea en blanco: las salidas, aparte
         ld    de,SEXITS        ; y las salidas al final, como en el export de
         call  print_msg        ; 128K: descripcion, objetos, salidas
         pop   hl               ; ...se recupera aqui, que print_msg se lo lleva
@@ -1040,7 +1048,14 @@ dg_l:   ld    a,(oidx)
         call  objloc_get
         ld    hl,curloc
         cp    (hl)
+        jr    z,dg_aqui
+        cp    CONTAINED       ; dentro de un contenedor: vale si se alcanza
         jr    nz,dg_nx
+        ld    a,(oidx)
+        call  obj_present
+        or    a
+        jr    z,dg_nx
+dg_aqui:
         ld    a,(oidx)
         call  objfix_get
         or    a
@@ -1078,7 +1093,8 @@ dg_no:  call  newline
 ; ---- COGER TODO: coge todos los objetos presentes en la localizacion ----
 dg_all: xor   a
         ld    (oidx),a
-        ld    (ctmp),a        ; ctmp = nº de objetos cogidos
+        ld    (dgcnt),a       ; dgcnt = nº de objetos cogidos (ctmp lo usa
+                              ; obj_present, que se llama en el bucle)
 dga_l:  ld    a,(oidx)
         ld    hl,nobj
         cp    (hl)
@@ -1087,7 +1103,14 @@ dga_l:  ld    a,(oidx)
         call  objloc_get
         ld    hl,curloc
         cp    (hl)
-        jr    nz,dga_nx       ; no esta aqui
+        jr    z,dga_aqui      ; suelto en la sala
+        cp    CONTAINED       ; o dentro de un contenedor abierto y presente:
+        jr    nz,dga_nx       ; "coger todo" coge todo lo que se pueda coger
+        ld    a,(oidx)
+        call  obj_present
+        or    a
+        jr    z,dga_nx
+dga_aqui:
         ld    a,(oidx)
         call  objfix_get
         or    a
@@ -1103,14 +1126,14 @@ dga_l:  ld    a,(oidx)
         call  print_msg
         ld    a,(oidx)
         call  print_objname
-        ld    a,(ctmp)
+        ld    a,(dgcnt)
         inc   a
-        ld    (ctmp),a
+        ld    (dgcnt),a
 dga_nx: ld    a,(oidx)
         inc   a
         ld    (oidx),a
         jr    dga_l
-dga_e:  ld    a,(ctmp)
+dga_e:  ld    a,(dgcnt)
         or    a
         ret   nz             ; cogio algo
         jp    dg_no          ; nada que coger -> "No ves eso aqui."
@@ -2029,11 +2052,14 @@ run_response:
 rr_e:   ld    a,(hl)
         cp    255
         jr    z,rr_no
-        ld    b,a
+        ld    b,a             ; verbo que pide la regla
         inc   hl
-        ld    c,(hl)
+        ld    c,(hl)          ; sustantivo 1
         inc   hl
         ld    a,(hl)
+        ld    (rnoun2),a      ; sustantivo 2
+        inc   hl
+        ld    a,(hl)          ; longitud del cuerpo
         inc   hl
         ld    e,a
         ld    d,0
@@ -2046,11 +2072,19 @@ rr_e:   ld    a,(hl)
         ld    a,(verbid)
         cp    b
         jr    nz,rr_nx
-        ld    a,c
-        or    a
-        jr    z,rr_run
+        push  de              ; DE = longitud del cuerpo, la quiere run_condacts
         ld    a,(nounid)
-        cp    c
+        ld    b,a
+        ld    a,c
+        call  rr_casa
+        pop   de
+        jr    nz,rr_nx
+        push  de
+        ld    a,(nounid2)
+        ld    b,a
+        ld    a,(rnoun2)
+        call  rr_casa
+        pop   de
         jr    nz,rr_nx
 rr_run: call  run_condacts
         or    a
@@ -2060,6 +2094,27 @@ rr_run: call  run_condacts
 rr_nx:  ld    hl,(rnext)
         jr    rr_e
 rr_no:  xor   a
+        ret
+
+; rr_casa: A = lo que pide la regla, B = lo que tecleo el jugador. Vuelve con Z
+; si casan, y sin tocar DE ni HL, que llevan el cuerpo y su longitud.
+; Comodines del manual: '_' (254) es hueco vacio, o sea que NO puede haber
+; palabra; '*' (255) es cualquier palabra o ninguna; y 0 es la ranura que la
+; regla no declara, que tambien vale para todo.
+rr_casa:
+        or    a
+        ret   z               ; 0  -> la regla no pide nada ahi
+        cp    255
+        jr    z,rrc_si        ; *  -> cualquier palabra o ninguna
+        cp    254
+        jr    z,rrc_vacio     ; _  -> tiene que no haber palabra
+        cp    b
+        ret
+rrc_vacio:
+        ld    a,b
+        or    a
+        ret
+rrc_si: xor   a
         ret
 
 run_proc:
@@ -2636,11 +2691,8 @@ ex_noun1:
         cp    (hl)
         jp    z,ex_t
         jp    ex_f
-exn_any:
-        ld    a,(nounid)
-        or    a
-        jp    nz,ex_t
-        jp    ex_f
+exn_any:                 ; '*' = cualquier palabra o ninguna
+        jp    ex_t
 exn_no: ld    a,(nounid)
         or    a
         jp    z,ex_t
@@ -2655,10 +2707,7 @@ ex_noun2:
         cp    (hl)
         jp    z,ex_t
         jp    ex_f
-e2_any: ld    a,(nounid2)
-        or    a
-        jp    nz,ex_t
-        jp    ex_f
+e2_any: jp    ex_t         ; '*' = cualquier palabra o ninguna
 e2_no:  ld    a,(nounid2)
         or    a
         jp    z,ex_t
@@ -3036,6 +3085,8 @@ nounid:   defb 0
 nounid2:  defb 0
 vtype:    defb 0
 tnoun:    defb 0
+dgcnt:    defb 0
+rnoun2:   defb 0
 oidx:     defb 0
 quitf:    defb 0
 rndseed:  defw 1

@@ -18,6 +18,27 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
 
 ---
 
+## 2.51 — 2026-09-21 — Los comodines del manual, y COGER TODO como debe
+
+### Novedades
+- **Una linea en blanco antes de las salidas** en la descripcion de sala.
+
+### Correcciones
+- **`COGER TODO` ya coge todo lo que se pueda coger**, este suelto en la sala o
+  dentro de un contenedor abierto y presente. `COGER <objeto>` tambien. El
+  motor nativo solo miraba lo que hubiera suelto; el export de 128K si sacaba
+  de los contenedores, asi que los dos backends daban resultados distintos ante
+  la misma orden.
+- **Los comodines de sustantivo funcionan como dice el manual.** `_` es hueco
+  vacio (no puede haber palabra) y `*` es cualquier palabra o ninguna. En el
+  motor nativo `_` se compilaba a 0 y 0 significaba "cualquier cosa", justo lo
+  contrario; y **el segundo sustantivo de la cabecera `ON` se tiraba entero**,
+  de modo que `ON COGER PASE _` casaba con "coger pase embarque". Ahora la
+  tabla de respuestas lleva las dos ranuras y las compara con esas reglas.
+  `*` en un predicado `NOUN1`/`NOUN2` tambien pasa a ser cierto sin palabra.
+
+---
+
 ## Sin publicar — correccion de Tifon Negro (YAML 1.5)
 
 ### Correcciones

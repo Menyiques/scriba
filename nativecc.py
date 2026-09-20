@@ -286,17 +286,26 @@ def compile_responses(text, ctx, vocab_id):
         if not ln.upper().startswith('ON '): continue
         groups=_on_groups(ln[3:].strip())
         verbs=groups[0] if groups else ['_']
-        nouns=groups[1] if len(groups)>1 else ['_']
+        nouns=groups[1] if len(groups)>1 else ['*']
+        # La tercera ranura es el SEGUNDO sustantivo y hasta ahora se tiraba,
+        # asi que 'ON COGER PASE _' casaba con "coger pase embarque" igual que
+        # el export de 128K no lo hacia. Comodines del manual: '_' es hueco
+        # vacio (no puede haber palabra) y '*' cualquiera o ninguna.
+        nouns2=groups[2] if len(groups)>2 else ['*']
         body=[]
         while i<len(lines) and not lines[i].strip().upper().startswith('ENDON'):
             body.append(lines[i]); i+=1
         i+=1
         bc=compile_lines(body,ctx)
+        def _ranura(w):
+            if w=='_': return 254        # hueco vacio
+            if w=='*': return 255        # cualquier palabra o ninguna
+            return vocab_id(w)
         for v in verbs:
             for n in nouns:
-                vid=0 if v=='_' else vocab_id(v)
-                nid=0 if n=='_' else vocab_id(n)
-                entries.append((vid,nid,bc))
+                for n2 in nouns2:
+                    vid=0 if v in ('_','*') else vocab_id(v)
+                    entries.append((vid,_ranura(n),_ranura(n2),bc))
     return entries
 
 import spectrum_export as _sx
