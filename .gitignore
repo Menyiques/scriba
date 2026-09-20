@@ -64,3 +64,8 @@ Thumbs.db
 
 # CLAUDE.md si es instrucciones del proyecto, no documentacion suelta
 !CLAUDE.md
+
+# jnext deja aqui su imagen de tarjeta SD (2 GB) si se le lanza desde el
+# proyecto sin HOME puesta, que es lo normal en Windows
+.jnext/
+traza_next.txt
