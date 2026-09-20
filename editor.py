@@ -515,12 +515,12 @@ class ScribaEditor:
         fm.add_separator()
         fm.add_command(label="Validar juego",
                        command=lambda: self._run_validation(silent=False))
-        fm.add_command(label="Exportar ZX Spectrum 48K (.bas)…",
+        fm.add_command(label="Exportar ZX Spectrum 48K (.tap)…",
                        command=lambda: self._export_spectrum('48k'))
-        fm.add_command(label="Exportar ZX Spectrum 128K (.bas)…",
+        fm.add_command(label="Exportar ZX Spectrum 128K (.tap)…",
                        command=lambda: self._export_spectrum('128k'))
-        fm.add_command(label="Exportar ZX Spectrum Next (.tap + imágenes)…",
-                       command=self._export_next)
+        fm.add_command(label="Exportar ZX Spectrum Next (.nex, motor nativo)…",
+                       command=self._export_next_nativo)
         fm.add_command(label="Exportar Amstrad CPC (.dsk, motor nativo)…",
                        command=lambda: self._export_cpc_nativo(2))
         fm.add_command(label="Exportar para Windows (.exe)…",
@@ -5672,9 +5672,10 @@ class ScribaEditor:
         ttk.Label(win, foreground='#667788', justify=tk.LEFT,
                   text='Variables: {bas} {bin} {texto} {tap} {base}   (rutas '
                        'relativas a la carpeta del .bas). El 48K usa el primer '
-                       'comando; el 128K sus dos.\nNext (.tap) usa por defecto el '
-                       'zxbc incluido en Scriba (carpeta zxbasic/). Si no está, '
-                       'indica arriba una carpeta que contenga zxbasic/ con zxbc '
+                       'comando; el 128K sus dos.\nEsto es solo para 48K y 128K: '
+                       'el Next usa el motor nativo, que compila en Python y no '
+                       'necesita zxbc. Si zxbc no está junto a Scriba (carpeta '
+                       'zxbasic/), indica arriba una carpeta que lo contenga '
                        '(zxbc.exe, o zxbc.py + python/), o la carpeta zxbasic '
                        'directamente.'
                   ).grid(row=5, column=0, columnspan=2, sticky=tk.W,
@@ -6559,8 +6560,123 @@ class ScribaEditor:
             cabecera += '  (%d omitida[s])' % n_skip
         return [cabecera] + lineas
 
+    def _export_next_nativo(self):
+        """Exporta al MOTOR NATIVO Z80 en un .nex arrancable para ZX Spectrum Next.
+
+        Convierte img/Next/*.png|jpg a Layer 2 (.nxi/.nxp en temp/Next/data) y
+        compila motor + base de datos en Python puro: sin zxbc, sin Boriel y sin
+        NextBuild. Cada imagen ocupa un banco de 16K y se muestra conmutando
+        NextReg $12, o sea sin copiar un solo pixel."""
+        self._commit_active_code_view()
+        if not self.game.get('locations'):
+            messagebox.showinfo('Exportar', 'Abre o crea un juego primero.')
+            return
+        if not self.filepath:
+            messagebox.showinfo('Exportar', 'Guarda el juego (.yaml) primero.')
+            return
+        distdir = self._dir_juego('dist')
+        temp_bas = self._bas_temp_path('Next')   # solo para situar temp/Next/data
+        if not distdir or not temp_bas:
+            messagebox.showinfo('Exportar', 'Guarda el juego (.yaml) primero.')
+            return
+        name = os.path.splitext(os.path.basename(self.filepath))[0]
+        path = os.path.join(distdir, self._dist_name(name, 'next', 'nex'))
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+            if here not in sys.path:
+                sys.path.insert(0, here)
+            import importlib
+            import next_nativo
+            if not getattr(sys, 'frozen', False):
+                for m in ('z80asm', 'txtpack', 'game_engine', 'nativecc',
+                          'font42', 'empaqueta_nex', 'next_nativo'):
+                    try:
+                        importlib.reload(importlib.import_module(m))
+                    except Exception:
+                        pass
+                import next_nativo
+        except Exception as e:
+            messagebox.showerror('Error al exportar', str(e))
+            return
+        game = copy.deepcopy(self.game)
+        game.pop('_editor', None)
+        datadir = os.path.join(os.path.dirname(os.path.abspath(temp_bas)), 'data')
+        musicdir = os.path.join(self._game_root() or '.', 'music')
+
+        import threading
+        win = tk.Toplevel(self.root)
+        win.title('Exportando a ZX Spectrum Next')
+        win.transient(self.root)
+        win.grab_set()
+        win.resizable(False, False)
+        win.protocol('WM_DELETE_WINDOW', lambda: None)
+        sv_msg = tk.StringVar(value='Convirtiendo imágenes a Layer 2…')
+        ttk.Label(win, textvariable=sv_msg, width=46,
+                  anchor=tk.W).pack(padx=16, pady=(14, 6))
+        bar = ttk.Progressbar(win, length=320, mode='indeterminate')
+        bar.pack(padx=16, pady=(0, 14))
+        bar.start(12)
+        win.update_idletasks()
+        px = self.root.winfo_rootx() + \
+            (self.root.winfo_width() - win.winfo_reqwidth()) // 2
+        py = self.root.winfo_rooty() + \
+            (self.root.winfo_height() - win.winfo_reqheight()) // 2
+        win.geometry(f'+{max(0, px)}+{max(0, py)}')
+
+        def trabajo():
+            try:
+                lineas = self._next_convert_images(temp_bas)
+                self.root.after(0, lambda: sv_msg.set('Compilando motor nativo Z80…'))
+                info = next_nativo.export_nex(game, path, datadir=datadir,
+                                              musicdir=musicdir)
+                nimg = len(info['imagenes'])
+                msg = ('Exportado al MOTOR NATIVO Z80 para ZX Spectrum Next '
+                       '(%d columnas).\n'
+                       'Motor + base de datos: %d bytes (&%04X–&%04X).\n'
+                       '%d localizaciones · %d objetos · %d imágenes'
+                       % (next_nativo.COLS, info['total'], info['org'],
+                          info['fin'], info['localizaciones'], info['objetos'],
+                          nimg))
+                if info['fx']:
+                    msg += ' · %d bytes de FX' % info['fx']
+                msg += '\n'
+                msg += ('Portada: sí (3 bancos)\n' if info['titulo']
+                        else 'Portada: no (falta img/Next/screen.*)\n')
+                if info['psg']:
+                    msg += 'Música: %s (%d bytes)\n' % (info['psg_nom'], info['psg'])
+                elif info['titulo']:
+                    msg += 'Música: no (nada en music/)\n'
+                if info.get('aviso_psg'):
+                    msg += 'Aviso: %s\n' % info['aviso_psg']
+                msg += '\nNo necesita zxbc ni NextBuild: se compila entero aquí.'
+                if lineas:
+                    msg += '\n\n' + chr(10).join(lineas[:1])
+                adv = self._aviso_caps(game, 'next')
+                if adv:
+                    msg = adv + '\n\n' + msg
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                self.root.after(0, lambda e=e: (
+                    win.destroy(),
+                    messagebox.showerror('Error al exportar Next nativo', str(e))))
+                return
+
+            def _fin():
+                win.destroy()
+                self.sv_status.set('Exportado a Next nativo (.nex): ' + path)
+                if messagebox.askyesno(
+                        'Exportar ZX Spectrum Next',
+                        msg + '\n\nGuardado en:\n%s\n\n¿Abrir la carpeta?' % path):
+                    self._open_folder(os.path.dirname(path))
+            self.root.after(0, _fin)
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
     def _export_next(self):
-        """Exporta el juego para ZX Spectrum Next como .tap:
+        """(YA NO ESTA EN EL MENU: el Next se exporta con el motor nativo, en
+        _export_next_nativo. Se conserva por si hiciera falta volver al camino
+        BASIC.)  Exporta el juego para ZX Spectrum Next como .tap:
         convierte img/Next/*.png|jpg a Layer 2 (.nxi/.nxp en data/), genera el
         ZX BASIC (texto comprimido en bancos + imagenes Layer 2 + pantalla de
         titulo + musica), compila con zxbc y empaqueta el .tap (texto en bancos

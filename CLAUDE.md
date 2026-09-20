@@ -120,6 +120,13 @@ escrito pero no lo llama nadie, bloqueado por `EmbeddedMmuSwitchAssembleError`
 de Boriel 2.0.0-beta21. El informe para upstream está en
 `reporte_boriel_splitmodules/`. El backend nativo resuelve lo mismo sin Boriel.
 
-Del motor nativo del Next faltan imágenes, música, pantalla de título, y
-enchufarlo como destino del editor. Y no se ha ejecutado nunca en CSpect: todo
-lo verificado hasta ahora es simulador.
+El motor nativo del Next ya tiene imágenes (Layer 2, un banco por sala),
+pantalla de título, música del AY, efectos FX, y es el destino «Exportar ZX
+Spectrum Next (.nex, motor nativo)» del editor. El camino BASIC a `.tap` para
+Next sigue en `next_export.py` y en `editor._export_next`, pero ya no está en el
+menú.
+
+Lo que queda: los glifos `_` y `q` siguen mal en los `.tap` de 128K y Next
+(`genera_font42.py` solo corrige la tabla del motor nativo), el DMA y el Copper
+están sin usar, y los dos arneses suponen que los objetos 0, 5 y 6 tienen
+ciertas propiedades, cosa que en NIVEL7 y "1" no se cumple.
