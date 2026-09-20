@@ -113,7 +113,7 @@ si el CPC falla igual.
 
 ## Estado
 
-Rama de trabajo: `fix/predicados-objeto-v2.44`. Scriba 2.45.
+Rama de trabajo: `fix/predicados-objeto-v2.44`. Scriba 2.46.
 
 El camino `.nex` con Boriel está **parado**: `next_export.moduliza_texto()` está
 escrito pero no lo llama nadie, bloqueado por `EmbeddedMmuSwitchAssembleError`

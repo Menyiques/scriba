@@ -18,6 +18,79 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
 
 ---
 
+## 2.46 — 2026-09-20 — Motor nativo para ZX Spectrum Next
+
+### Novedades
+- **Motor nativo de ZX Spectrum Next.** Nuevo destino del editor, «Exportar ZX
+  Spectrum Next (.nex, motor nativo)», que sustituye al export BASIC a `.tap`.
+  Compila motor y base de datos en Python puro (sin zxbc, sin Boriel y sin
+  NextBuild) reutilizando el motor Z80 que ya servia al CPC: de sus ~2800 lineas
+  de ensamblador, solo una veintena de simbolos dependian de la maquina. Sale en
+  `dist/{juego}_next_{idioma}.nex`.
+  - Texto de 42 columnas con la misma tipografia que los builds BASIC, con los
+    acentos de español y portugues.
+  - Imagenes de localizacion por Layer 2: cada una en su banco de 16K, asi que
+    cambiar de sala es apuntar el NextReg $12 a otro banco, sin mover un pixel.
+    Se descubren de arriba abajo subiendo la linea de corte del clip.
+  - Pantalla de titulo a pantalla completa, con musica del AY (reproductor de
+    stream PSG). La musica se ajusta al hueco que quede en el binario.
+  - Efectos de sonido FX por AY (el condact `PLAY`).
+  - El texto se escribe a ritmo — una descripcion de sala tarda unos 2 s — y se
+    para a esperar tecla cada vez que se llena la ventana.
+  - Teclado leido por la matriz del puerto &FE, con borrado en CAPS+0.
+  - Motor y plataforma ocupan ~8 KB; un juego con 23 imagenes, portada y musica
+    se queda en ~35 KB de binario plano mas sus bancos.
+  - No usa la ROM para nada (fuente, teclado e impresion son propios): solo la
+    aparta un instante, con el MMU, para leer las paletas de su banco.
+- **Comando VERSION en el motor nativo**, que quedaba pendiente en 2.45. Ahora
+  responden los cuatro motores.
+- **`metadata.start_message` en el motor nativo**: la presentacion del juego, que
+  hasta ahora solo salia en el interprete y en los exports BASIC. Vale tambien
+  para el CPC nativo.
+- **`initial_message` de los objetos en el motor nativo**: cada objeto sale con
+  su frase propia en vez de listarse por el nombre, y un objeto fijo sin frase
+  no se lista, que para eso lo cuenta la descripcion de la sala. Como en el
+  interprete, la frase deja de usarse en cuanto el objeto se mueve. Vale tambien
+  para el CPC nativo.
+- **Nombre de la localizacion en el motor nativo**: solo imprimia la
+  descripcion. Vale tambien para el CPC nativo.
+- `z80asm.py` y `z80.py` entienden ahora IN/OUT por puertos, los NextRegs y el
+  juego de instrucciones **Z80N** (PIXELAD, PIXELDN, LDWS, LDIRX, ADD HL,A...).
+  El simulador emula ademas la paginacion de la ranura 0 del MMU.
+- `verify_next.py`: arnes que ensambla el motor, lo corre en el simulador,
+  **decodifica la pantalla de vuelta a texto** comparando con la fuente, empaqueta
+  el `.nex`, lo relee del disco y juega ordenes. A diferencia de `verify_cpc.py`,
+  no pone stubs de texto ni de teclado: ese camino se ejercita de verdad.
+- `genera_font42.py` genera `font42.py`, la fuente de 6 pixeles del motor nativo,
+  a partir de la fuente de la ROM y de las tablas de `print42_*.bas`.
+
+### Correcciones
+- **`txtpack`: la segunda compresion de texto de un proceso salia con las frases
+  de la primera.** `_expand` llevaba un `dict` mutable como valor por defecto,
+  que sobrevivia entre llamadas y se indexaba solo por numero de token. Se veia
+  como texto casi correcto con trozos de otro juego metidos. Afecta a **todos**
+  los destinos y a cualquier sesion que exporte dos veces sin reiniciar.
+- Las salidas se imprimen al final de la descripcion (nombre, descripcion,
+  objetos, salidas), como en el export de 128K, y no entre la descripcion y los
+  objetos.
+- Cada objeto de la sala sale en su propia linea, en vez de amontonados.
+- Glifos `_` y `q` corregidos en la fuente de 42 columnas del motor nativo: en
+  `print42_*.bas` el subrayado apunta al indice de la `a` acentuada, y el remate
+  de la cola de la `q` se sale de la celda e invade el caracter siguiente.
+- Los menus de 48K y 128K decian «(.bas)», que es el intermedio: lo que producen
+  es un `.tap` en `dist/`.
+
+### Pendiente
+- Los glifos `_` y `q` siguen mal en `print42_es.bas` y `print42_pt.bas`, o sea
+  en los `.tap` de 128K y de Next.
+- El camino `.nex` con Boriel sigue parado por `EmbeddedMmuSwitchAssembleError`
+  (`next_export.moduliza_texto`, escrito pero sin usar). El motor nativo resuelve
+  lo mismo sin Boriel.
+- El DMA y el Copper del Next estan sin usar: el borrado y el desplazamiento de
+  pantalla siguen con `LDIR`, que es justo donde el DMA rentaria.
+
+---
+
 ## 2.45 — 2026-09-19 — Ficha de identificacion de los compilados
 
 ### Novedades
