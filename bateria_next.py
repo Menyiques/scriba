@@ -50,6 +50,9 @@ USO
     --sdcard FILE   imagen de tarjeta SD ya bajada (util en CI)
     --frames N      tope de barridos de emulador (por defecto se estima)
     --traza FILE    guarda la traza cruda para mirarla luego
+    --bajar-sd      deja que jnext se baje la imagen de tarjeta SD (1 GB) si es
+                    la primera vez que se usa en esta maquina
+    --paciencia N   segundos sin noticias del emulador antes de cortar (120)
 
 La traza se lee SEGUN SALE del emulador, asi que con -v se ve lo que esta
 pasando mientras la partida corre, no un volcado al terminar.
@@ -61,6 +64,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 import yaml
@@ -223,44 +227,124 @@ def _hex(s):
     return [int(x, 16) for x in s.split()]
 
 
-def ejecuta(jnext, nex, frames, sdcard=None, alvuelo=None, pt=False):
+def ruta_sdcard_por_defecto():
+    """Donde deja jnext la imagen de tarjeta SD que se baja el solo."""
+    return os.path.join(os.path.expanduser('~'), '.jnext', 'sdcard',
+                        'cspect-next-1gb-fixed.img')
+
+
+def pista_sdcard(sdcard):
+    """Lo que hay que hacer si el emulador no arranca por falta de tarjeta."""
+    if sdcard or os.path.exists(ruta_sdcard_por_defecto()):
+        return ''
+    return ('\nLo mas probable: jnext no tiene todavia la imagen de tarjeta SD, '
+            'de donde\nsaca las ROMs igual que una maquina de verdad. Cualquiera '
+            'de estas tres vale:\n'
+            '  - ejecuta jnext a mano una vez y acepta la descarga\n'
+            '  - vuelve a lanzar la bateria con --bajar-sd (son 1 GB)\n'
+            '  - pasale una imagen que ya tengas con --sdcard FICHERO\n')
+
+
+def ejecuta(jnext, nex, frames, sdcard=None, alvuelo=None, pt=False,
+            bajar_sd=False, paciencia=120, eco=None):
     """Corre el .nex en jnext y devuelve el texto que salio por el puerto.
 
-    El puerto magico escribe a la salida de error carácter a carácter y sin
+    El puerto magico escribe a la salida de error caracter a caracter y sin
     buffer, asi que se lee segun sale: `alvuelo` recibe cada trozo de texto ya
     descodificado y puede ir contando lo que pasa mientras la partida corre.
+
+    Tres cosas que hay que hacer bien o el proceso se queda colgado sin decir
+    nada, que es justo lo que pasa la primera vez en una maquina limpia:
+
+    - **stdin cerrado.** Sin imagen de tarjeta SD, jnext pregunta si se la baja
+      y espera respuesta. La pregunta sale por su salida ESTANDAR, que aqui no
+      se enseña, asi que sin esto el proceso se queda esperando una tecla que
+      nadie ve que haga falta. Con stdin cerrado la da por contestada que no y
+      sale con un mensaje, que si se enseña.
+    - **Su salida estandar se guarda**, no se tira: ahi es donde pone lo que le
+      pasa cuando no arranca.
+    - **Un plazo.** Si no llega nada por el puerto en `paciencia` segundos, se
+      corta y se cuenta, en vez de esperar sin fin.
     """
     acc = _mapa_acentos(pt)
     tmp = tempfile.mkdtemp(prefix='bateria_next_')
     log = os.path.join(tmp, 'jnext.log')
+    salida = os.path.join(tmp, 'jnext.out')
     cmd = [jnext, '--headless', nex,
            '--magic-port', hex(nn.PUERTO_TRAZA), '--magic-port-mode', 'ascii',
            '--log-file', log,              # los mensajes del emulador, aparte
            '--delayed-automatic-exit-frames', str(int(frames))]
     if sdcard:
         cmd += ['--sdcard', sdcard]
+    if bajar_sd:
+        cmd += ['--sdcard-download-confirm']
+    if eco:
+        eco('orden      %s' % ' '.join(
+            ('"%s"' % a if ' ' in a else a) for a in cmd))
     partes = []
+    cortado = [False]
     try:
-        p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.PIPE, bufsize=0)
-        while True:
-            trozo = p.stderr.read1(4096) if hasattr(p.stderr, 'read1') \
-                else p.stderr.read(1)
-            if not trozo:
-                break
-            texto = ''.join(acc.get(b, chr(b) if 10 <= b < 127 else '?')
-                            for b in trozo)
-            partes.append(texto)
-            if alvuelo:
-                alvuelo(texto)
-        p.wait()
+        with io.open(salida, 'wb') as fsal:
+            p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=fsal,
+                                 stderr=subprocess.PIPE, bufsize=0)
+            fd = p.stderr.fileno()
+            reloj = [None]
+
+            def sin_noticias():
+                cortado[0] = True
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+
+            def rearma():
+                if reloj[0]:
+                    reloj[0].cancel()
+                reloj[0] = threading.Timer(paciencia, sin_noticias)
+                reloj[0].daemon = True
+                reloj[0].start()
+
+            rearma()
+            try:
+                while True:
+                    try:
+                        trozo = os.read(fd, 4096)
+                    except OSError:
+                        break
+                    if not trozo:
+                        break
+                    rearma()
+                    texto = ''.join(acc.get(b, chr(b) if 10 <= b < 127 else '?')
+                                    for b in trozo)
+                    partes.append(texto)
+                    if alvuelo:
+                        alvuelo(texto)
+                    # Al acabarse el guion el motor para la CPU, pero el
+                    # emulador sigue barriendo hasta su tope. Como ya no va a
+                    # salir nada mas, se corta aqui: el tope de barridos solo
+                    # tiene que ser generoso, no exacto.
+                    if '\n#FIN\n' in ''.join(partes[-2:]):
+                        p.kill()
+                        break
+            finally:
+                if reloj[0]:
+                    reloj[0].cancel()
+            p.wait()
         entero = ''.join(partes)
-        if p.returncode != 0 and not entero:
-            cola = ''
-            if os.path.exists(log):
-                cola = io.open(log, encoding='utf-8', errors='replace').read()[-800:]
-            raise RuntimeError('jnext fallo (codigo %d)\n%s' % (p.returncode, cola))
-        return entero
+        if entero:
+            return entero
+        # No salio nada por el puerto: hay que contar por que, con lo que diga
+        # el propio emulador, que es lo unico que sabe lo que le ha pasado.
+        pistas = []
+        for f in (salida, log):
+            if os.path.exists(f):
+                t = io.open(f, encoding='utf-8', errors='replace').read().strip()
+                if t:
+                    pistas.append(t[-1200:])
+        motivo = ('jnext no contesto en %ds' % paciencia) if cortado[0] \
+            else ('jnext termino con codigo %d' % p.returncode)
+        raise RuntimeError('%s y no solto nada por el puerto de traza.\n%s\n%s'
+                           % (motivo, '\n'.join(pistas), pista_sdcard(sdcard)))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -525,7 +609,7 @@ def _opcion(argv, nombre, por_defecto=None):
 
 def main():
     argv = sys.argv[1:]
-    conval = ('--jnext', '--sdcard', '--frames', '--traza')
+    conval = ('--jnext', '--sdcard', '--frames', '--traza', '--paciencia')
     sueltos, salta = [], False
     for a in argv:
         if salta:
@@ -570,22 +654,34 @@ def main():
 
     frames = int(frames) if frames else (
         FRAMES_ARRANQUE * max(1, len(pruebas)) + FRAMES_POR_ORDEN * nordenes)
+    sdcard = _opcion(argv, '--sdcard')
+    bajar = '--bajar-sd' in argv
+    if not sdcard and not bajar and not os.path.exists(ruta_sdcard_por_defecto()):
+        print('AVISO      jnext no parece tener la imagen de tarjeta SD en %s.\n'
+              '           De ahi saca las ROMs, igual que una maquina de verdad.\n'
+              '           Si no arranca: --bajar-sd (son 1 GB) o --sdcard FICHERO.'
+              % ruta_sdcard_por_defecto())
     print('jugando    %d barridos de emulador como mucho\n' % frames)
     sys.stdout.flush()
 
     ref = Referencias(game)
     rel = Relator(plan_de(pruebas), ref, nivel)
     t0 = time.time()
-    texto = ejecuta(jnext, nex, frames, _opcion(argv, '--sdcard'),
-                    alvuelo=rel.come, pt=ref.pt)
-    rel.cierra()
+    texto = ejecuta(jnext, nex, frames, sdcard, alvuelo=rel.come, pt=ref.pt,
+                    bajar_sd=bajar, paciencia=int(_opcion(argv, '--paciencia', 120)),
+                    eco=(print if nivel else None))
     tardado = time.time() - t0
-
     if traza_out:
         io.open(traza_out, 'w', encoding='utf-8').write(texto)
     if '#RESET' not in texto:
-        print('\nla partida no arranco siquiera. Traza:\n%s' % texto[:2000])
+        # Ni la primera partida empezo: no tiene sentido dar por fallada cada
+        # prueba, lo unico que importa es lo que dijo el emulador.
+        print('\nEl emulador no llego a arrancar el juego (%.0fs). Dijo esto:\n'
+              % tardado)
+        print(texto.strip()[:2000] or '(nada)')
+        print(pista_sdcard(sdcard))
         sys.exit(1)
+    rel.cierra()
 
     print()
     if not nivel:

@@ -101,9 +101,16 @@ python bateria_next.py 'Games\Operacion Tifon Negro\Operacion Tifon Negro.yaml' 
 - `bateria_next.py` ejecuta el `.nex` en **jnext** (`--headless`), un emulador
   de Next de verdad: prueba además el cargador NEX, la ROM, la MMU, Layer 2 y el
   Z80N. Se baja de <https://github.com/jorgegv/jnext/releases>; la ruta va en
-  `--jnext`, en la variable de entorno `JNEXT` o en el `PATH`. La primera vez
-  jnext pide bajarse la imagen de tarjeta SD (de ahí saca las ROMs, igual que
-  una máquina real); en CI se pasa `--sdcard` con la imagen ya bajada.
+  `--jnext`, en la variable de entorno `JNEXT` o en el `PATH`.
+
+**La primera vez en una máquina, jnext no tiene la imagen de tarjeta SD** — de
+ahí saca las ROMs, igual que una máquina real — y pregunta si se la baja. Se
+resuelve con `--bajar-sd` (1 GB), con `--sdcard FICHERO` si ya se tiene una, o
+ejecutando jnext a mano una vez. `bateria_next.py` lanza el emulador con la
+entrada estándar cerrada a propósito, para que esa pregunta se responda sola
+que no y salga con su mensaje en vez de quedarse colgada esperando una tecla
+que nadie ve que haga falta; y corta si pasan `--paciencia` segundos (120 por
+defecto) sin noticias del puerto.
 
 Cómo lo hace `bateria_next.py`: `next_nativo._modo_prueba()` compila un `.nex`
 **de pruebas** que lleva el guion dentro y se teclea solo (parchea `KMREAD`),
@@ -131,6 +138,10 @@ puntuación y el principio de la respuesta, y cada comprobación con su `ok` o s
 `FALLA`) y `-vv` (además la respuesta entera). `bateria_next.py` lee la salida
 del emulador **según sale**, no al terminar, así que con `-v` se ve la partida
 avanzar en vivo.
+
+El emulador se corta en cuanto el guion llega al final, así que `--frames` solo
+tiene que ser generoso, no exacto: las 288 órdenes de *Tifón Negro* tardan unos
+14 s.
 
 Las comprobaciones miran la respuesta a la **última orden**, no la pantalla
 entera. Los nombres de variable se escriben sin guiones bajos (`_PILAS_CARGA`

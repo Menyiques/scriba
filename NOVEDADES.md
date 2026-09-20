@@ -51,6 +51,16 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
   cada comprobacion con su `ok` o su `FALLA` en su sitio, en vez de una lista
   al final. `bateria_next.py` lee la salida del emulador **segun sale**, asi
   que la partida se ve avanzar en vivo.
+- **La bateria ya no se puede quedar colgada.** El emulador se lanza con la
+  entrada estandar cerrada, que es lo que hacia falta para que la pregunta de
+  «¿me bajo la imagen de tarjeta SD?» — que sale por su salida estandar, no por
+  la de error — se responda sola que no en vez de esperar una tecla que nadie
+  ve que haga falta. Ademas se corta a los `--paciencia` segundos sin noticias
+  (120 por defecto) y se cuenta lo que dijo el emulador, con la pista de la
+  tarjeta si es lo que falla. Opciones nuevas: `--bajar-sd`, `--paciencia`.
+- **Y va seis veces mas rapida**: el emulador se corta en cuanto el guion llega
+  al final, en lugar de seguir barriendo hasta el tope. Las 288 ordenes de
+  *Tifon Negro* pasan de 91 s a 14 s.
 
 ### Correcciones
 Las tres las encontro la bateria nueva.
