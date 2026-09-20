@@ -262,7 +262,7 @@ def desplaza_acentos(s):
     translit_disp convierte cada acento en '?'."""
     return ''.join(chr(ord(ch)+80) if 144<=ord(ch)<160 else ch for ch in s)
 
-def compile_game(c, sysm, width=40, filas=21, ficha=None):
+def compile_game(c, sysm, width=40, filas=0, ficha=None):
     g=c.game
     # idioma para los acentos (es/pt). Fija el set de acentos de translit_disp.
     lang=str((getattr(c,'meta',{}) or {}).get('language','') or '').lower()
@@ -362,23 +362,30 @@ def compile_game(c, sysm, width=40, filas=21, ficha=None):
     # termina con PAUSE 0 (espera tecla) para que dé tiempo a leerlo.
     _ini=_sx.parrafos((getattr(c,'meta',{}) or {}).get('start_message',''))
     if _ini:
-        # Paginado: el mensaje inicial suele ser mas largo que la pantalla, y sin
-        # esto el principio (el titulo, justamente) se va por arriba antes de que
-        # el jugador pueda leerlo. Se estiman las lineas que ocupa cada parrafo al
-        # ancho del destino y se corta con PAUSE 0 + CLS antes de desbordar.
-        _anc=max(20,int(width or 40)); _filas=max(6,int(filas or 21)); _usadas=0
-        _b=bytearray()
+        # Paginado del mensaje inicial. 'filas' = 0 significa que la plataforma ya
+        # para sola cada pantalla (es el caso del Next nativo, que cuenta lineas y
+        # espera tecla al desplazar): entonces aqui NO se corta nada, se sueltan
+        # los parrafos seguidos y el texto sube como en el export de 128K. Si se
+        # cortara, se juntarian dos pausas distintas y ademas el CLS borraria lo
+        # que se acababa de leer. Con filas > 0 (el CPC, que no tiene esa cuenta)
+        # se corta cada tantas lineas para que no se escape el principio.
+        _anc = max(20, int(width or 40))
+        _filas = int(filas or 0)
+        _usadas = 0
+        _b = bytearray()
         for _p in _ini:
-            _n=1 if not _p else (len(_p)+_anc-1)//_anc
-            if _usadas and _usadas+_n>_filas:
-                _b+=bytes([ge.COP_EXTRA['PAUSE'],0])
-                _b+=bytes([ge.COP_EXTRA['CLS']])
-                _usadas=0
-            _mi=ctx.msg(desplaza_acentos(_p))   # parrafos() ya translitero
-            _b+=bytes([ge.COP['MESSAGE'],_mi&0xFF,(_mi>>8)&0xFF])
-            _usadas+=_n
-        _b+=bytes([ge.COP_EXTRA['PAUSE'],0])
-        onstart=bytes(onstart)+bytes(_b)
+            if _filas:
+                _n = 1 if not _p else (len(_p) + _anc - 1) // _anc
+                if _usadas and _usadas + _n > _filas:
+                    _b += bytes([ge.COP_EXTRA['PAUSE'], 0])
+                    _b += bytes([ge.COP_EXTRA['CLS']])
+                    _usadas = 0
+                _usadas += _n
+            _mi = ctx.msg(desplaza_acentos(_p))   # parrafos() ya translitero
+            _b += bytes([ge.COP['MESSAGE'], _mi & 0xFF, (_mi >> 8) & 0xFF])
+        _b += bytes([ge.COP_EXTRA['PAUSE'], 0])
+        onstart = bytes(onstart) + bytes(_b)
+
     # Comando VERSION. VERSI ya esta en el vocabulario de serie, pero el motor
     # nativo no lo atendia y respondia "No entiendo". En vez de tocar la cabecera
     # de la base de datos y el dispatch (que llevan los verbos de sistema en

@@ -233,6 +233,30 @@ def verificar(game):
         antes[22] == 'PENULTIMA' and antes[23] == 'ULTIMA'
         and desp[21] == 'PENULTIMA' and desp[22] == 'ULTIMA' and desp[23] == '')
 
+    # ---- 3b-bis. el scroll no debe salirse de la ventana de texto ----
+    # Se marca una fila por ENCIMA de la ventana y se fuerzan varios
+    # desplazamientos: la marca tiene que seguir intacta. Cuando el scroll movia
+    # la pantalla entera, el texto se colaba sobre la zona de la imagen.
+    ejecutar(cpu, mem, sym['nxcls'])
+    mem[sym['nxrow']] = 3
+    mem[sym['nxcol']] = 0
+    for ch in 'MARCA':
+        cpu.a = ord(ch)
+        ejecutar(cpu, mem, sym['txto'])
+    cpu.h, cpu.l, cpu.d, cpu.e = 0, FILA_IMAGEN, ANCHO - 1, 23
+    ejecutar(cpu, mem, sym['txtwin'])
+    mem[sym['nxrow']] = 23
+    mem[sym['nxpcnt']] = 0
+    for _ in range(4):
+        mem[sym['nxrow']] = 23
+        mem[sym['nxcol']] = 0
+        ejecutar(cpu, mem, sym['nxscroll'])
+    chk('el scroll no toca lo que hay encima de la ventana',
+        leer_pantalla(mem, sym)[3] == 'MARCA')
+    cpu.h, cpu.l, cpu.d, cpu.e = 0, 0, ANCHO - 1, 23
+    ejecutar(cpu, mem, sym['txtwin'])
+    ejecutar(cpu, mem, sym['nxcls'])
+
     # ---- 3c. pausa de pagina: una tecla por cada ventana de texto ----
     # Se pone la ventana en 8..23 (16 filas, la que queda cuando hay imagen), se
     # tiran 50 lineas y se anota en cual se ha parado. Deben salir pausas cada

@@ -37,8 +37,6 @@ ATTR = 0x5800       # atributos
 COLS = 42           # columnas de texto (fuente de 6 pixeles)
 BANK_IMG = 16       # primer banco de 16K para imagenes (igual que next_export)
 FILA_TEXTO = 8      # la imagen ocupa las filas 0..7; el texto empieza aqui
-FILAS_CON_IMAGEN = 15   # lineas utiles de presentacion con imagen (8..23)
-FILAS_SIN_IMAGEN = 22   # ...y sin imagen (0..23)
 PSG_MAX = 4480      # tope de musica que cabe plana (igual que el export BASIC)
 REVELADO_PASO = 4   # lineas por barrido al descubrir la imagen (64/4 = 16 frames)
 TEXTO_RITMO = 4     # caracteres por barrido al escribir (~2 s una descripcion)
@@ -679,8 +677,15 @@ nxscroll:
         push  bc
         push  de
         push  hl
-        ld    b,23             ; 23 filas de caracteres que suben
-        ld    c,0              ; C = fila destino
+        ld    a,(nxwb)         ; se desplaza SOLO la ventana de texto, no la
+        ld    b,a              ; pantalla entera: por encima de nxwt esta la
+        ld    a,(nxwt)         ; imagen, y meterle texto ahi (aunque Layer 2 lo
+        neg                    ; tape) esta mal y ademas cuesta el doble
+        add   a,b              ; A = nxwb - nxwt = filas que suben
+        jr    z,nxs_fin        ; ventana de una sola fila: nada que subir
+        ld    b,a
+        ld    a,(nxwt)
+        ld    c,a              ; C = primera fila destino
 nxs_f:  push  bc
         ld    a,c
         call  nxrowadr         ; HL = inicio de la fila destino
@@ -708,8 +713,9 @@ nxs_pl: push  bc
         pop   bc
         inc   c
         djnz  nxs_f
-        ; ultima fila a blanco
-        ld    a,23
+        ; ultima fila de la ventana, en blanco
+nxs_fin:
+        ld    a,(nxwb)
         call  nxrowadr
         ld    b,8
 nxs_bl: push  bc
@@ -1302,15 +1308,11 @@ def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None):
     if titulo_bin is not None:
         psg_bruto, psg_nom = _musica(musicdir)
 
-    # Cuantas lineas puede usar la presentacion antes de parar a esperar tecla.
-    # Con imagen el texto vive en las filas 8..23, o sea 16; sin imagen tiene las
-    # 24 enteras. Si no se ajusta, el titulo se va por arriba sin que dé tiempo a
-    # leerlo, que es justo lo que pasaba.
-    filas = FILAS_CON_IMAGEN if imgs else FILAS_SIN_IMAGEN
-
+    # filas=0: la presentacion NO se corta aqui. La plataforma ya cuenta lineas y
+    # espera tecla al desplazar, asi que el texto sube seguido como en 128K.
     import scriba_info
     ficha = scriba_info.ficha(game, 'next', scriba_info.ahora())
-    spec, _ = nc.compile_game(c, sysm[:ge.NSYS], width=ancho, filas=filas,
+    spec, _ = nc.compile_game(c, sysm[:ge.NSYS], width=ancho, filas=0,
                               ficha=ficha)
 
     idioma = str((game.get('metadata') or {}).get('language', '') or 'es')
