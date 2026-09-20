@@ -26,6 +26,7 @@ import z80
 ORG = 0x6000
 ANCHO = 42
 FRAMES_TITULO = 60      # frames de portada antes de que el arnes pulse tecla
+FILA_IMAGEN = 8         # primera fila de texto cuando hay imagen arriba
 
 
 # ---------------------------------------------------------------------------
@@ -232,35 +233,39 @@ def verificar(game):
         antes[22] == 'PENULTIMA' and antes[23] == 'ULTIMA'
         and desp[21] == 'PENULTIMA' and desp[22] == 'ULTIMA' and desp[23] == '')
 
-    # ---- 3c. pausa de pagina: esperar tecla antes de tirar una linea ----
-    def _con_kmw(addr):
-        """Ejecuta addr contando cuantas veces se para a esperar tecla."""
-        vistas = [0]
-        paso = cpu.step
-
-        def _cuenta():
-            if cpu.pc == sym['kmw']:
-                vistas[0] += 1
-            paso()
-
-        cpu.step = _cuenta
-        try:
-            ejecutar(cpu, mem, addr)
-        finally:
-            cpu.step = paso
-        return vistas[0]
-
+    # ---- 3c. pausa de pagina: una tecla por cada ventana de texto ----
+    # Se pone la ventana en 8..23 (16 filas, la que queda cuando hay imagen), se
+    # tiran 50 lineas y se anota en cual se ha parado. Deben salir pausas cada
+    # 16 lineas exactas: ni a la 31 (contando solo las que desplazan) ni nunca.
+    cpu.h, cpu.l, cpu.d, cpu.e = 0, FILA_IMAGEN, ANCHO - 1, 23
+    ejecutar(cpu, mem, sym['txtwin'])
     ejecutar(cpu, mem, sym['nxcls'])
-    tec.pulsa('a')                     # hay tecla pulsada: la pausa se resuelve sola
-    mem[sym['nxrow']] = mem[sym['nxwb']]
-    mem[sym['nxpcnt']] = mem[sym['nxwb']] - mem[sym['nxwt']]   # ventana llena
-    cpu.a = 10
-    chk('al llegar abajo espera tecla antes de desplazar', _con_kmw(sym['txto']) == 1)
-    mem[sym['nxrow']] = mem[sym['nxwb']]
-    mem[sym['nxpcnt']] = 0                                     # aun queda sitio
-    cpu.a = 10
-    chk('...y no para si todavia queda pantalla', _con_kmw(sym['txto']) == 0)
-    tec.suelta()
+    alto = mem[sym['nxwb']] - mem[sym['nxwt']] + 1
+    pausas = []
+    linea = [0]
+    alterna = [0]
+    paso = cpu.step
+
+    def _pausa():
+        if cpu.pc == sym['kmw']:
+            pausas.append(linea[0])
+            alterna[0] ^= 1
+            tec.pulsa('a' if alterna[0] else 'b')   # una tecla distinta cada vez
+        paso()
+
+    cpu.step = _pausa
+    try:
+        for i in range(1, 3 * alto + 3):
+            linea[0] = i
+            cpu.a = 13
+            ejecutar(cpu, mem, sym['txto'], pasos=2000000)
+            cpu.a = 10
+            ejecutar(cpu, mem, sym['txto'], pasos=2000000)
+    finally:
+        cpu.step = paso
+        tec.suelta()
+    chk('pausa cada %d lineas, que es lo que cabe en la ventana' % alto,
+        pausas == [alto * k for k in range(1, len(pausas) + 1)] and len(pausas) >= 3)
     ejecutar(cpu, mem, sym['nxcls'])
 
     # ---- 4. teclado por el puerto &FE ----

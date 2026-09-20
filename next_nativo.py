@@ -434,7 +434,10 @@ nx_cr:  ld    a,(nxwl)
         ld    (nxcol),a
         ret
 
-nx_lf:  ld    a,(nxrow)
+nx_lf:  ld    a,(nxpcnt)       ; cuenta TODAS las lineas, no solo las que
+        inc   a                ; desplazan: si no, la primera pausa no llega
+        ld    (nxpcnt),a       ; hasta haber escrito dos pantallas
+        ld    a,(nxrow)
         inc   a
         ld    b,a
         ld    a,(nxwb)
@@ -449,26 +452,24 @@ nx_scr: call  nxmas            ; antes de tirar una linea, dejar leer
         jp    nxscroll
 
 ; ---------------------------------------------------------------------------
-; nxmas: cuenta las lineas que se han ido por arriba y, cuando se ha desplazado
-; una ventana entera desde la ultima vez, espera una tecla. Sin esto un texto
-; largo se desplaza entero de golpe y no da tiempo a leerlo. Es lo mismo que
-; hacen los builds BASIC con pcnt/pmas, y como alli no se imprime ningun aviso:
-; el texto se para y ya.
+; nxmas: si desde la ultima pausa (o desde el ultimo borrado) se ha escrito una
+; ventana entera de texto, espera una tecla antes de dejar que la primera linea
+; se vaya por arriba sin leer. Es lo mismo que hacen los builds BASIC con
+; pcnt/pmas, y como alli sin imprimir ningun aviso: el texto se para y ya.
 ; ---------------------------------------------------------------------------
 nxmas:
         push  af
         push  bc
-        ld    a,(nxpcnt)
-        inc   a
-        ld    (nxpcnt),a
-        ld    b,a
         ld    a,(nxwb)
-        ld    c,a
+        ld    b,a
         ld    a,(nxwt)
         neg
-        add   a,c              ; A = alto de la ventana - 1
+        add   a,b
+        inc   a                ; A = alto de la ventana (nxwb - nxwt + 1)
+        ld    b,a
+        ld    a,(nxpcnt)
         cp    b
-        jr    nc,nxm_fin       ; todavia queda pantalla por llenar
+        jr    c,nxm_fin        ; aun no se ha escrito una pantalla entera
         call  KMW              ; pausa hasta que pulsen
         xor   a
         ld    (nxpcnt),a
