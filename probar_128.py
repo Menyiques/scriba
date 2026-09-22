@@ -3,7 +3,7 @@
 probar_128.py - La bateria .pru, jugada sobre el binario de ZX Spectrum 128K.
 
 Mismo fichero .pru y mismo juez que probar_48.py; lo que cambia es la maquina:
-los 64K planos llevan ademas los cinco bancos conmutables con las imagenes, y
+los 64K planos llevan ademas los seis bancos conmutables con el texto y las imagenes, y
 el puerto &7FFD los trae y los lleva de &C000 a &FFFF.
 
     python probar_128.py juego.yaml bateria.pru [-v|-vv]
@@ -30,7 +30,7 @@ class Juego128(pj.Juego):
         self.game = yaml.safe_load(io.open(yaml_path, encoding='utf-8'))
         raiz = os.path.dirname(os.path.abspath(yaml_path))
         (code, db, sym, spec, dbaddr, payload, avisos,
-         npsg, psg_nom) = s128.compila(self.game, raiz, ancho=vn.ANCHO)
+         npsg, psg_nom, _ex) = s128.compila(self.game, raiz, ancho=vn.ANCHO)
         self.code, self.db, self.dbaddr = code, db, dbaddr
         self.payload, self.sym = payload, sym
         self.info = {'localizaciones': len(spec['locations']),
@@ -38,7 +38,7 @@ class Juego128(pj.Juego):
                      'imagenes': [],
                      'codigo': len(code), 'datos': len(db),
                      'total': len(code) + len(db),
-                     'libre': s128.SP128 - (s128.ORG + len(code) + len(db)),
+                     'libre': s128.SP128 - s128.PILA_MIN - (s128.ORG + len(code) + len(db)),
                      'payload': len(payload),
                      'bancos': (len(payload) + 16383) // 16384,
                      'avisos': avisos}

@@ -27,8 +27,9 @@ class Juego48(pj.Juego):
 
     def __init__(self, yaml_path, tap=None):
         self.game = yaml.safe_load(io.open(yaml_path, encoding='utf-8'))
-        code, db, sym, spec, dbaddr = s48.compila(self.game, ancho=vn.ANCHO,
-                                                  org=s48.ORG)
+        code, db, sym, spec, dbaddr = s48.compila(
+            self.game, ancho=vn.ANCHO, org=s48.ORG,
+            game_dir=os.path.dirname(os.path.abspath(yaml_path)))
         self.code, self.db, self.dbaddr = code, db, dbaddr
         self.sym = sym
         self.info = {'localizaciones': len(spec['locations']),

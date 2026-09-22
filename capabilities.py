@@ -41,18 +41,18 @@ CONDACTS = {
     'PUTIN', 'TAKEOUT', 'OPEN', 'CLOSE', 'LOCK', 'UNLOCK', 'WEAR', 'REMOVE',
     'LIT', 'UNLIT', 'ADDSCORE', 'SCORE', 'DESC',
     'TIMER_START', 'TIMER_STOP', 'TIMER_RESET',
-    'PLAY',
+    'PLAY', 'SAMPLE',
     'END', 'MATCH', 'QUIT',
     # particulares de hardware (pantalla/sonido): no rompen la paridad lógica
     'INK', 'PAPER', 'BORDER', 'PAUSE', 'CLS', 'BRIGHT', 'BEEP', 'SOUND',
-    'FLASH', 'INVERSE',
+    'FLASH', 'INVERSE', 'SCR',
 }
 STRUCTURAL = {'IF', 'ELSE', 'ENDIF', 'ON', 'ENDON', 'THEN', 'REM', 'JMP'}
 
 # Condacts particulares de hardware: si un target no los tiene, NO se avisa como
 # rotura de paridad (es una diferencia de máquina esperada).
 HARDWARE_CONDACTS = {'INK', 'PAPER', 'BORDER', 'PAUSE', 'CLS', 'BRIGHT',
-                     'BEEP', 'SOUND', 'FLASH', 'INVERSE'}
+                     'BEEP', 'SOUND', 'FLASH', 'INVERSE', 'SCR', 'SAMPLE'}
 
 # Funciones de juego detectables en el modelo de datos (no son palabras clave).
 FEATURES = {'weight', 'containers', 'wearables', 'lightsource', 'timers'}
@@ -110,7 +110,10 @@ CAPS['spectrum128'] = CAPS_NATIVO
 # suenan (desde la v2.53: hasta entonces MCWAIT era un RET en la capa de
 # Spectrum/Next y los efectos se reproducian en microsegundos).
 CAPS['spectrum48'] = dict(CAPS_NATIVO,
-                          condacts=CAPS_NATIVO['condacts'] - {'PLAY'})
+                          condacts=CAPS_NATIVO['condacts'] - {'PLAY', 'SAMPLE'})
+# Las muestras digitalizadas van por el AY: en el CPC el condact existe y no
+# hace nada (SMPPLAY es un RET).
+CAPS['cpc']['condacts'] = CAPS['cpc']['condacts'] - {'SAMPLE'}
 # Next dejo de ir en BASIC en la v2.0: lleva el mismo motor nativo que el CPC.
 # Hasta la v2.53 esta linea decia CAPS['next'] = CAPS['spectrum'], o sea que
 # daba via libre a un BEEP que en el .nex no suena.
@@ -199,6 +202,43 @@ def scan_game(game):
 # (PLAY "explosion") o número (PLAY 1). Se exige que sea condact para no casar un
 # PLAY que aparezca DENTRO de un texto (p. ej. MESSAGE "...PLAY 9...").
 _PLAY = re.compile(r'(?:^|\bTHEN\s+)PLAY\s+("[^"]*"|\'[^\']*\'|\d+)', re.I)
+_SCR = re.compile(r'(?:^|\bTHEN\s+)SCR\s+(\S+)(?:\s+("[^"]*"|\'[^\']*\'|\S+))?', re.I)
+
+
+def nombre_pantalla(arg):
+    """Lo que escribe el autor tras SCR -> nombre base del fichero: sin comillas
+    y sin extension. 'final.scr', '"final.png"' y 'final' son la misma pantalla,
+    y cada maquina la busca con la extension que le toque."""
+    n = str(arg).strip().strip('"').strip("'").strip()
+    base = n.rsplit('.', 1)
+    if len(base) == 2 and base[1].lower() in ('scr', 'png', 'jpg', 'jpeg',
+                                                'bmp', 'nxi', 'gif'):
+        n = base[0]
+    return n
+
+
+def partes_scr(arg1, arg2):
+    """Los dos argumentos posibles de SCR -> (sala o None, nombre de pantalla).
+    `SCR pantalla` pinta una pantalla suelta; `SCR @sala pantalla` se la
+    asigna a esa sala (y la repinta si el jugador esta en ella)."""
+    if arg2:
+        return arg1.strip(), nombre_pantalla(arg2)
+    return None, nombre_pantalla(arg1)
+
+
+def used_scr(game):
+    """Las pantallas sueltas que pide algun SCR (en cualquiera de sus dos
+    formas), por orden de primera aparicion y sin repetir. Ese orden es el
+    indice que compila nativecc y el que usan las cuatro maquinas para
+    empaquetarlas: tiene que salir de un solo sitio."""
+    out = []
+    for sc in _scripts(game):
+        for line in str(sc).split('\n'):
+            for m in _SCR.finditer(line.strip()):
+                _sala, n = partes_scr(m.group(1), m.group(2))
+                if n and n.lower() not in [o.lower() for o in out]:
+                    out.append(n)
+    return out
 
 
 def used_fx(game):

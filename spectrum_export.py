@@ -1901,8 +1901,8 @@ def imagenes_128k(img_dir, locids, locidx, texto_len, progreso=None):
                 else 'Original/%s (dithering)' % os.path.basename(ruta))
         lineas.append('  - img/%s: 2304 -> %d bytes (banco %d)'
                       % (_src, offs[0][1] + offs[1][1], offs[0][0] // 16384))
-    if texto_len + len(extra) > 81920:
-        raise ValueError('imagenes: el payload supera los 5 bancos (80 KB): '
+    if texto_len + len(extra) > 6 * 16384:
+        raise ValueError('imagenes: el payload supera los 6 bancos (96 KB): '
                          '%d bytes' % (texto_len + len(extra)))
     # verificacion: cada stream debe descomprimirse exacto con el asm simulado
     if progreso:
@@ -1922,6 +1922,104 @@ def imagenes_128k(img_dir, locids, locidx, texto_len, progreso=None):
                      ' + pantalla de presentacion' if scr_off is not None else '',
                      len(extra)))
     return bytes(extra), tabla, scr_off, lineas
+
+def _clase_pantalla(path):
+    """8 (tira de 256x64, el tercio superior) o 24 (pantalla entera), segun la
+    proporcion de la imagen: 4:1 es una tira, 4:3 una pantalla."""
+    from PIL import Image
+    with Image.open(path) as im:
+        an, al = im.size
+    r = an / float(al or 1)
+    return 8 if abs(r - 4.0) < abs(r - 4.0 / 3.0) else 24
+
+
+def pantallas_spectrum(img_dir, nombres):
+    """Las pantallas sueltas del condact SCR, comprimidas y listas para colocar.
+
+    Se buscan como las de sala: <nombre>.scr en img/Spectrum (2304 bytes = 8
+    filas, 6912 = las 24), y si no, <nombre>.png|jpg en img/Spectrum (tal cual,
+    en su proporcion) o en img/Original (convertida con dithering). La
+    proporcion decide el tamano: 4:1 es una tira de 8 filas, 4:3 una pantalla
+    entera.
+
+    Devuelve ([(nombre, filas, [flujos zx0]), ...], lineas). Una de 8 filas son
+    dos flujos, bitmap y atributos, como las de sala; una de 24 es un solo
+    flujo de 6912, como la portada. Las que no se encuentran van con filas=0 y
+    sin flujos: el condact existe igual y no pinta nada."""
+    import os
+    origdir = os.path.join(os.path.dirname(img_dir), 'Original')
+    out, lineas = [], []
+    for nombre in nombres:
+        ruta = busca_img(img_dir, nombre, ('.scr',))
+        try:
+            if ruta:
+                with open(ruta, 'rb') as f:
+                    raw = f.read()
+                if len(raw) == 6912:
+                    filas, flujos = 24, [zx0_comprime(raw, offset_limit=2048)]
+                elif len(raw) == 2304:
+                    filas, flujos = 8, [zx0_comprime(raw[:2048]),
+                                        zx0_comprime(raw[2048:])]
+                else:
+                    raise ValueError('mide %d bytes; tienen que ser 2304 o 6912'
+                                     % len(raw))
+                fuente = 'Spectrum/%s' % os.path.basename(ruta)
+            else:
+                import png2spectrum
+                ruta = busca_img(img_dir, nombre, IMG_ZX_EXT)
+                contr = False
+                if not ruta:
+                    ruta = busca_img(origdir, nombre, ('.png', '.jpg', '.jpeg'))
+                    contr = True
+                if not ruta:
+                    lineas.append('  - SCR %s: no hay imagen en img/Spectrum ni '
+                                  'img/Original; no pintara nada' % nombre)
+                    out.append((nombre, 0, []))
+                    continue
+                filas = _clase_pantalla(ruta)
+                if filas == 24:
+                    raw = png2spectrum.to_scr_full(ruta, contrast=contr)
+                    flujos = [zx0_comprime(raw, offset_limit=2048)]
+                else:
+                    bmp, att = png2spectrum.to_scr_topthird(ruta, contrast=contr)
+                    raw = bytes(bmp) + bytes(att)
+                    flujos = [zx0_comprime(bmp), zx0_comprime(att)]
+                fuente = '%s/%s (dithering)' % (
+                    'Original' if contr else 'Spectrum', os.path.basename(ruta))
+        except Exception as e:
+            lineas.append('  - SCR %s IGNORADA: %s' % (nombre, e))
+            out.append((nombre, 0, []))
+            continue
+        # cada flujo tiene que volver exacto con el simulador de dzx0
+        if filas == 24:
+            assert dzx0_simula(flujos[0]) == raw, 'dzx0 (SCR %s)' % nombre
+        else:
+            assert dzx0_simula(flujos[0]) + dzx0_simula(flujos[1]) == raw, \
+                'dzx0 (SCR %s)' % nombre
+        out.append((nombre, filas, flujos))
+        lineas.append('  - SCR %s: img/%s, %d filas, %d -> %d bytes'
+                      % (nombre, fuente, filas, len(raw), sum(map(len, flujos))))
+    return out, lineas
+
+
+def coloca_flujos(flujos, base, tam=16384):
+    """Coloca flujos seguidos a partir del desplazamiento absoluto `base` sin que
+    ninguno cruce de banco y alineados a par (los desplazamientos viajan /2).
+    Devuelve (bytes a anadir, [desplazamiento absoluto de cada flujo])."""
+    extra = bytearray()
+    offs = []
+    for blob in flujos:
+        off = base + len(extra)
+        if off // tam != (off + len(blob) - 1) // tam:
+            extra += b'\x00' * (tam - off % tam)
+            off = base + len(extra)
+        if off % 2:
+            extra += b'\x00'
+            off = base + len(extra)
+        extra += blob
+        offs.append(off)
+    return bytes(extra), offs
+
 
 _BLOQUE_IMG = """' ---------- IMAGENES ZX0 EN BANCOS 128K ----------
 ' dimgB/dimgA paginan el banco, descomprimen con dzx0 (Saukas/Urusergi)

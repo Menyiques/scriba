@@ -162,6 +162,179 @@ def sin_z80n(src):
 # ---------------------------------------------------------------------------
 #  El motor
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+#  dzx0_standard (Einar Saukas & Urusergi), con las etiquetas renombradas.
+#  Es el mismo descompresor que usaba el export de BASIC, byte por byte.
+#  HL = flujo comprimido, DE = destino. Lo comparten el 48K (pantallas SCR en
+#  el mapa plano) y el 128K (imagenes, portada y pantallas en los bancos).
+# ---------------------------------------------------------------------------
+DZX0_ASM = r'''
+dzx0st: ld    bc,&FFFF
+        push  bc
+        inc   bc
+        ld    a,&80
+dzx0li: call  dzx0el
+        ldir
+        add   a,a
+        jr    c,dzx0no
+        call  dzx0el
+dzx0cp: ex    (sp),hl
+        push  hl
+        add   hl,de
+        ldir
+        pop   hl
+        ex    (sp),hl
+        add   a,a
+        jr    nc,dzx0li
+dzx0no: pop   bc
+        ld    c,&FE
+        call  dzx0lo
+        inc   c
+        ret   z
+        ld    b,c
+        ld    c,(hl)
+        inc   hl
+        rr    b
+        rr    c
+        push  bc
+        ld    bc,1
+        call  nc,dzx0bt
+        inc   bc
+        jr    dzx0cp
+dzx0el: inc   c
+dzx0lo: add   a,a
+        jr    nz,dzx0sk
+        ld    a,(hl)
+        inc   hl
+        rla
+dzx0sk: ret   c
+dzx0bt: add   a,a
+        rl    c
+        rl    b
+        jr    dzx0lo
+'''
+
+# ---------------------------------------------------------------------------
+#  Pantallas sueltas (condact SCR) en Spectrum: 48K y 128K
+# ---------------------------------------------------------------------------
+# SCRT lleva 5 bytes por pantalla: el flujo del bitmap, el de los atributos y
+# las filas. Los flujos van como los lee SCRUN en cada maquina: en el 48K es
+# dzx0st y son direcciones del mapa plano; en el 128K es s128un y son
+# desplazamientos/2 dentro de los bancos. SCRUN es una etiqueta que cada
+# maquina pone delante de su rutina (un equ a una etiqueta posterior no
+# resuelve en z80asm). Filas: 8 (tira arriba, texto
+# debajo, dos flujos como una imagen de sala), 24 (pantalla entera, un solo
+# flujo de 6912 como la portada) o 0 (no esta en esta maquina: no pinta).
+SCR_ASM = r'''
+SHOWSCR:
+        cp    NSCR
+        jr    nc,ss_no
+        ld    b,c              ; B = 1: borrar toda la pantalla antes
+        ld    e,a
+        ld    d,0
+        ld    l,a
+        ld    h,0
+        add   hl,hl
+        add   hl,hl
+        add   hl,de            ; 5 bytes por entrada
+        ld    de,SCRT
+        add   hl,de
+        ld    e,(hl)
+        inc   hl
+        ld    d,(hl)
+        inc   hl
+        ld    (ss_ob),de
+        ld    e,(hl)
+        inc   hl
+        ld    d,(hl)
+        inc   hl
+        ld    (ss_oa),de
+        ld    a,(hl)
+        or    a
+        jr    z,ss_no          ; esta pantalla no esta en esta maquina
+        ld    (ss_filas),a
+        ld    a,b
+        or    a
+        jr    z,ss_pinta
+        ld    h,0
+        ld    l,0
+        ld    d,41
+        ld    e,23
+        call  TXTWIN
+        ld    a,12
+        call  TXTO             ; como al describir una sala: todo limpio antes
+ss_pinta:
+        di
+        ld    de,&4000
+        ld    hl,(ss_ob)
+        call  SCRUN
+        ld    a,(ss_filas)
+        cp    24
+        jr    z,ss_ent
+        ld    de,&5800
+        ld    hl,(ss_oa)
+        call  SCRUN            ; atributos de la tira
+        ei
+        ; La ventana de texto pasa a empezar debajo de la tira, pero SIN mover
+        ; el cursor si ya cae dentro: al cambiar la imagen de la sala en mitad
+        ; de una respuesta, el texto tiene que seguir donde iba. TXTWIN lo
+        ; mandaria a la esquina y la respuesta se escribiria encima de lo de
+        ; antes.
+        ld    a,FILATXT
+        ld    (nxwt),a
+        ld    a,(nxrow)
+        cp    FILATXT
+        jr    nc,ss_8          ; el cursor ya esta debajo de la tira
+        ld    a,FILATXT
+        ld    (nxrow),a
+        xor   a
+        ld    (nxcol),a
+        ld    (col),a
+ss_8:   xor   a
+        ret                    ; A = 0: 8 filas
+ss_ent: ei
+        xor   a
+        ld    (nxwt),a         ; ventana entera: lo que se imprima ira encima
+        inc   a
+        ret                    ; A = 1: 24 filas; se queda hasta CLS o DESC
+ss_no:  ld    a,255
+        ret
+; En Spectrum la pantalla entera se va con el propio CLS (la ventana de texto
+; quedo a pantalla completa): no hay modo que restaurar.
+SCRREST:
+        ret
+ss_ob:  defw 0
+ss_oa:  defw 0
+ss_filas: defb 0
+'''
+
+
+def tabla_scr_asm(entradas):
+    """SCRT a partir de [(bitmap, atributos, filas)], con los flujos ya en la
+    unidad de la maquina (direccion o desplazamiento/2): texto de ensamblador."""
+    L = ['SCRT:']
+    for b, a, filas in entradas:
+        L.append('        defw %s,%s' % (b, a))
+        L.append('        defb %d' % filas)
+    return chr(10).join(L)
+
+
+def pantallas_asm_48(pant):
+    """Las pantallas del 48K, como datos del propio binario: cada flujo con su
+    etiqueta, y la tabla SCRT apuntandolos. `pant` es lo que devuelve
+    spectrum_export.pantallas_spectrum."""
+    partes, entradas = [], []
+    for i, (nombre, filas, flujos) in enumerate(pant):
+        if not flujos:
+            entradas.append(('0', '0', 0))
+            continue
+        etq = ['scr%db' % i, 'scr%da' % i][:len(flujos)]
+        for e, f in zip(etq, flujos):
+            partes.append(nx._datos_asm(e, f))
+        entradas.append((etq[0], etq[1] if len(etq) > 1 else '0', filas))
+    return chr(10).join(partes) + chr(10) + tabla_scr_asm(entradas)
+
+
 def _engine_48():
     """ENGINE_ASM adaptado. Se parte del parche que ya hace el Next sin imagenes
     ni portada (detect128 -> NXINIT, show_title -> ret, show_loc_image -> ventana
@@ -176,23 +349,38 @@ def _engine_48():
             src[i + len('start:  call  init'):])
 
 
-def prefijo(org, db_base, borde=7):
-    return (nx.prefijo(org, db_base, nimg=0, titulo=False, borde=borde) +
-            'S48SP equ &%04X\n' % SP48)
+def prefijo(org, db_base, borde=7, sp=SP48, ntxt=0, nscr=0, nloc=256):
+    return (nx.prefijo(org, db_base, nimg=0, titulo=False, borde=borde, ntxt=ntxt,
+                       nloc=nloc) +
+            'S48SP equ &%04X\n' % sp +
+            'FILATXT equ %d\n' % nx.FILA_TEXTO +
+            'NSCR equ %d\n' % nscr)
 
 
-def ensambla(org=ORG, db_base=None, idioma='es', borde=7, guion=None):
+def ensambla(org=ORG, db_base=None, idioma='es', borde=7, guion=None,
+             pantallas=None, nloc=256):
     """Ensambla motor + capa de plataforma 48K. Devuelve (bytes, simbolos).
     Con `guion`, sale en MODO PRUEBA: el binario lleva dentro la partida, se
-    teclea solo y copia lo que imprime a un puerto (ver bateria_next)."""
+    teclea solo y copia lo que imprime a un puerto (ver bateria_next).
+    `pantallas`: lo de spectrum_export.pantallas_spectrum; van como datos del
+    binario y se pintan con el dzx0 desde el mapa plano."""
     if db_base is None:
         db_base = org
-    fuente = (prefijo(org, db_base, borde) +
+    plat = sin_z80n(nx.PLAT_ASM)
+    extra = ''
+    if pantallas:
+        plat = nx.con_showscr(plat, SCR_ASM)
+        # SCRUN es una ETIQUETA, no un equ: z80asm no resuelve un equ a una
+        # etiqueta que viene despues (ya nos paso con el CPC).
+        extra = ('SCRUN:' + DZX0_ASM + chr(10) +
+                 pantallas_asm_48(pantallas) + chr(10))
+    fuente = (prefijo(org, db_base, borde, nscr=len(pantallas or ()), nloc=nloc) +
               _engine_48() +
-              sin_z80n(nx.PLAT_ASM) + chr(10) +
+              plat + chr(10) +
               Z80N_ASM + chr(10) +
               nx.IMG_ASM_VACIO + chr(10) +
               nx.SMP_ASM_VACIO + chr(10) +   # el 48K no lleva AY
+              extra +
               nx._font_asm(idioma) + chr(10))
     if guion is not None:
         fuente = nx._modo_prueba(fuente, guion, maquina='48', sp=SP48)
@@ -232,7 +420,7 @@ def bancos_guion(guion, base=BANCO_GUION):
             for k in range(0, len(pags), 2)}
 
 
-def export_nex_prueba(game, salida, guion, ancho=COLS, org=ORG):
+def export_nex_prueba(game, salida, guion, ancho=COLS, org=ORG, game_dir=None):
     """El 48K en MODO PRUEBA, envuelto en un .nex para que lo arranque jnext.
 
     El artefacto que se distribuye sigue siendo el .tap; esto es el mismo
@@ -240,7 +428,8 @@ def export_nex_prueba(game, salida, guion, ancho=COLS, org=ORG):
     de la bateria en sus bancos. Lo que se prueba es el motor y la base de
     datos de 48K reales, no el cargador BASIC de la cinta."""
     import empaqueta_nex
-    code, db, sym, spec, dbaddr = compila(game, ancho=ancho, org=org, guion=guion)
+    code, db, sym, spec, dbaddr = compila(game, ancho=ancho, org=org, guion=guion,
+                                          game_dir=game_dir)
     plano = code + db
     bancos = bancos_planos(plano, org)
     bancos.update(bancos_guion(guion))
@@ -253,8 +442,10 @@ def export_nex_prueba(game, salida, guion, ancho=COLS, org=ORG):
             'objetos': len(spec['objects']), 'imagenes': []}
 
 
-def compila(game, ancho=COLS, org=ORG, guion=None):
-    """Ensambla motor y base de datos. Devuelve (codigo, db, simbolos, spec, dir_db)."""
+def compila(game, ancho=COLS, org=ORG, guion=None, game_dir=None):
+    """Ensambla motor y base de datos. Devuelve (codigo, db, simbolos, spec, dir_db).
+    `game_dir` es la carpeta del juego, para buscar las pantallas del SCR en
+    img/Spectrum e img/Original; sin ella, el condact existe y no pinta."""
     import cpc_nativo
     import nativecc as nc
     import scriba_info
@@ -291,18 +482,28 @@ def compila(game, ancho=COLS, org=ORG, guion=None):
             font_acc=spec['font_acc'], timers=spec['timers'],
             llevarmax=spec['llevarmax'], fx=fx_blob)[0]
 
+    # pantallas sueltas (SCR): comprimidas, dentro del binario
+    pant = []
+    if spec.get('pantallas') and game_dir:
+        pant, _av = sx.pantallas_spectrum(os.path.join(game_dir, 'img', 'Spectrum'),
+                                          spec['pantallas'])
+    pant_bytes = sum(len(f) for _, _, fl in pant for f in fl)
+
     # dos pasadas: la 1a da la longitud del motor, para saber donde cae la DB
+    nloc = len(spec['locations'])
     code, _sym = ensambla(org=org, db_base=org, idioma=idioma, borde=borde,
-                          guion=guion)
+                          guion=guion, pantallas=pant, nloc=nloc)
     dbaddr = org + len(code)
     code, sym = ensambla(org=org, db_base=dbaddr, idioma=idioma, borde=borde,
-                         guion=guion)
+                         guion=guion, pantallas=pant, nloc=nloc)
     assert org + len(code) == dbaddr, 'el motor cambio de tamano entre pasadas'
     db = _db(dbaddr)
     import presupuesto
     presupuesto.comprueba(
         'ZX Spectrum 48K',
-        [('motor + plataforma', len(code)), ('base de datos', len(db))],
+        [('motor + plataforma', len(code) - pant_bytes),
+         ('pantallas SCR', pant_bytes),
+         ('base de datos', len(db))],
         SP48 - org, 'el mapa plano &%04X-&%04X' % (org, SP48),
         presupuesto.RECORTA_PLANO)
     return code, db, sym, spec, dbaddr
@@ -348,10 +549,11 @@ def tap(blob, org=ORG, nombre='juego'):
             _cab(3, nombre, len(blob), org) + _bloque(blob, 255))
 
 
-def export_tap(game, tap_path, ancho=COLS, org=ORG):
+def export_tap(game, tap_path, ancho=COLS, org=ORG, game_dir=None):
     import presupuesto
     presupuesto.empieza()
-    code, db, sym, spec, dbaddr = compila(game, ancho=ancho, org=org)
+    code, db, sym, spec, dbaddr = compila(game, ancho=ancho, org=org,
+                                          game_dir=game_dir)
     blob = code + db
     with open(tap_path, 'wb') as f:
         f.write(tap(blob, org=org,

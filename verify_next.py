@@ -55,7 +55,7 @@ def construir(game):
     mem[ORG:ORG + len(code)] = code
     mem[dbaddr:dbaddr + len(db)] = db
     cpu = z80.Z80(mem)
-    cpu.sp = 0xFFF0
+    cpu.sp = 0xFFF0                 # mapa plano sin bancos: la pila, arriba
     tec = Teclado(cpu, mem, sym)
     cpu.run(start=sym['init'])
     return cpu, mem, sym, spec, tec, len(code), len(db)
@@ -140,21 +140,30 @@ def texto_pantalla(mem, sym):
 # ---------------------------------------------------------------------------
 # ejecucion acotada de una rutina
 # ---------------------------------------------------------------------------
+# Donde pone `ejecutar` su pila y su direccion de retorno postiza. En un mapa
+# plano (48K, o el motor del Next sin bancos que monta `construir`) vale lo
+# alto de la memoria. En un binario con el texto en bancos NO: &C000-&FFFF es
+# la ventana de paginacion, y en cuanto la rutina llamara a TXTPAGE la pila y el
+# retorno desaparecerian con el banco. verify_128 y verificar_nex lo bajan.
+PILA_ARNES = 0xFFEE
+
+
 def ejecutar(cpu, mem, addr, pasos=800000, sym=None, tec=None):
     """Llama a una rutina del motor y vuelve. Con sym y tec, ademas pulsa una
     tecla cada vez que el motor se queda esperandola: una descripcion larga
     llena la ventana y se para sola en la pausa de pagina, y sin esto el arnes
     se quedaba dando vueltas hasta agotar los pasos."""
-    mem[0xFFFE] = 0xC9
-    cpu.sp = 0xFFEE
-    mem[0xFFEE] = 0xFE
-    mem[0xFFEF] = 0xFF
+    fin = PILA_ARNES + 16
+    mem[fin] = 0xC9
+    cpu.sp = PILA_ARNES
+    mem[PILA_ARNES] = fin & 0xFF
+    mem[PILA_ARNES + 1] = fin >> 8
     cpu.pc = addr
     cpu.halted = False
     espera = sym.get('kmread') if (sym and tec) else None
     suelta = [False]
     n = 0
-    while n < pasos and cpu.pc != 0xFFFE:
+    while n < pasos and cpu.pc != fin:
         n += 1
         if espera is not None and cpu.pc == espera:
             if suelta[0]:
@@ -458,10 +467,12 @@ def corre_hasta(cpu, addr, tope=6000000):
 
 
 class Mmu:
-    """Emula la paginacion de la ranura 0 del MMU ($0000-$1FFF), que es lo que
-    usa el motor para leer el banco de paletas: escribir el numero de pagina de
-    8K en el NextReg $50 la trae, y escribir 255 devuelve la ROM. Sin esto la
-    paleta se leeria como ceros y la comprobacion no probaria nada."""
+    """Emula la paginacion del MMU: escribir el numero de pagina de 8K en el
+    NextReg $50+n trae esa pagina a la ranura n (&0000 + n*&2000), y 255
+    devuelve la ROM en la 0. Las ranuras 0 y 1 las usa el motor para las
+    paletas y el guion del modo prueba; la 6 y la 7 (&C000-&FFFF) son la
+    ventana por la que TXTPAGE lee el texto, los FX y la musica. Sin esto el
+    texto se leeria como ceros y ninguna comprobacion probaria nada."""
 
     def __init__(self, cpu, mem, bancos):
         self.mem = mem
@@ -470,10 +481,11 @@ class Mmu:
         cpu.mmu = self
 
     def pagina(self, v, slot=0):
-        """slot 0 = &0000-&1FFF, slot 1 = &2000-&3FFF. El modo prueba usa el 1
-        para el guion de la bateria, y deja la ROM en el 0 por el gestor de
-        interrupcion de &0038."""
+        """slot n = &0000 + n*&2000. El modo prueba usa el 1 para el guion de la
+        bateria, y deja la ROM en el 0 por el gestor de interrupcion de &0038."""
         a = slot * 0x2000
+        self.paginada = getattr(self, 'paginada', {})
+        self.paginada[slot] = v
         if v == 255:
             self.mem[a:a + 0x2000] = self.rom if slot == 0 else bytes(0x2000)
             return
@@ -502,7 +514,7 @@ class EspiaNextReg:
         if self.reg is not None:
             cpu.nextreg[self.reg] = val
             self.flujo.append((self.reg, val))
-            if self.reg in (0x50, 0x51) and getattr(cpu, 'mmu', None) is not None:
+            if 0x50 <= self.reg <= 0x57 and getattr(cpu, 'mmu', None) is not None:
                 cpu.mmu.pagina(val, self.reg - 0x50)
 
     def paleta(self):
@@ -527,6 +539,16 @@ def verificar_nex(game, salida, datadir=None, musicdir=None):
     """Empaqueta el .nex, lo vuelve a leer del disco como lo hace NextZXOS,
     arranca desde el PC de la cabecera y comprueba que llega a pedir orden con
     la sala inicial en pantalla. Prueba del empaquetado, no solo del motor."""
+    global PILA_ARNES
+    pila_antes = PILA_ARNES
+    PILA_ARNES = nn.SP_NEX - 2         # el texto va en bancos: pila bajo &C000
+    try:
+        return _verificar_nex(game, salida, datadir, musicdir)
+    finally:
+        PILA_ARNES = pila_antes
+
+
+def _verificar_nex(game, salida, datadir=None, musicdir=None):
     info = nn.export_nex(game, salida, datadir=datadir, musicdir=musicdir)
     mem, pc, sp, bancos, contenido = nn.carga_nex(salida)
     sym = info['simbolos']
@@ -575,8 +597,10 @@ def verificar_nex(game, salida, datadir=None, musicdir=None):
                 vista_intro = True
                 if titulo is not None:
                     titulo['ay'] = len(ay)
-                    titulo['psgpos'] = (mem[sym['psgpos']] |
-                                        (mem[sym['psgpos'] + 1] << 8)) - sym['nxpsg'] \
+                    titulo['psgpos'] = ((mem[sym['psgpos']] |
+                                         (mem[sym['psgpos'] + 1] << 8))
+                                        - (mem[sym['psgini']] |
+                                           (mem[sym['psgini'] + 1] << 8))) \
                         if 'psgpos' in sym else None
                 presentacion = [l for l in leer_pantalla(mem, sym) if l.strip()]
                 l2_en_intro = cpu.nextreg.get(0x69)

@@ -18,6 +18,96 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
 
 ---
 
+## 2.8 — 2026-09-23 — El condact SCR: pantallas donde tú digas
+
+### Novedades
+- **`SCR nombre`: pinta una pantalla del disco de imágenes.** Un condact nuevo,
+  en las cinco máquinas. La imagen se busca junto a las de localización (por
+  nombre, con o sin extensión) y su proporción decide el tamaño:
+  - **4:1 (256×64)**: una tira en el tercio superior, con el texto debajo, igual
+    que la imagen de una sala.
+  - **4:3 (256×192)**: una pantalla entera que tapa todo hasta el siguiente
+    `CLS` o `DESC`, o hasta que el jugador se mueve.
+- **`SCR @sala nombre`: reasigna la imagen de una localización.** A partir de
+  ahí esa sala se describe con esa pantalla en vez de con su imagen, y si el
+  jugador está en ella se refresca en el acto. Útil para cambiar el decorado de
+  un sitio según lo que pase (una base intacta y luego en llamas).
+- Cada máquina guarda las pantallas donde guarda las de sala: el **48K** las
+  lleva comprimidas (ZX0) en el mapa plano; el **128K** y el **Next**, en bancos
+  (en Next, Layer 2 con su paleta); el **CPC** las lee del disco (`SCRnn.SCR`,
+  las de 24 filas en Modo 0 con sus 16 tintas, como la portada). El motor es
+  común: un símbolo de plataforma `SHOWSCR`/`SCRREST` que cada una resuelve a su
+  manera, igual que con las imágenes y las muestras.
+- El editor convierte las imágenes que use algún `SCR` al exportar a Next, como
+  ya hacía con las de sala.
+- `verify_scr.py`, 15 comprobaciones (48K, 128K, Next y el export del CPC): la
+  tira de 8 filas deja el texto debajo, `SCR @sala` repinta y la sala se sigue
+  describiendo con esa pantalla, la de 24 tapa todo y se va con el `DESC`.
+
+### Presupuesto
+- El presupuesto de cada exportación desglosa las pantallas del SCR: en 48K
+  cuentan contra el mapa plano; en 128K y Next, contra los bancos; en CPC, contra
+  el disco (178 bloques de 1K), y si no caben todas entran las primeras y se
+  avisa de las que no.
+
+---
+
+## 2.7 — 2026-09-23 — El texto, a los bancos
+
+### Novedades
+- **En 128K y Next el texto del juego vive en los bancos, y con el la musica
+  del titulo y los FX.** El mapa se parte en dos con una regla simple: por
+  debajo de `&C000`, todo lo que el motor necesita siempre (codigo, indices,
+  vocabulario, objetos, respuestas y la pila, ahora en `&BFF0`); `&C000-&FFFF`
+  es una ventana de paginacion pura por la que se leen, cada uno de su banco,
+  los mensajes, la musica, los FX, las imagenes y las muestras. Como nada
+  permanente vive en la ventana, se pagina cuando hace falta y no hay que
+  devolver nada a su sitio.
+  - El texto era el **64 % de la base de datos** (15.796 bytes en Tifon
+    Negro). En el mapa plano de Tifon quedan ahora 7.591 bytes libres en 128K
+    y 7.609 en Next, frente a 2.412 y 2.599; Apolo 11 pasa de 3.715 a 9.717.
+  - **La musica del titulo suena entera**: 6.577 bytes en vez de los 4.481 a
+    los que se recortaba por no caber plana. El recorte solo actua ya si una
+    cancion pasara de un banco (16K).
+  - La base de datos lleva, por mensaje, el banco donde esta (tabla `msgbnk`) y
+    su direccion dentro de la ventana; `expand_msg` llama a `TXTPAGE` antes de
+    seguir el puntero. `TXTPAGE` es un simbolo de plataforma: en 48K y CPC no
+    hace nada (su texto sigue plano, como siempre); en 128K escribe el banco en
+    `&7FFD`; en Next pone sus dos paginas de 8K en las ranuras 6 y 7 del MMU.
+  - En el 128K desaparece el baile de la pila de emergencia en `&5C00` que
+    hacia falta para paginar con la pila en `&FF00`: ya no hay nada que
+    proteger.
+  - El presupuesto de cada exportacion lo refleja: el mapa plano son 24.432
+    bytes (`&6000-&BF70`) y los bancos se desglosan en texto, FX, musica,
+    imagenes y muestras.
+  - **Y son seis bancos, no cinco: 98.304 bytes.** El banco 0 era la RAM alta
+    del juego (la parte alta de la base de datos y la pila en `&FF00`) y no se
+    podia tocar. Con el mapa plano acabando bajo `&C000` es un banco mas. Va el
+    ultimo en el orden de carga (1, 3, 4, 6, 7 y 0) para que los cinco de
+    siempre no cambien de sitio.
+- `verify_128` (15 comprobaciones) y `verify_next` prueban que la descripcion
+  de la sala sale de su banco, que la musica se lee del suyo y que la pila
+  nunca asoma por la ventana. El simulador emula ahora las ranuras 6 y 7 del
+  MMU del Next, y el arnes `ejecutar` pone su pila bajo `&C000` cuando el
+  binario tiene el texto en bancos (antes la ponia en `&FFEE`, justo dentro de
+  la ventana, y la primera paginacion se la llevaba).
+
+### Correcciones
+- **`[+5 puntos]` sale en linea nueva.** ADDSCORE imprimia pegado a lo que
+  hubiera antes (el mensaje de la respuesta, normalmente) y dejaba un salto
+  detras; ahora hace como MESSAGE y SCORE: salto delante y ninguno detras, que
+  es como lo escribe el interprete de PC.
+- `_trunca_psg` reventaba con un `IndexError` cuando la cancion cabia entera:
+  nunca habia pasado porque nunca cabia.
+
+### Avisos
+- El CPC pierde 3 bytes de margen por los dos campos nuevos de la cabecera de
+  la base de datos (comun a las cuatro maquinas), y con Tifon Negro eso deja
+  fuera un FX mas (`senal`): 5 mudos en vez de 4. El arreglo de fondo del CPC
+  sigue siendo subir `imgbuf` por encima de `&8B00`.
+
+---
+
 ## 2.6 — 2026-09-22 — El juego, dentro del ejecutable
 
 ### Novedades

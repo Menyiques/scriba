@@ -720,7 +720,7 @@ def main():
             # el contenedor que sabe cargar el emulador. Se prueba el motor y
             # la base de datos de 48K, no el cargador BASIC de la cinta.
             import spectrum48_nativo as s48
-            info = s48.export_nex_prueba(game, nex, guion)
+            info = s48.export_nex_prueba(game, nex, guion, game_dir=raiz)
         elif maquina == '128':
             import spectrum128_nativo as s128
             info = s128.export_nex_prueba(game, nex, guion, game_dir=raiz)

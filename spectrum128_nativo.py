@@ -2,19 +2,23 @@
 """
 spectrum128_nativo.py - Capa de plataforma ZX Spectrum 128K para el motor Z80.
 
-Es el 48K nativo (spectrum48_nativo) mas los bancos: el juego entero -- motor,
-capa de plataforma y base de datos -- sigue viviendo en el mapa plano
-&6000-&FF00, y los cinco bancos conmutables (1, 3, 4, 6 y 7) quedan ENTEROS
-para las imagenes. En el export de BASIC esos mismos bancos los comparten el
-texto y las imagenes, y el texto se lleva la mayor parte; aqui el texto va
-comprimido dentro de la base de datos, en RAM principal, y no compite.
+Es el 48K nativo (spectrum48_nativo) mas los bancos, y el mapa esta partido
+en dos con una regla simple:
 
-La trampa del mapa es la pila. Mientras hay un banco paginado, &C000-&FFFF NO
-es la RAM de siempre, y ahi es justo donde vive la pila del juego (&FF00): un
-push durante el paginado escribiria sobre los datos de la imagen. Por eso, el
-rato que dura descomprimir, se cambia a una pila baja en &5C00 -- el buffer de
-impresora, que no usa nadie -- y se restaura al acabar. Igual de importante:
-toda la rutina de paginado vive por debajo de &C000, o desapareceria a mitad.
+  * por debajo de &C000 vive TODO lo que el motor necesita siempre: codigo,
+    capa de plataforma, la base de datos sin el texto (indices, vocabulario,
+    objetos, respuestas) y la pila, en &BFF0;
+  * &C000-&FFFF es una ventana de paginacion pura. Por ella se leen, cada uno
+    de su banco, el texto del juego (TXTPAGE, por mensaje), la musica del
+    titulo, los FX, las imagenes y las muestras. Como nada permanente vive
+    ahi, se pagina cuando hace falta y no hay que devolver nada a su sitio.
+
+Hasta la v2.6 el juego entero, texto incluido, estaba en el mapa plano
+&6000-&FF00, y los bancos eran solo para imagenes. Eso dejaba 40K para todo y
+la pila justo dentro de la ventana, con lo que cada paginado exigia cambiar a
+una pila de emergencia en &5C00. El texto es dos tercios de la base de datos:
+sacarlo dobla el sitio para un juego de 128K, que es lo que justifica que
+exista una version de 128K.
 
 Las imagenes son dos flujos ZX0 por sala (bitmap y atributos), los mismos que
 produce spectrum_export.imagenes_128k para el export de BASIC, con su misma
@@ -35,11 +39,18 @@ import spectrum_export as sx
 import z80asm
 
 ORG = s48.ORG             # &6000, igual que el 48K
-SP128 = s48.SP48          # &FF00
-SP_BAJA = 0x5C00          # pila de emergencia mientras hay un banco puesto
+SP128 = 0xBFF0            # bajo la ventana de &C000: paginar no la toca nunca
+PILA_MIN = nx.PILA_MIN    # margen bajo la pila, medido como en el Next
+VENTANA = 0xC000
 COLS = s48.COLS
-BANCOS = (17, 19, 20, 22, 23)    # 16 + bancos de RAM 1, 3, 4, 6 y 7
-TOPE_BANCOS = 5 * 16384
+# Los bancos conmutables, en el orden en que se llenan, como valor del puerto
+# &7FFD (16 = ROM de 48K, mas el numero de banco). El 5 es la pantalla y el 2
+# esta siempre en &8000, asi que quedan 1, 3, 4, 6, 7... y el 0. Hasta la v2.7 el
+# 0 era la RAM alta del juego (la parte alta de la base de datos y la pila) y no
+# se podia tocar; ahora el mapa plano acaba bajo &C000 y el 0 es un banco mas.
+# Va el ultimo para que los cinco de siempre no cambien de sitio.
+BANCOS = (17, 19, 20, 22, 23, 16)    # bancos de RAM 1, 3, 4, 6, 7 y 0
+TOPE_BANCOS = 6 * 16384
 FILA_TEXTO = nx.FILA_TEXTO       # la imagen ocupa las filas 0..7
 
 
@@ -86,17 +97,13 @@ S128PIC:
         inc   hl
         ld    d,(hl)
         ld    (s128oa),de
-        di                     ; ni interrupciones ni pila alta con banco puesto
-        ld    (s128sp),sp
-        ld    sp,SP128BAJA
+        di                     ; sin interrupciones mientras se descomprime
         ld    de,&4000
         ld    hl,(s128ob)
         call  s128un           ; bitmap
         ld    de,&5800
         ld    hl,(s128oa)
         call  s128un           ; atributos
-        call  s128ban0
-        ld    sp,(s128sp)
         ei
         scf
         ret
@@ -112,12 +119,8 @@ S128TIT:
         inc   a
         ret   z                ; &FFFF -> este juego no trae portada
         di
-        ld    (s128sp),sp
-        ld    sp,SP128BAJA
         ld    de,&4000
         call  s128un
-        call  s128ban0
-        ld    sp,(s128sp)
         ei
         ret
 
@@ -148,16 +151,10 @@ s128frm:
         halt
         ret
 
-; s128ban0: banco 0 de vuelta en &C000, que es donde el juego tiene su RAM.
-; El 16 lleva ademas la ROM de 48K seleccionada, igual que deja el cargador.
-s128ban0:
-        ld    bc,&7FFD
-        ld    a,16
-        out   (c),a
-        ret
-
 ; s128un: HL = desplazamiento/2 del flujo, DE = destino. Pagina el banco que le
-; toca y lo descomprime. Deja el banco puesto: lo quita el que llama.
+; toca y lo descomprime. Deja el banco puesto. SCRUN es su alias para las
+; pantallas del condact SCR (ver spectrum48_nativo.SCR_ASM).
+SCRUN:
 s128un: push  de
         call  s128pag
         pop   de
@@ -194,59 +191,10 @@ s128pag:
         out   (c),a
         ret
 
-S128BK: defb  17,19,20,22,23
+S128BK: defb  17,19,20,22,23,16
 s128ob: defw  0
 s128oa: defw  0
-s128sp: defw  0
 
-; ---------------------------------------------------------------------------
-;  dzx0_standard (Einar Saukas & Urusergi), con las etiquetas renombradas.
-;  Es el mismo descompresor que ya usaba el export de BASIC, byte por byte.
-;  HL = flujo comprimido, DE = destino.
-; ---------------------------------------------------------------------------
-dzx0st: ld    bc,&FFFF
-        push  bc
-        inc   bc
-        ld    a,&80
-dzx0li: call  dzx0el
-        ldir
-        add   a,a
-        jr    c,dzx0no
-        call  dzx0el
-dzx0cp: ex    (sp),hl
-        push  hl
-        add   hl,de
-        ldir
-        pop   hl
-        ex    (sp),hl
-        add   a,a
-        jr    nc,dzx0li
-dzx0no: pop   bc
-        ld    c,&FE
-        call  dzx0lo
-        inc   c
-        ret   z
-        ld    b,c
-        ld    c,(hl)
-        inc   hl
-        rr    b
-        rr    c
-        push  bc
-        ld    bc,1
-        call  nc,dzx0bt
-        inc   bc
-        jr    dzx0cp
-dzx0el: inc   c
-dzx0lo: add   a,a
-        jr    nz,dzx0sk
-        ld    a,(hl)
-        inc   hl
-        rla
-dzx0sk: ret   c
-dzx0bt: add   a,a
-        rl    c
-        rl    b
-        jr    dzx0lo
 '''
 
 
@@ -257,9 +205,6 @@ SMP128_ASM = r'''
 ; Viven en los mismos bancos que las imagenes, detras de ellas, y se leen por la
 ; misma ventana de &C000. SMPT lleva por muestra el desplazamiento /2 y la
 ; longitud en bytes; &FFFF = esa ranura no existe.
-;
-; Igual que al pintar una imagen: mientras hay banco puesto la pila se muda
-; abajo, porque la de siempre esta en &FF00 y eso es justo lo que se pagina.
 SMPPLAY:
         or    a
         ret   z
@@ -284,20 +229,25 @@ SMPPLAY:
         ld    d,(hl)
         ld    (smplen),de
         di
-        ld    (s128sp),sp
-        ld    sp,SP128BAJA
         ld    hl,(smpoff)
         call  s128pag
         ld    de,(smplen)
         call  SMPLAY
-        call  s128ban0
-        ld    sp,(s128sp)
         ei
         ret
 smpoff: defw 0
 smplen: defw 0
 '''
 
+
+# El TXTPAGE del 128K: el banco, tal cual va al puerto &7FFD (16 + numero de
+# banco, con la ROM de 48K seleccionada), a la ventana de &C000.
+TXTPAGE_128 = '''        push  bc
+        ld    bc,&7FFD
+        out   (c),a
+        pop   bc
+        ret
+'''
 
 IMG128_ASM_VACIO = r'''
 S128PIC:
@@ -402,29 +352,32 @@ sli_fin:
     return src
 
 
-def prefijo(org, db_base, borde=7):
-    return (s48.prefijo(org, db_base, borde) +
-            'SP128BAJA equ &%04X\n' % SP_BAJA +
-            'FILATXT equ %d\n' % FILA_TEXTO)
+def prefijo(org, db_base, borde=7, nscr=0, nloc=256):
+    return s48.prefijo(org, db_base, borde, sp=SP128, nscr=nscr, nloc=nloc)
 
 
 def ensambla(org=ORG, db_base=None, idioma='es', borde=7,
-             tabla=None, scr_off=None, nlocs=0, psg=b'', guion=None,
-             smptab=None, nsmp=0, smphz=11025):
-    """Ensambla motor + plataforma 48K + bancos de imagenes y musica del 128K."""
+             tabla=None, scr_off=None, nlocs=0, psg_pos=None, guion=None,
+             smptab=None, nsmp=0, smphz=11025, pantallas=None):
+    """Ensambla motor + plataforma 48K + bancos de imagenes y musica del 128K.
+    psg_pos: (direccion en la ventana, banco) de la musica, o None si no hay.
+    pantallas: entradas de SCRT [(offB/2, offA/2, filas)] para el condact SCR."""
     if db_base is None:
         db_base = org
     hay_img = bool(tabla)
     hay_tit = scr_off is not None
-    partes = [s48.sin_z80n(nx.PLAT_ASM), s48.Z80N_ASM, nx.IMG_ASM_VACIO]
-    if hay_img or hay_tit:
-        partes.append(IMG128_ASM)
+    plat = nx.con_txtpage(s48.sin_z80n(nx.PLAT_ASM), TXTPAGE_128)
+    if pantallas:
+        plat = nx.con_showscr(plat, s48.SCR_ASM)
+    partes = [plat, s48.Z80N_ASM, nx.IMG_ASM_VACIO]
+    if hay_img or hay_tit or smptab or pantallas:
+        partes.append(IMG128_ASM)          # paginado, S128PIC/S128TIT y s128un
+        partes.append(s48.DZX0_ASM)
         partes.append(_tabla_asm(tabla or {}, scr_off, nlocs))
-    elif not smptab:
-        partes.append(IMG128_ASM_VACIO)
     else:
-        partes.append(IMG128_ASM)          # las muestras usan su paginado
-        partes.append(_tabla_asm({}, None, nlocs))
+        partes.append(IMG128_ASM_VACIO)
+    if pantallas:
+        partes.append(s48.tabla_scr_asm(pantallas))
     if smptab:
         import sample_ay
         partes.append(SMP128_ASM)
@@ -434,9 +387,10 @@ def ensambla(org=ORG, db_base=None, idioma='es', borde=7,
         partes.append(nx.SMP_ASM_VACIO)
     # El reproductor de PSG del Next, sin tocar: el AY del 128K son los mismos
     # puertos (&FFFD para elegir registro, &BFFD para el dato).
-    partes.append(nx.PSG_ASM + chr(10) + nx._datos_asm('NXPSG', psg)
-                  if psg else nx.PSG_ASM_VACIO)
-    fuente = (prefijo(org, db_base, borde) +
+    partes.append(nx.PSG_ASM + chr(10) + nx._psg_pos_asm(psg_pos)
+                  if psg_pos else nx.PSG_ASM_VACIO)
+    fuente = (prefijo(org, db_base, borde, nscr=len(pantallas or ()),
+                      nloc=nlocs or 256) +
               _engine_128(hay_img, hay_tit) +
               chr(10).join(partes) + chr(10) +
               nx._font_asm(idioma) + chr(10))
@@ -445,18 +399,40 @@ def ensambla(org=ORG, db_base=None, idioma='es', borde=7,
     return z80asm.assemble(fuente, org=org)
 
 
-def imagenes(game_dir, c):
+def imagenes(game_dir, c, texto_len=0):
     """Los flujos ZX0 de las imagenes, con el mismo empaquetador (y la misma
-    verificacion con dzx0) que usa el export de BASIC. texto_len=0 porque aqui
-    los bancos son solo para imagenes: el texto va en la base de datos."""
+    verificacion con dzx0) que usa el export de BASIC. `texto_len` es lo que
+    ya ocupan por delante, en los mismos bancos, el texto, los FX y la musica:
+    los desplazamientos que devuelve son absolutos dentro del payload."""
     img = os.path.join(game_dir, 'img', 'Spectrum')
     if not os.path.isdir(img):
         return b'', {}, None, ['imagenes: no hay carpeta img/Spectrum']
-    return sx.imagenes_128k(img, list(c.locids), c.locidx, 0)
+    return sx.imagenes_128k(img, list(c.locids), c.locidx, texto_len)
+
+
+def _que_hay(img_dir, c):
+    """(hay imagenes de sala, hay portada), mirando solo que ficheros existen:
+    los mismos que buscara despues spectrum_export.imagenes_128k."""
+    if not os.path.isdir(img_dir):
+        return False, False
+    origdir = os.path.join(os.path.dirname(img_dir), 'Original')
+    salas = any(sx.busca_img(img_dir, lid, ('.scr',))
+                or sx.busca_img(img_dir, lid, sx.IMG_ZX_EXT)
+                or sx.busca_img(origdir, lid, ('.png', '.jpg', '.jpeg'))
+                for lid in c.locids)
+    portada = os.path.isfile(os.path.join(img_dir, 'screen.scr')) or any(
+        os.path.isfile(os.path.join(carpeta, 'screen' + ext))
+        for carpeta, exts in ((img_dir, sx.IMG_ZX_EXT),
+                              (origdir, ('.png', '.jpg', '.jpeg')))
+        for ext in exts)
+    return salas, portada
 
 
 def compila(game, game_dir, ancho=COLS, org=ORG, guion=None):
-    """Devuelve (codigo, db, simbolos, spec, dir_db, payload, avisos)."""
+    """Devuelve (codigo, db, simbolos, spec, dir_db, payload, avisos, npsg,
+    psg_nom, extras). El payload son los seis bancos seguidos, en este orden:
+    texto (con los FX y la musica del titulo detras), imagenes y portada,
+    muestras. `extras` trae la tabla de imagenes y las cuentas por partida."""
     import cpc_nativo
     import nativecc as nc
     import scriba_info
@@ -476,30 +452,26 @@ def compila(game, game_dir, ancho=COLS, org=ORG, guion=None):
     except Exception:
         fx_blob = b''
 
-    payload, tabla, scr_off, avisos = imagenes(game_dir, c)
-    # las muestras van detras de las imagenes, en los mismos bancos
-    smp_blob, smptab = sample_ay.muestras(game, len(payload))
-    nsmp = len(game.get('samples') or [])
-    smphz = int(((game.get('samples') or [{}])[0] or {}).get('hz', 11025))
-    payload = payload + smp_blob
-    # La musica solo tiene sentido con portada: es lo que suena mientras se
-    # mira, igual que en el Next y en el export de BASIC.
-    psg_bruto, psg_nom = ((b'', None) if scr_off is None
+    # ¿Hay imagenes de sala? ¿Y portada? Se mira ANTES de comprimir nada: el
+    # texto va delante de las imagenes en los bancos, asi que hay que saber
+    # cuanto ocupa antes de colocarlas, y con el texto va la musica, que solo
+    # tiene sentido con portada. Comprimir dos veces para averiguarlo saldria
+    # caro; mirar que ficheros hay, no.
+    img_dir = os.path.join(game_dir, 'img', 'Spectrum')
+    hay_imgs, hay_portada = _que_hay(img_dir, c)
+    psg_bruto, psg_nom = ((b'', None) if not hay_portada
                           else nx._musica(os.path.join(game_dir, 'music')))
-    import presupuesto
-    presupuesto.comprueba(
-        'ZX Spectrum 128K',
-        [('imagenes y portada', len(payload) - len(smp_blob)),
-         ('muestras digitalizadas', len(smp_blob))],
-        TOPE_BANCOS, 'los 5 bancos conmutables: 1, 3, 4, 6 y 7',
-        presupuesto.RECORTA_BANCOS)
 
     ficha = scriba_info.ficha(game, 'spectrum128', scriba_info.ahora())
     spec, _ = nc.compile_game(c, sysm[:ge.NSYS], width=ancho, filas=0,
-                              ficha=ficha, imagen_intro=bool(tabla))
+                              ficha=ficha, imagen_intro=hay_imgs)
     idioma = str((game.get('metadata') or {}).get('language', '') or 'es')
     borde = nx.borde_inicial(game)
     nlocs = len(spec['locations'])
+
+    # El texto y los FX, a bancos: la DB se queda con los indices y dice, por
+    # mensaje, en que banco (el valor que va al puerto &7FFD) y donde.
+    texto = dict(ventana=VENTANA, tam=16384, ids=list(BANCOS))
 
     def _db(dbaddr):
         return ge.build_game_db(
@@ -509,47 +481,92 @@ def compila(game, game_dir, ancho=COLS, org=ORG, guion=None):
             proc_after=spec['proc_after'], proc_onstart=spec['proc_onstart'],
             hdrbuf=0, imgbuf=0, loc_slot=b'', vall=spec['vall'],
             font_acc=spec['font_acc'], timers=spec['timers'],
-            llevarmax=spec['llevarmax'], fx=fx_blob)[0]
+            llevarmax=spec['llevarmax'], fx=fx_blob, texto=texto)
 
-    def _asm(base, psg=b''):
-        return ensambla(org=org, db_base=base, idioma=idioma, borde=borde,
-                        tabla=tabla, scr_off=scr_off, nlocs=nlocs, psg=psg,
-                        guion=guion, smptab=smptab, nsmp=nsmp, smphz=smphz)
-
-    # La musica es lo unico elastico del binario, asi que se mide primero todo
-    # lo demas y se le da el hueco que quede, en vez de asumir un tope y
-    # reventar. Un juego con una base de datos enorme se queda con menos
-    # cancion, pero se queda con cancion.
+    # Los bancos de texto no dependen de donde caiga la DB; la musica va detras,
+    # entera (cabe un banco), en el hueco que deje el texto.
+    bancos_texto = [bytearray(b) for b in _db(org)[1]['bancos_texto']]
+    avisos = []
     psg = b''
+    psg_pos = None
     if psg_bruto:
-        code0, _ = _asm(org)
-        libre = (SP128 - nx.PILA_MIN
-                 - (org + len(code0) + len(_db(org + len(code0)))))
-        tope = min(nx.PSG_MAX, max(0, libre))
-        if tope >= 64:
-            psg = nx._trunca_psg(psg_bruto, tope)
-            if len(psg) < len(psg_bruto):
-                avisos = list(avisos) + [
-                    'musica recortada de %d a %d bytes y en bucle'
-                    % (len(psg_bruto), len(psg))]
-        else:
-            avisos = list(avisos) + [
-                'no queda sitio para la musica (%d bytes libres); se omite'
-                % max(0, libre)]
+        psg = nx._trunca_psg(psg_bruto, nx.PSG_MAX)
+        if len(psg) < len(psg_bruto):
+            avisos.append('musica recortada de %d a %d bytes y en bucle'
+                          % (len(psg_bruto), len(psg)))
+        bancos_texto, donde = ge.empaqueta_en_bancos([psg], bancos=bancos_texto)
+        psg_pos = (VENTANA + donde[0][1], BANCOS[donde[0][0]])
+    # En el payload lineal cada banco de texto ocupa sus 16K enteros menos el
+    # ultimo, que comparte banco con lo que venga detras.
+    prefijo_txt = (b''.join(bytes(b).ljust(16384, b'\x00') for b in bancos_texto[:-1])
+                   + bytes(bancos_texto[-1]))
+    texto_bytes = sum(len(b) for b in bancos_texto) - len(psg) - len(fx_blob)
 
-    code, _sym = _asm(org, psg)
-    dbaddr = org + len(code)
-    code, sym = _asm(dbaddr, psg)
-    assert org + len(code) == dbaddr, 'el motor cambio de tamano entre pasadas'
+    payload_img, tabla, scr_off, av_img = imagenes(game_dir, c, len(prefijo_txt))
+    avisos += list(av_img)
+    if scr_off is None and psg:
+        avisos.append('sin portada al final (fallo la conversion de screen.*): '
+                      'la musica va en el banco pero no suena')
+        psg_pos = None
+    payload = prefijo_txt + payload_img
+    # las pantallas sueltas del SCR, detras de las imagenes
+    pant, av_p = sx.pantallas_spectrum(img_dir, spec.get('pantallas') or [])
+    avisos += list(av_p)
+    flujos = [f for _, _, fl in pant for f in fl]
+    pant_bytes, offs = sx.coloca_flujos(flujos, len(payload))
+    payload += pant_bytes
+    pant_tabla = []
+    k = 0
+    for _nombre, filas, fl in pant:
+        if not fl:
+            pant_tabla.append((0, 0, 0))
+        elif filas == 24:
+            pant_tabla.append((offs[k] // 2, 0, 24)); k += 1
+        else:
+            pant_tabla.append((offs[k] // 2, offs[k + 1] // 2, 8)); k += 2
+    # las muestras van detras, en los mismos bancos
+    smp_blob, smptab = sample_ay.muestras(game, len(payload))
+    nsmp = len(game.get('samples') or [])
+    smphz = int(((game.get('samples') or [{}])[0] or {}).get('hz', 11025))
+    payload = payload + smp_blob
     import presupuesto
     presupuesto.comprueba(
         'ZX Spectrum 128K',
-        [('motor + plataforma', len(code) - len(psg)), ('musica del titulo', len(psg)),
-         ('base de datos', len(_db(dbaddr)))],
-        SP128 - org, 'el mapa plano &%04X-&%04X' % (org, SP128),
+        [('texto del juego', texto_bytes),
+         ('efectos FX', len(fx_blob)),
+         ('musica del titulo', len(psg)),
+         ('imagenes y portada', len(payload_img)),
+         ('pantallas SCR', len(pant_bytes)),
+         ('muestras digitalizadas', len(smp_blob))],
+        TOPE_BANCOS, 'los 6 bancos conmutables: 1, 3, 4, 6, 7 y 0',
+        presupuesto.RECORTA_BANCOS)
+
+    def _asm(base):
+        return ensambla(org=org, db_base=base, idioma=idioma, borde=borde,
+                        tabla=tabla, scr_off=scr_off, nlocs=nlocs, psg_pos=psg_pos,
+                        guion=guion, smptab=smptab, nsmp=nsmp, smphz=smphz,
+                        pantallas=pant_tabla)
+
+    code, _sym = _asm(org)
+    dbaddr = org + len(code)
+    code, sym = _asm(dbaddr)
+    assert org + len(code) == dbaddr, 'el motor cambio de tamano entre pasadas'
+    db, info_db = _db(dbaddr)
+    for j, b in enumerate(info_db['bancos_texto']):
+        assert bytes(bancos_texto[j][:len(b)]) == bytes(b), 'el texto se movio de banco'
+    presupuesto.comprueba(
+        'ZX Spectrum 128K',
+        [('motor + plataforma', len(code)),
+         ('base de datos (sin el texto)', len(db))],
+        SP128 - PILA_MIN - org,
+        'el mapa plano &%04X-&%04X, bajo la pila de &%04X' % (org, SP128 - PILA_MIN, SP128),
         presupuesto.RECORTA_PLANO, primero=True)
-    return (code, _db(dbaddr), sym, spec, dbaddr, payload, avisos,
-            len(psg), psg_nom)
+    extras = {'tabla': tabla, 'scr_off': scr_off, 'texto_bytes': texto_bytes,
+              'pantallas': pant_tabla, 'pant_bytes': len(pant_bytes),
+              'fx': len(fx_blob), 'psg_pos': psg_pos, 'ntxt': len(bancos_texto),
+              'img_bytes': len(payload_img), 'smp_bytes': len(smp_blob)}
+    return (code, db, sym, spec, dbaddr, payload, avisos, len(psg), psg_nom,
+            extras)
 
 
 # ---------------------------------------------------------------------------
@@ -598,7 +615,7 @@ def export_tap(game, tap_path, game_dir=None, ancho=COLS, org=ORG):
     presupuesto.empieza()
     game_dir = game_dir or os.getcwd()
     (code, db, sym, spec, dbaddr, payload, avisos,
-     npsg, psg_nom) = compila(game, game_dir, ancho=ancho, org=org)
+     npsg, psg_nom, ex) = compila(game, game_dir, ancho=ancho, org=org)
     _smpblob, _smptab = sample_ay.muestras(game, 0)   # solo para el informe
     blob = code + db
     meta = game.get('metadata') or {}
@@ -608,14 +625,14 @@ def export_tap(game, tap_path, game_dir=None, ancho=COLS, org=ORG):
                     borde=nx.borde_inicial(game)))
     return {'codigo': len(code), 'datos': len(db), 'total': len(blob),
             'org': org, 'db': dbaddr, 'fin': org + len(blob),
-            'libre': SP128 - (org + len(blob)),
-            'mapa': SP128 - org,
+            'libre': SP128 - PILA_MIN - (org + len(blob)),
+            'mapa': SP128 - PILA_MIN - org,
             'payload': len(payload),
             'bancos': (len(payload) + 16383) // 16384,
             'banco_libre': TOPE_BANCOS - len(payload),
             'localizaciones': len(spec['locations']),
             'objetos': len(spec['objects']),
-            'psg': npsg, 'psg_nom': psg_nom,
+            'psg': npsg, 'psg_nom': psg_nom, 'texto': ex['texto_bytes'],
             'muestras': len(_smptab), 'muestras_bytes': len(_smpblob),
             'avisos': avisos, 'presupuesto': presupuesto.informe(),
             'sym': sym}
@@ -631,7 +648,7 @@ def export_nex_prueba(game, salida, guion, game_dir=None, ancho=COLS, org=ORG):
     import empaqueta_nex
     game_dir = game_dir or os.getcwd()
     (code, db, sym, spec, dbaddr, payload, avisos,
-     npsg, psg_nom) = compila(game, game_dir, ancho=ancho, org=org, guion=guion)
+     npsg, psg_nom, _ex) = compila(game, game_dir, ancho=ancho, org=org, guion=guion)
     plano = code + db
     bancos = s48.bancos_planos(plano, org)
     for j in range(0, len(payload), 16384):

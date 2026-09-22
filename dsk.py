@@ -18,10 +18,26 @@ def amsdos_header(name, ext, length, load, exec_addr=None):
 def bin_file(name, ext, data, load):
     return amsdos_header(name,ext,len(data),load)+bytes(data)
 
+BLOQUES_DATOS = 40*9*512//1024 - 2       # 178 bloques de 1K (los 2 primeros, el directorio)
+ENTRADAS_DIR = 64                          # 2048 bytes / 32 por entrada
+
+
+def bloques(files):
+    """Cuantos bloques de 1K ocupan estos ficheros en el disco (cada uno
+    redondea hacia arriba) y cuantas entradas de directorio (una por cada 16K)."""
+    nb = sum((len(d) + 1023) // 1024 for _n, _e, d in files)
+    ne = sum(max(1, ((len(d) + 1023) // 1024 + 15) // 16) for _n, _e, d in files)
+    return nb, ne
+
+
 def make_dsk(files):
     SECTORS=9; SECSIZE=512; TRACKS=40
     SECIDS=[0xC1+i for i in range(SECTORS)]
     nblocks=TRACKS*SECTORS*SECSIZE//1024     # 180
+    nb, ne = bloques(files)
+    if nb > BLOQUES_DATOS or ne > ENTRADAS_DIR:
+        raise ValueError('el disco no cabe: %d bloques de 1K de %d, %d entradas '
+                         'de directorio de %d' % (nb, BLOQUES_DATOS, ne, ENTRADAS_DIR))
     blocks=[bytearray(1024) for _ in range(nblocks)]
     directory=bytearray(2048)
     next_block=2; entry_i=0

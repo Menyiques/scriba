@@ -176,6 +176,16 @@ class GameSession:
         return getattr(self.interp, 'player_location', None)
 
     @property
+    def imagen(self):
+        """Que imagen toca ensenar: la pantalla suelta puesta por SCR, si la
+        hay, y si no la de la localizacion. Las dos se buscan por nombre en la
+        misma carpeta (img/Original), igual que en las maquinas de 8 bits."""
+        i = self.interp
+        return (getattr(i, 'pantalla', None)
+                or getattr(i, 'loc_pantalla', {}).get(self.location)
+                or self.location)
+
+    @property
     def alive(self):
         return self._hilo is not None and self._hilo.is_alive()
 
@@ -335,7 +345,7 @@ def main(argv=None):
         s = ses.read_output()
         if s:
             _append(s)
-        _set_imagen(ses.location)
+        _set_imagen(ses.imagen)
         if not ses.alive and ses.out_queue.empty():
             ent.configure(state=tk.DISABLED)
             btn.configure(state=tk.DISABLED)

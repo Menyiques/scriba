@@ -158,6 +158,45 @@ def export_native(game, dsk_path, modo=2, img_dir=None):
                 loc_pics.append((lid - 1, png2cpc.rle_pack(pic)))
         info['nimg'] = len(loc_pics)
 
+    # Pantallas sueltas del condact SCR (SCRnn.SCR, nn = su indice): las de 8
+    # filas se convierten como las de sala (Modo 2, 64 lineas, RLE a imgbuf);
+    # las de 24, como la portada (Modo 0 de 16K con sus 16 tintas). Un .scr
+    # nativo en img/AmstradCPC cuenta como de 8 filas, igual que en las salas;
+    # las 24 solo salen de un png/jpg en proporcion 4:3.
+    pant_files = []           # (nombre de fichero, bytes, direccion de carga)
+    pant_tabla = []           # (filas, tintas) por pantalla, en orden
+    if img_dir:
+        import png2cpc
+        import spectrum_export as _sx
+        cpcdir = _os.path.join(img_dir, 'AmstradCPC')
+        origdir = _os.path.join(img_dir, 'Original')
+    for i, nombre in enumerate(spec.get('pantallas') or []):
+        filas, tintas, datos, dire = 0, [], b'', 0
+        if img_dir:
+            # con y sin la arroba, como las de sala (busca_img prueba las dos)
+            p8 = _sx.busca_img(cpcdir, nombre, ('.scr',)) if _os.path.isdir(cpcdir) else None
+            pp = (_sx.busca_img(cpcdir, nombre, ('.png', '.jpg', '.jpeg'))
+                  if _os.path.isdir(cpcdir) else None) or \
+                 (_sx.busca_img(origdir, nombre, ('.png', '.jpg', '.jpeg'))
+                  if _os.path.isdir(origdir) else None)
+            try:
+                if p8:
+                    datos = png2cpc.rle_pack((open(p8, 'rb').read() + bytes(16384))[:16384])
+                    filas = 8
+                elif pp and _sx._clase_pantalla(pp) == 8:
+                    pic = png2cpc.convert_m2(pp, 64, contrast=True, dither='bayer')
+                    datos, filas = png2cpc.rle_pack((bytes(pic) + bytes(16384))[:16384]), 8
+                elif pp:
+                    scr, inks = png2cpc.convert_menu(pp, contrast=True)
+                    datos, filas, tintas = bytes(scr), 24, list(inks or [])
+                    dire = 0xC000
+            except Exception as e:
+                info.setdefault('notas_scr', []).append('SCR %s: %s' % (nombre, e))
+        pant_tabla.append((filas, tintas))
+        if filas:
+            pant_files.append(('SCR%02d' % i, datos, dire))
+    info['pantallas'] = len([1 for f, _t in pant_tabla if f])
+
     # Plan de cache en RAM de 128K (CPC 6128). Asigna slots a las imagenes que
     # quepan, por orden de localizacion. loc_slot[lid0] = slot (0..NSLOT-1) o 255.
     # SLOT_SIZE/SPB/NSLOT deben coincidir con las constantes del motor (slottab).
@@ -173,9 +212,11 @@ def export_native(game, dsk_path, modo=2, img_dir=None):
     info['ncache'] = _nxt
 
     # dos pasadas: la 1a da la longitud del motor para colocar la DB justo detras
-    code0, _ = ge.assemble_engine(org=org, db_base=org)
+    code0, _ = ge.assemble_engine(org=org, db_base=org, nloc=len(spec['locations']),
+                                  pantallas=pant_tabla)
     dbaddr = org + len(code0)
-    code, _ = ge.assemble_engine(org=org, db_base=dbaddr)
+    code, _ = ge.assemble_engine(org=org, db_base=dbaddr, nloc=len(spec['locations']),
+                                 pantallas=pant_tabla)
 
     def _mkdb(hb, ib):
         return ge.build_game_db(
@@ -261,6 +302,30 @@ def export_native(game, dsk_path, modo=2, img_dir=None):
     for n, comp in loc_pics:
         nm = 'PIC%02d' % n
         files.append((nm, 'SCR', dsk.bin_file(nm, 'SCR', comp, imgbuf)))
+    # Las pantallas del SCR entran hasta donde haya disco: si no caben todas,
+    # se quedan fuera las ultimas (el condact existe igual y no pinta) y se
+    # avisa. Sin esto, un juego que llenara el disco no exportaria.
+    scr_fuera = []
+    base_files = list(files)
+    while True:
+        files = base_files + [(nm, 'SCR', dsk.bin_file(nm, 'SCR', datos, dire or imgbuf))
+                              for nm, datos, dire in pant_files]
+        nb, ne = dsk.bloques(files)
+        if (nb <= dsk.BLOQUES_DATOS and ne <= dsk.ENTRADAS_DIR) or not pant_files:
+            break
+        nm, _d, _a = pant_files.pop()
+        k = int(nm[3:])
+        scr_fuera.append(spec['pantallas'][k])
+        pant_tabla[k] = (0, [])
+    if scr_fuera:
+        # el motor lleva SCRT dentro: hay que volver a ensamblar sin ellas
+        code, _ = ge.assemble_engine(org=org, db_base=dbaddr, nloc=len(spec['locations']),
+                                     pantallas=pant_tabla)
+        blob = code + db
+        base_files[1] = ('GAME', 'BIN', dsk.bin_file('GAME', 'BIN', blob, org))
+        files = base_files + [(nm, 'SCR', dsk.bin_file(nm, 'SCR', datos, dire or imgbuf))
+                              for nm, datos, dire in pant_files]
+    info['pantallas'] = len(pant_files)
 
     # La cache de 12 ranuras es una OPTIMIZACION, no un requisito: una sala sin
     # ranura se lee del disco cada vez que entras (sli_disc en el motor), y la
@@ -277,6 +342,11 @@ def export_native(game, dsk_path, modo=2, img_dir=None):
             'CPC: %d efecto(s) FX no caben y quedan mudos: %s. La RAM util del '
             'CPC acaba en &8B00; los demas entran por orden de la pestana FX.'
             % (len(fx_fuera), ', '.join(_nom)))
+    if scr_fuera:
+        info['avisos'].append(
+            'CPC: %d pantalla(s) del SCR no caben en el disco y no se pintan: %s. '
+            'El .dsk son 178 bloques de 1K; las demas entran por orden de uso.'
+            % (len(scr_fuera), ', '.join(scr_fuera)))
     info['notas'] = []
     if info['sin_cache']:
         info['notas'].append(

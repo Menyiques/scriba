@@ -37,7 +37,8 @@ ATTR = 0x5800       # atributos
 COLS = 42           # columnas de texto (fuente de 6 pixeles)
 BANK_IMG = 16       # primer banco de 16K para imagenes
 FILA_TEXTO = 8      # la imagen ocupa las filas 0..7; el texto empieza aqui
-PSG_MAX = 4480      # tope de musica que cabe plana (igual que el export BASIC)
+PSG_MAX = 16384     # la musica va en un banco: como mucho, un banco entero
+VENTANA = 0xC000    # la ventana de paginacion: MMU 6 y 7 (&C000-&FFFF)
 REVELADO_PASO = 4   # lineas por barrido al descubrir la imagen (64/4 = 16 frames)
 TEXTO_RITMO = 4     # caracteres por barrido al escribir (~2 s una descripcion)
 FILAS = 24
@@ -287,8 +288,14 @@ nxframe:
 # Musica: reproductor de stream PSG (volcado de registros del AY por frame).
 # Portado tal cual del que ya usan los builds BASIC (spectrum_export._PSG_PLAYER).
 PSG_ASM = r'''
+; La musica vive en un banco (psgbnk) y psgini es su direccion dentro de la
+; ventana de &C000. Se pagina al arrancar la cancion y no se toca mas: durante
+; la portada nadie mas pagina, y la pila esta por debajo de la ventana.
 psginit:
-        ld    hl,NXPSG
+        ld    a,(psgbnk)
+        or    a
+        call  nz,TXTPAGE
+        ld    hl,(psgini)
         ld    (psgpos),hl
         ret
 
@@ -310,7 +317,7 @@ pf_rp:  ld    a,(hl)
         out   (c),e
         jr    pf_rp
 pf_loop:
-        ld    hl,NXPSG
+        ld    hl,(psgini)
         ld    (psgpos),hl
         ret
 pf_done:
@@ -1143,6 +1150,22 @@ MCWAIT: ei
         halt
         ret
 
+; TXTPAGE: A = banco donde vive el texto (o los FX, o la musica) que se va a
+; leer; lo trae a la ventana de &C000 conservando HL, DE y BC. En el 48K no hay
+; bancos y todo es plano: no hace nada. El 128K (puerto &7FFD) y el Next (MMU
+; $56/$57) sustituyen esta rutina por la suya con `con_txtpage`.
+TXTPAGE:
+        ret
+
+; SHOWSCR / SCRREST: las pantallas sueltas del condact SCR (ver c_scr en el
+; motor). Por defecto no hay ninguna: SHOWSCR dice 255 y SCRREST no hace nada.
+; Cada maquina pone las suyas con `con_showscr`.
+SHOWSCR:
+        ld    a,255
+        ret
+SCRREST:
+        ret
+
 TXTMATRIX:
 TXTMTABLE:
 KLINIT:
@@ -1578,31 +1601,40 @@ ZXPRINI:
 '''
 
 
-def banco_muestras(nimg, titulo):
-    """Primer banco de 16K de las muestras digitalizadas: el siguiente al de
-    las paletas."""
+def banco_texto(nimg, titulo):
+    """Primer banco de 16K del texto del juego (mensajes, FX y musica del
+    titulo): el siguiente al de las paletas. Se leen por la ventana de &C000
+    con TXTPAGE, que es para lo unico que se usa esa ventana: la parte fija del
+    juego -motor, tablas, pila- vive entera por debajo."""
     return BANK_IMG + nimg + (3 if titulo else 0) + 1
 
 
-def banco_guion(nimg, titulo, nsmp=0):
-    """Banco de 16K donde viaja el guion del modo prueba: el siguiente al de
-    las paletas. Su primera mitad se pagina sobre la ROM en &2000-&3FFF, que es
+def banco_muestras(nimg, titulo, ntxt=0):
+    """Primer banco de 16K de las muestras digitalizadas: detras del texto."""
+    return banco_texto(nimg, titulo) + ntxt
+
+
+def banco_guion(nimg, titulo, nsmp=0, ntxt=0):
+    """Banco de 16K donde viaja el guion del modo prueba: detras de las
+    muestras. Su primera mitad se pagina sobre la ROM en &2000-&3FFF, que es
     sitio que el motor no usa para nada -- la ranura de abajo, &0000-&1FFF, si
     la usa un instante nxsubepal para leer las paletas."""
-    return banco_muestras(nimg, titulo) + nsmp
+    return banco_muestras(nimg, titulo, ntxt) + nsmp
 
 
-def prefijo(org, db_base, nimg=0, titulo=False, borde=7, nsmp=0):
+def prefijo(org, db_base, nimg=0, titulo=False, borde=7, nsmp=0, ntxt=0,
+            nloc=256):
     """Constantes que el motor espera resueltas. A diferencia del CPC, aqui NO
     se declaran TXTO/KMW/... como equ: son etiquetas de PLAT_ASM."""
     L = ['ORIGIN equ &%04X' % org,          # el motor lleva dentro 'org ORIGIN'
          'DBB equ &%04X' % db_base,
+         'LOCSCRN equ %d' % max(1, nloc),   # tamano de LOCSCR (una entrada por sala)
          'MTABLE equ &%04X' % MTABLE,
          'NXIMG equ %d' % BANK_IMG,         # primer banco de imagen
          'NXTITLE equ %d' % (BANK_IMG + nimg),   # portada: 3 bancos seguidos
          'NXPALPG equ %d' % (2 * (BANK_IMG + nimg + (3 if titulo else 0))),
-         'NXGUIONPG equ %d' % (2 * banco_guion(nimg, titulo, nsmp)),
-         'NXSMPPG equ %d' % (2 * banco_muestras(nimg, titulo)),
+         'NXGUIONPG equ %d' % (2 * banco_guion(nimg, titulo, nsmp, ntxt)),
+         'NXSMPPG equ %d' % (2 * banco_muestras(nimg, titulo, ntxt)),
          'NXPALTIT equ %d' % nimg,              # slot de la paleta de la portada
          'NXREVPASO equ %d' % REVELADO_PASO,    # lineas por barrido al revelar
          'NXLENTO equ %d' % TEXTO_RITMO,        # caracteres por barrido al escribir
@@ -1617,23 +1649,28 @@ def prefijo(org, db_base, nimg=0, titulo=False, borde=7, nsmp=0):
 
 def assemble_engine_next(org=ORG, db_base=None, idioma='es', paletas=b'',
                          titulo_pal=b'', psg=b'', borde=7, guion=None,
-                         smptab=None, nsmp=0, smphz=11025, nsmpbanco=0):
+                         smptab=None, nsmp=0, smphz=11025, nsmpbanco=0,
+                         ntxt=0, psg_pos=None, nloc=256, pantallas=None):
     """Ensambla motor + plataforma Next. Devuelve (bytes, tabla_de_simbolos).
     paletas:    256 bytes por imagen (un byte por color), en orden de slot
     titulo_pal: 256 bytes de la paleta de la portada (b'' = sin portada)
-    psg:        stream PSG de la musica del titulo (b'' = sin musica)"""
+    psg:        stream PSG de la musica del titulo (b'' = sin musica)
+    psg_pos:    (direccion en la ventana, banco) donde esta la musica
+    ntxt:       cuantos bancos de 16K ocupa el texto (mensajes, FX, musica)"""
     if db_base is None:
         db_base = org
     nimg = len(paletas) // 256
     titulo = bool(titulo_pal)
     partes = []
-    if nimg or titulo:
-        partes.append(IMG_ASM)
+    if nimg or titulo or pantallas:
+        partes.append(IMG_ASM)             # nxreg, paletas, clip, Layer 2
     else:
         partes.append(IMG_ASM_VACIO)
+    if pantallas:
+        partes.append(tabla_scr_next_asm(pantallas))
     if titulo:
         partes.append(TITULO_ASM)
-        partes.append(PSG_ASM + chr(10) + _datos_asm('NXPSG', psg)
+        partes.append(PSG_ASM + chr(10) + _psg_pos_asm(psg_pos)
                       if psg else PSG_ASM_VACIO)
     if smptab:
         import sample_ay
@@ -1647,13 +1684,165 @@ def assemble_engine_next(org=ORG, db_base=None, idioma='es', paletas=b'',
         partes.append(sample_ay.asm(smphz, con_di=False))
     else:
         partes.append(SMP_ASM_VACIO)
-    fuente = (prefijo(org, db_base, nimg, titulo, borde, nsmpbanco) +
+    plat = con_txtpage(PLAT_ASM, TXTPAGE_NEXT)
+    if pantallas:
+        plat = con_showscr(plat, SCR_NEXT_ASM)
+    fuente = (prefijo(org, db_base, nimg, titulo, borde, nsmpbanco, ntxt,
+                      nloc=nloc) + 'NSCR equ %d\n' % len(pantallas or ()) +
               _engine_next(nimg > 0, titulo) +
-              PLAT_ASM + chr(10) + chr(10).join(partes) + chr(10) +
+              plat + chr(10) +
+              chr(10).join(partes) + chr(10) +
               _font_asm(idioma) + chr(10))
     if guion is not None:
         fuente = _modo_prueba(fuente, guion)
     return z80asm.assemble(fuente, org=org)
+
+
+TXTPAGE_STUB = 'TXTPAGE:\n        ret\n'
+
+
+SHOWSCR_STUB = 'SHOWSCR:\n        ld    a,255\n        ret\nSCRREST:\n        ret\n'
+
+
+def con_showscr(src, cuerpo):
+    """Sustituye los SHOWSCR/SCRREST vacios de PLAT_ASM por los de una maquina.
+    `cuerpo` trae las dos rutinas enteras, con sus etiquetas."""
+    if src.count(SHOWSCR_STUB) != 1:
+        raise RuntimeError('no encuentro el SHOWSCR de PLAT_ASM')
+    return src.replace(SHOWSCR_STUB, cuerpo.rstrip('\n') + '\n')
+
+
+def con_txtpage(src, cuerpo):
+    """Sustituye el TXTPAGE vacio de PLAT_ASM por el de una maquina con bancos.
+    `cuerpo` son las lineas de la rutina, sin la etiqueta."""
+    if src.count(TXTPAGE_STUB) != 1:
+        raise RuntimeError('no encuentro el TXTPAGE de PLAT_ASM')
+    return src.replace(TXTPAGE_STUB, 'TXTPAGE:\n' + cuerpo.rstrip('\n') + '\n')
+
+
+# El TXTPAGE del Next: banco de 16K -> sus dos paginas de 8K en las ranuras 6 y
+# 7 del MMU (&C000-&DFFF y &E000-&FFFF). Sin pasar por nxreg, que solo existe
+# cuando hay imagenes; esto tiene que existir siempre.
+# Las pantallas sueltas (SCR) en el Next: cada una es Layer 2, como las de sala,
+# en su banco (uno para 8 filas, tres seguidos para las 24) con su paleta en el
+# banco de paletas. SCRT: 3 bytes por pantalla: banco (0 = no esta), ranura de
+# paleta y filas. Entra con A = indice, C = 1 si hay que borrar el texto antes.
+SCR_NEXT_ASM = '''
+SHOWSCR:
+        cp    NSCR
+        jr    nc,ss_no
+        ld    b,c
+        ld    e,a
+        ld    d,0
+        ld    l,a
+        ld    h,0
+        add   hl,hl
+        add   hl,de            ; 3 bytes por entrada
+        ld    de,SCRT
+        add   hl,de
+        ld    a,(hl)
+        or    a
+        jr    z,ss_no          ; esta pantalla no esta en esta maquina
+        ld    (ss_bank),a
+        inc   hl
+        ld    a,(hl)
+        ld    (ss_pal),a
+        inc   hl
+        ld    a,(hl)
+        ld    (ss_filas),a
+        ld    a,b
+        or    a
+        jr    z,ss_pinta
+        ld    h,0
+        ld    l,0
+        ld    d,41
+        ld    e,23
+        call  TXTWIN
+        ld    a,12
+        call  TXTO             ; como al describir una sala: el texto, fuera
+ss_pinta:
+        ld    a,255
+        ld    (nxultimo),a     ; la imagen de la sala tendra que volver a salir
+        ld    d,&12
+        ld    a,(ss_bank)
+        ld    e,a
+        call  nxreg            ; Layer 2 -> el banco de la pantalla
+        ld    a,(ss_pal)
+        call  nxsubepal
+        ld    a,(ss_filas)
+        cp    24
+        jr    z,ss_ent
+        call  nxclip63
+        call  nxl2on
+        ; la ventana de texto empieza debajo de la tira, sin mover el cursor si
+        ; ya cae dentro (al cambiar la imagen de la sala en mitad de una
+        ; respuesta, el texto sigue donde iba)
+        ld    a,8
+        ld    (nxwt),a
+        ld    a,(nxrow)
+        cp    8
+        jr    nc,ss_8
+        ld    a,8
+        ld    (nxrow),a
+        xor   a
+        ld    (nxcol),a
+        ld    (col),a
+ss_8:   xor   a
+        ret                    ; A = 0: 8 filas
+ss_ent: call  nxclip191
+        call  nxl2on
+        xor   a
+        ld    (nxwt),a         ; ventana entera; el texto ira detras de Layer 2
+        inc   a
+        ret                    ; A = 1: 24 filas; se queda hasta CLS o DESC
+ss_no:  ld    a,255
+        ret
+; SCRREST: fuera la pantalla entera: Layer 2 apagada y el clip de vuelta al
+; tercio superior, que es como lo espera la imagen de sala.
+SCRREST:
+        ld    a,255
+        ld    (nxultimo),a
+        call  nxl2off
+        jp    nxclip63
+ss_bank: defb 0
+ss_pal:  defb 0
+ss_filas: defb 0
+'''
+
+
+def tabla_scr_next_asm(entradas):
+    """SCRT del Next a partir de [(banco, ranura de paleta, filas)]."""
+    L = ['SCRT:']
+    for b, pal, filas in entradas:
+        L.append('        defb %d,%d,%d' % (b, pal, filas))
+    return chr(10).join(L)
+
+
+TXTPAGE_NEXT = '''        push  bc
+        push  de
+        add   a,a              ; pagina de 8K = 2 * banco
+        ld    e,a
+        ld    bc,&243B
+        ld    a,&56
+        out   (c),a
+        ld    bc,&253B
+        out   (c),e            ; MMU 6 <- mitad baja
+        inc   e
+        ld    bc,&243B
+        ld    a,&57
+        out   (c),a
+        ld    bc,&253B
+        out   (c),e            ; MMU 7 <- mitad alta
+        pop   de
+        pop   bc
+        ret
+'''
+
+
+def _psg_pos_asm(psg_pos):
+    """psgini/psgbnk: donde esta la musica del titulo (ver PSG_ASM)."""
+    addr, banco = psg_pos
+    return 'psgini: defw &%04X\npsgbnk: defb %d\n' % (addr, banco)
 
 
 def _datos_asm(etiqueta, datos):
@@ -1689,7 +1878,9 @@ def _trunca_psg(stream, tope):
     """Recorta el stream en un limite de frame (&FF) y lo cierra con &FD para que
     haga bucle. Asi una cancion larga que no cabe suena igual, solo que su primer
     tramo y repitiendose."""
-    corte = min(tope, len(stream))
+    if len(stream) <= tope:
+        return stream            # cabe entera: ni se toca ni se cierra en bucle
+    corte = tope
     while corte > 0 and stream[corte] != 0xFF:
         corte -= 1
     if corte <= 0:
@@ -1733,7 +1924,7 @@ def _musica(musicdir):
 # &0038, o sea hacerse cargo del modo de interrupcion. Mientras quepa asi, no
 # compensa. Cuando haga falta: nextreg &50 y &51 con dos paginas de 8K libres.
 
-SP_NEX = 0xFFF0
+SP_NEX = 0xBFF0     # bajo la ventana de &C000: paginar no la toca nunca
 # Margen reservado bajo la pila. Medido en el simulador sobre un arranque
 # completo (portada + musica + presentacion) mas media docena de ordenes, el
 # motor no baja de 50 bytes de pila; 128 es 2,5 veces eso.
@@ -1769,6 +1960,23 @@ def nombre_imagen(datadir, lid):
                 and os.path.isfile(nxp)):
             return nombre
     return None
+
+
+def _pantalla_next(datadir, nombre):
+    """Una pantalla suelta (SCR) ya convertida: <nombre>.nxi de 16K (8 filas) o
+    de 48K (las 24) y su .nxp, en temp/Next/data. (bytes, paleta, filas), o
+    (b'', b'', 0) si no esta: el condact existe igual y no pinta."""
+    if not datadir or not nombre:
+        return b'', b'', 0
+    for base in (nombre, '@' + nombre.lstrip('@'), nombre.lstrip('@')):
+        nxi = os.path.join(datadir, base + '.nxi')
+        nxp = os.path.join(datadir, base + '.nxp')
+        if os.path.isfile(nxi) and os.path.isfile(nxp):
+            tam = os.path.getsize(nxi)
+            if tam in (16384, 49152):
+                return (open(nxi, 'rb').read(), _paleta256(nxp),
+                        8 if tam == 16384 else 24)
+    return b'', b'', 0
 
 
 def _imagenes(c, datadir):
@@ -1850,13 +2058,14 @@ def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None,
 
     borde = borde_inicial(game)
 
-    def _ensambla(psg, base):
-        return assemble_engine_next(org=org, db_base=base, idioma=idioma,
-                                    paletas=paletas,
-                                    titulo_pal=titulo_pal or b'', psg=psg,
-                                    borde=borde, guion=guion,
-                                    smptab=smptab, nsmp=nsmp, smphz=smphz,
-                                    nsmpbanco=nsmpbanco)
+    # El texto, los FX y la musica van a BANCOS, y se leen por la ventana de
+    # &C000 con TXTPAGE (MMU 6 y 7). En el mapa plano solo queda lo que el motor
+    # necesita siempre: codigo, indices, tablas y la pila, todo bajo &C000.
+    # Los bancos de texto van detras del de las paletas; cuantos son se sabe al
+    # construir la DB, y de ahi salen los numeros de los de muestras y guion.
+    con_titulo = titulo_bin is not None
+    ids_texto = [banco_texto(len(imgs), con_titulo) + j for j in range(96)]
+    texto = dict(ventana=VENTANA, tam=16384, ids=ids_texto)
 
     def _db(dbaddr):
         return ge.build_game_db(
@@ -1866,44 +2075,71 @@ def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None,
             proc_after=spec['proc_after'], proc_onstart=spec['proc_onstart'],
             hdrbuf=0, imgbuf=0, loc_slot=bytes(loc_slot), vall=spec['vall'],
             font_acc=spec['font_acc'], timers=spec['timers'],
-            llevarmax=spec['llevarmax'], fx=fx_blob)[0]
+            llevarmax=spec['llevarmax'], fx=fx_blob, texto=texto)
 
-    # La musica es lo unico elastico del binario plano, asi que se mide primero
-    # todo lo demas y se le da el hueco que quede, en vez de asumir un tope fijo
-    # y reventar. Un juego con muchas imagenes y FX se queda con menos cancion,
-    # pero se queda con cancion.
+    # Los bancos de texto no dependen de donde caiga la DB: se sacan de una
+    # primera construccion y la musica se pone detras, en el hueco que dejen.
+    bancos_texto = [bytearray(b) for b in _db(org)[1]['bancos_texto']]
     psg = b''
+    psg_pos = None
     aviso_psg = None
     if psg_bruto:
-        code0, _ = _ensambla(b'', org)
-        hueco = SP_NEX - PILA_MIN - (org + len(code0) + len(_db(org + len(code0))))
-        tope = min(PSG_MAX, max(0, hueco))
-        if tope < 64:
-            aviso_psg = ('no queda sitio plano para la musica (%d bytes libres); '
-                         'se omite' % max(0, hueco))
-        else:
-            psg = _trunca_psg(psg_bruto, tope)
-            if len(psg) < len(psg_bruto):
-                aviso_psg = ('musica recortada de %d a %d bytes (~%d s) y en bucle'
-                             % (len(psg_bruto), len(psg), psg.count(0xFF) // 50))
+        psg = _trunca_psg(psg_bruto, PSG_MAX)
+        if len(psg) < len(psg_bruto):
+            aviso_psg = ('musica recortada de %d a %d bytes (~%d s) y en bucle'
+                         % (len(psg_bruto), len(psg), psg.count(0xFF) // 50))
+        bancos_texto, donde = ge.empaqueta_en_bancos([psg], bancos=bancos_texto)
+        psg_pos = (VENTANA + donde[0][1], ids_texto[donde[0][0]])
+    ntxt = len(bancos_texto)
+    if ntxt > len(ids_texto):
+        raise ValueError('el texto ocupa %d bancos' % ntxt)
 
-    code, sym = _ensambla(psg, org)
+    # Las pantallas sueltas del SCR: <nombre>.nxi de 16K (8 filas) o 48K (las
+    # 24) con su .nxp, en bancos seguidos detras del texto; su paleta va al
+    # banco de paletas, detras de la de la portada.
+    pant = []                     # [(nombre, bytes del .nxi, paleta, filas)]
+    pant_tabla = []               # SCRT: (banco, ranura de paleta, filas)
+    pant_banco = banco_texto(len(imgs), con_titulo) + ntxt
+    pant_slot = len(imgs) + (1 if con_titulo else 0)
+    for nombre in spec.get('pantallas') or []:
+        datos, pal, filas = _pantalla_next(datadir, nombre)
+        if not filas:
+            pant.append((nombre, b'', b'', 0))
+            pant_tabla.append((0, 0, 0))
+            continue
+        pant.append((nombre, datos, pal, filas))
+        pant_tabla.append((pant_banco, pant_slot, filas))
+        pant_banco += len(datos) // 16384
+        pant_slot += 1
+    npant = pant_banco - (banco_texto(len(imgs), con_titulo) + ntxt)
+
+    def _ensambla(base):
+        return assemble_engine_next(org=org, db_base=base, idioma=idioma,
+                                    paletas=paletas,
+                                    titulo_pal=titulo_pal or b'', psg=psg,
+                                    borde=borde, guion=guion,
+                                    smptab=smptab, nsmp=nsmp, smphz=smphz,
+                                    nsmpbanco=nsmpbanco, ntxt=ntxt + npant,
+                                    psg_pos=psg_pos,
+                                    nloc=len(spec['locations']),
+                                    pantallas=pant_tabla)
+
+    code, sym = _ensambla(org)
     dbaddr = org + len(code)
-    code, sym = _ensambla(psg, dbaddr)
-    db, _ = ge.build_game_db(
-        spec['messages'], spec['locations'], spec['vocab'], spec['objects'],
-        spec['responses'], spec['startloc'], spec['sysverbs'], spec['width'],
-        load=dbaddr, proc_before=spec['proc_before'], proc_after=spec['proc_after'],
-        proc_onstart=spec['proc_onstart'], hdrbuf=0, imgbuf=0,
-        loc_slot=bytes(loc_slot), vall=spec['vall'],
-        font_acc=spec['font_acc'], timers=spec['timers'],
-        llevarmax=spec['llevarmax'], fx=fx_blob)
+    code, sym = _ensambla(dbaddr)
+    db, info_db = _db(dbaddr)
+    # la DB definitiva tiene que haber colocado el texto exactamente igual
+    for j, b in enumerate(info_db['bancos_texto']):
+        assert bytes(bancos_texto[j][:len(b)]) == bytes(b), 'el texto se movio de banco'
     extras = {'imgs': imgs, 'datadir': datadir, 'fx': fx_blob, 'borde': borde,
               'titulo': titulo_bin, 'titulo_pal': titulo_pal, 'paletas': paletas,
               'psg': psg, 'psg_nom': psg_nom, 'aviso_psg': aviso_psg,
               'guion': None if guion is None else bytes(guion) + b'\x00',
               'muestras': smp_blob, 'nsmpbanco': nsmpbanco,
-              'smptab': smptab}
+              'smptab': smptab,
+              'texto': [bytes(b) for b in bancos_texto], 'ids_texto': ids_texto,
+              'pantallas': pant, 'pant_tabla': pant_tabla, 'npant': npant,
+              'texto_bytes': sum(len(b) for b in bancos_texto) - len(psg) - len(fx_blob)}
     return code, db, sym, spec, dbaddr, extras
 
 
@@ -1923,9 +2159,8 @@ def export_nex(game, salida, ancho=COLS, org=ORG, borde=None, datadir=None,
     fin = org + len(plano)
     presupuesto.comprueba(
         'ZX Spectrum Next',
-        [('motor + plataforma', len(code) - len(ex['psg'])),
-         ('musica del titulo', len(ex['psg'])),
-         ('base de datos', len(db))],
+        [('motor + plataforma', len(code)),
+         ('base de datos (sin el texto)', len(db))],
         SP_NEX - PILA_MIN - org,
         'el mapa plano &%04X-&%04X, bajo la pila de &%04X'
         % (org, SP_NEX - PILA_MIN, SP_NEX),
@@ -1950,8 +2185,18 @@ def export_nex(game, salida, ancho=COLS, org=ORG, borde=None, datadir=None,
         base = BANK_IMG + len(imgs)
         for k in range(3):
             bancos[base + k] = ex['titulo'][k * 16384:(k + 1) * 16384]
+    # texto, FX y musica: sus bancos, detras del de las paletas
+    ntxt = len(ex['texto'])
+    for k, b in enumerate(ex['texto']):
+        bancos[ex['ids_texto'][k]] = bytes(b).ljust(16384, b'\x00')
+    # pantallas sueltas (SCR): detras del texto, un banco por cada 16K
+    for (nombre, datos, pal, filas), (b0, _slot, _f) in zip(ex['pantallas'],
+                                                              ex['pant_tabla']):
+        for k in range(len(datos) // 16384):
+            bancos[b0 + k] = datos[k * 16384:(k + 1) * 16384]
+    ntxt += ex['npant']                    # lo de detras cuenta con ellas
     if ex['muestras']:                     # muestras: un banco por cada 16K
-        base = banco_muestras(len(imgs), ex['titulo'] is not None)
+        base = banco_muestras(len(imgs), ex['titulo'] is not None, ntxt)
         for k in range(ex['nsmpbanco']):
             bancos[base + k] = ex['muestras'][k * 16384:(k + 1) * 16384] \
                 .ljust(16384, b'\x00')
@@ -1963,13 +2208,14 @@ def export_nex(game, salida, ancho=COLS, org=ORG, borde=None, datadir=None,
         paginas = [g[i:i + 8192].ljust(8192, b'\x00')
                    for i in range(0, max(1, len(g)), 8192)]
         base = banco_guion(len(imgs), ex['titulo'] is not None,
-                           ex['nsmpbanco'])
+                           ex['nsmpbanco'], ntxt)
         for k in range(0, len(paginas), 2):
             par = paginas[k] + (paginas[k + 1] if k + 1 < len(paginas)
                                 else b'\x00' * 8192)
             bancos[base + k // 2] = par
-    if ex['paletas'] or ex['titulo'] is not None:            # banco de paletas
-        pal = ex['paletas'] + (ex['titulo_pal'] or b'')
+    if ex['paletas'] or ex['titulo'] is not None or ex['npant']:   # banco de paletas
+        pal = (ex['paletas'] + (ex['titulo_pal'] or b'')
+               + b''.join(p for _n, _d, p, _f in ex['pantallas']))
         if len(pal) > 16384:
             raise ValueError('demasiadas paletas para un banco: %d bytes' % len(pal))
         bancos[BANK_IMG + len(imgs) + (3 if ex['titulo'] is not None else 0)] = \
@@ -1985,6 +2231,8 @@ def export_nex(game, salida, ancho=COLS, org=ORG, borde=None, datadir=None,
         [('imagenes de sala', len(imgs)),
          ('portada', 3 if ex['titulo'] is not None else 0),
          ('paletas', 1 if (ex['paletas'] or ex['titulo'] is not None) else 0),
+         ('texto, FX y musica', ntxt - ex['npant']),
+         ('pantallas SCR', ex['npant']),
          ('muestras digitalizadas', ex['nsmpbanco']),
          ('guion de la bateria', 0 if ex['guion'] is None
           else (len(ex['guion']) + 16383) // 16384)],

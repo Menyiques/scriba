@@ -4419,7 +4419,7 @@ class ScribaEditor:
     # y no hace nada. Ojo al presupuesto: bloquea el turno mientras suena y se
     # come los bancos a razon de 5,5 KB por segundo.
 
-    TOPE_BANCOS_128 = 5 * 16384
+    TOPE_BANCOS_128 = 6 * 16384
 
     def _build_smp_tab(self):
         fr = ttk.Frame(self.nb)
@@ -6290,6 +6290,13 @@ class ScribaEditor:
                     '(¿falta Pillow? «pip install pillow»): %s' % e]
 
         locids = set(self.game.get('locations', {}).keys())
+        # las pantallas sueltas del condact SCR se convierten como las de sala
+        # (256x64) o como la portada (256x192), segun su proporcion
+        try:
+            import capabilities
+            pantallas = {n.lower() for n in capabilities.used_scr(self.game)}
+        except Exception:
+            pantallas = set()
         exts = ('.png', '.jpg', '.jpeg')
         imgs = sorted(f for f in os.listdir(img_dir)
                       if f.lower().endswith(exts))
@@ -6298,9 +6305,19 @@ class ScribaEditor:
         for i, fn in enumerate(imgs):
             base = os.path.splitext(fn)[0]
             es_screen = base.lower() in ('screen', 'menu')
-            if not (base in locids or es_screen):
+            es_pantalla = base.lower() in pantallas or base.lstrip('@').lower() in pantallas
+            if es_pantalla and not es_screen:
+                try:
+                    from PIL import Image
+                    with Image.open(os.path.join(img_dir, fn)) as im:
+                        an, al = im.size
+                    r = an / float(al or 1)
+                    es_screen = abs(r - 4.0 / 3.0) < abs(r - 4.0)   # 4:3 -> 24 filas
+                except Exception:
+                    pass
+            if not (base in locids or es_screen or es_pantalla):
                 lineas.append('  - %s OMITIDO: no coincide con ninguna '
-                              'localización' % fn)
+                              'localización ni con ningún SCR' % fn)
                 n_skip += 1
                 continue
             if cb:
@@ -6324,11 +6341,11 @@ class ScribaEditor:
     def _export_spectrum_nativo(self, modelo='48'):
         """Exporta al MOTOR NATIVO Z80 en un .tap para ZX Spectrum 48K o 128K.
 
-        Ni Boriel ni zxbc: motor, capa de plataforma y base de datos se ensamblan
-        aqui, en Python puro. El 48K lo mete todo en el mapa plano &6000-&FF00.
-        El 128K es lo mismo mas los cinco bancos conmutables, que aqui quedan
-        ENTEROS para las imagenes de img/Spectrum -- en el export de BASIC los
-        comparten con el texto, y el texto se lleva la mayor parte.
+        Motor, capa de plataforma y base de datos se ensamblan aqui, en Python
+        puro. El 48K lo mete todo en el mapa plano &6000-&FF00. El 128K parte
+        el mapa en dos: lo fijo bajo &C000, y por la ventana de &C000 lee de
+        sus seis bancos conmutables el texto, la musica, los FX, las imagenes
+        de img/Spectrum y las muestras.
         modelo: '48' o '128'."""
         self._commit_active_code_view()
         if not self.game.get('locations'):
@@ -6402,7 +6419,7 @@ class ScribaEditor:
                         'Comprimiendo imágenes a los bancos…'))
                     info = modulo.export_tap(game, path, game_dir=raiz)
                 else:
-                    info = modulo.export_tap(game, path)
+                    info = modulo.export_tap(game, path, game_dir=raiz)
                 msg = ('Exportado al MOTOR NATIVO Z80 para %s (%d columnas).\n'
                        'Motor + plataforma: %d bytes · Base de datos: %d bytes\n'
                        'RAM principal: %d de %d bytes (&%04X–&%04X), '
@@ -6411,10 +6428,10 @@ class ScribaEditor:
                           info['total'], info['mapa'], info['org'],
                           info['fin'] - 1, info['libre']))
                 if es128:
-                    msg += ('Imágenes: %d bytes en %d banco(s), %d libres de '
-                            '%d.\n' % (info['payload'], info['bancos'],
-                                       info['banco_libre'],
-                                       modulo.TOPE_BANCOS))
+                    msg += ('Bancos: %d bytes en %d banco(s) —texto, FX, música, '
+                            'imágenes y muestras—, %d libres de %d.\n'
+                            % (info['payload'], info['bancos'],
+                               info['banco_libre'], modulo.TOPE_BANCOS))
                 msg += ('%d localizaciones · %d objetos\n'
                         % (info['localizaciones'], info['objetos']))
                 if info['libre'] < 0:
@@ -6525,7 +6542,7 @@ class ScribaEditor:
                 nimg = len(info['imagenes'])
                 msg = ('Exportado al MOTOR NATIVO Z80 para ZX Spectrum Next '
                        '(%d columnas).\n'
-                       'Motor + base de datos: %d bytes (&%04X–&%04X).\n'
+                       'Motor + base de datos (sin el texto): %d bytes (&%04X–&%04X).\n'
                        '%d localizaciones · %d objetos · %d imágenes'
                        % (next_nativo.COLS, info['total'], info['org'],
                           info['fin'], info['localizaciones'], info['objetos'],

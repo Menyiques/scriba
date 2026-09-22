@@ -86,13 +86,17 @@ def comprueba(maquina, partidas, tope, nombre_tope, consejos=(), primero=False,
 
 # Consejos por tipo de tope, para no repetirlos en cada exportador.
 RECORTA_PLANO = (
-    'acorta texto: las descripciones y los mensajes son la mayor parte de la '
-    'base de datos',
-    'quita efectos FX que no se usen (cada uno son 5 bytes por frame)',
-    'en 128K y Next, la musica del titulo es lo primero que se recorta sola',
+    'en 48K y CPC, acorta texto: las descripciones y los mensajes son la '
+    'mayor parte de la base de datos',
+    'en 48K y CPC, quita efectos FX que no se usen (cada uno son 5 bytes por '
+    'frame)',
+    'en 128K y Next el texto, los FX y la musica ya van en bancos: lo que '
+    'queda plano son las respuestas, el vocabulario y los objetos',
 )
 RECORTA_BANCOS = (
-    'quita imagenes de localizacion (unos 1.900 bytes cada una)',
+    'quita imagenes de localizacion (unos 1.900 bytes cada una en 128K; un '
+    'banco entero en Next)',
     'acorta o quita muestras digitalizadas (5.512 bytes por segundo a 11 kHz)',
+    'acorta texto: en 128K y Next va en los bancos, con la musica y los FX',
     'quita la pantalla de presentacion',
 )

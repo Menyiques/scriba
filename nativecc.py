@@ -209,6 +209,22 @@ def compile_stmt(ln, up, ctx):
         return bytes([COP['NEWLINE']])
     if up == 'QUIT' or up.startswith('QUIT '):
         return bytes([CX['QUIT']])
+    if up.startswith('SCR ') or up == 'SCR':
+        import capabilities
+        args = ln[3:].split()
+        sala, n = capabilities.partes_scr(args[0] if args else '',
+                                          ' '.join(args[1:]) if len(args) > 1 else '')
+        lista = [x.lower() for x in getattr(ctx, 'scrlist', [])]
+        if not n or n.lower() not in lista:
+            ctx.warnings.append('SCR: pantalla no encontrada %r' % ln[3:].strip())
+            return b''
+        idx = lista.index(n.lower()) & 0xFF
+        if sala is None:
+            return bytes([CX['SCR'], idx])
+        if sala not in ctx.locs:
+            ctx.warnings.append('SCR: localizacion desconocida %r' % sala)
+            return b''
+        return bytes([CX['SCRLOC'], ctx.locs[sala] & 0xFF, idx])
     if up.startswith('SAMPLE'):
         import fx_engine
         idx = fx_engine.fx_index(getattr(ctx, 'smplist', []), ln[6:].strip())
@@ -424,6 +440,8 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False):
     ctx.timers={str(tid).upper():i for i,tid in enumerate(getattr(c,'timids',[]))}
     ctx.fxlist=(g.get('fx') or [])      # para resolver PLAY "nombre" -> índice
     ctx.smplist=(g.get('samples') or [])   # idem para SAMPLE "nombre"
+    import capabilities
+    ctx.scrlist=capabilities.used_scr(g)   # SCR nombre -> indice, por orden de uso
     # vocabulario
     vocab=[]
     for w,vid in c.verbalias.items(): vocab.append((w, vid, 2 if vid<=6 else 0))
@@ -556,7 +574,8 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False):
                 responses=responses,startloc=0,sysverbs=sysverbs,width=width,
                 proc_before=before,proc_after=after,proc_onstart=onstart,vall=vall,
                 font_acc=_font_block(),timers=timers,
-                llevarmax=ctx.vars.get('LLEVARMAX',255)), info
+                llevarmax=ctx.vars.get('LLEVARMAX',255),
+                pantallas=list(ctx.scrlist)), info
 
 def _font_block():
     # 16 glifos de acento (224-239) extraidos del font 8x8 (cpc_font), con trazo de

@@ -593,12 +593,31 @@ class PAWSBasic:
         elif cmd == 'NEWLINE':
             print()
 
+        elif cmd == 'CLS':
+            interp.pantalla = None         # el CLS se lleva la pantalla suelta
+
         elif cmd in ('BEEP', 'BORDER', 'PAUSE', 'INK', 'PAPER', 'BRIGHT',
-                     'FLASH', 'INVERSE', 'CLS'):
+                     'FLASH', 'INVERSE'):
             pass   # comandos ZX BASIC literales: solo en la exportacion a Spectrum
 
         elif cmd == 'PLAY':
             interp.play_fx(rest.strip())   # efecto de sonido (FX)
+
+        elif cmd == 'SAMPLE':
+            interp.play_sample(rest.strip())   # muestra digitalizada
+
+        elif cmd == 'SCR':
+            # pantalla suelta (SCR nombre) o reasignada a una sala (SCR @sala
+            # nombre): en el PC se ensena en el panel de imagen, con el fichero
+            # de img/Original que tenga ese nombre
+            import capabilities
+            args = rest.split()
+            sala, nombre = capabilities.partes_scr(
+                args[0] if args else '', ' '.join(args[1:]) if len(args) > 1 else '')
+            if sala is None:
+                interp.pantalla = nombre or None
+            elif nombre:
+                interp.loc_pantalla[sala] = nombre
 
         elif cmd in ('GET', 'DROP', 'LIT', 'UNLIT', 'OPEN', 'CLOSE',
                      'LOCK', 'UNLOCK', 'DESTROY', 'WEAR', 'REMOVE'):
@@ -616,6 +635,28 @@ class PAWSBasic:
             print(f"[BASIC: comando desconocido '{cmd}']")
 
 class PAWSInterpreter:
+    def play_sample(self, n):
+        """Reproduce una muestra digitalizada (SAMPLE "nombre") como vista previa:
+        el WAV que reconstruye wav2ay con los 16 niveles del AY, que es lo que
+        de verdad se oye en 128K y Next. Solo en Windows; si no, en silencio."""
+        smp = self.game.get('samples') or []
+        try:
+            import fx_engine
+            idx = fx_engine.fx_index(smp, n) - 1
+        except Exception:
+            return
+        if not (0 <= idx < len(smp)):
+            return
+        try:
+            import winsound
+            import wav2ay
+            m = smp[idx]
+            wav = wav2ay.wav_de_datos(bytes.fromhex(m.get('data', '')),
+                                      int(m.get('hz', 11025)))
+            winsound.PlaySound(wav, winsound.SND_MEMORY | winsound.SND_ASYNC)
+        except Exception:
+            pass
+
     def play_fx(self, n):
         """Reproduce el efecto de sonido referenciado por PLAY (nombre entre
         comillas o número, 1-based) como vista previa (WAV). En Windows suena; en
@@ -688,6 +729,12 @@ class PAWSInterpreter:
         self.locations = game.get("locations", {})
         self.objects = {}
         self.timers = {}
+        # pantalla suelta puesta por SCR (nombre base del fichero), o None.
+        # Dura hasta el siguiente CLS o hasta que se describe una sala, igual
+        # que en las maquinas de 8 bits. El reproductor de ventana la ensena.
+        self.pantalla = None
+        # SCR @sala pantalla: pantalla que sustituye a la imagen de una sala
+        self.loc_pantalla = {}
         self.vocab_lookup = {}  # siempre se reconstruye desde el juego
         self.responses = game.get("responses", {}).get("entries", [])
         self.condacts = game.get("condacts", {})
@@ -1398,6 +1445,7 @@ class PAWSInterpreter:
     # ─── DESCRIBIR ───────────────────────────────────────────────────────────
 
     def describe_location(self):
+        self.pantalla = None            # una sala descrita quita la SCR
         loc = self.locations.get(self.player_location, {})
         if not loc:
             print("[Error: localización no encontrada]")

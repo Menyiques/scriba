@@ -58,6 +58,21 @@ El backend del Next **no usa la ROM para nada** (fuente, teclado e impresión so
 propios), así que los slots MMU 0 y 1 quedan libres para mapear RAM sobre
 `&0000-&3FFF` si algún día hace falta. Hoy no hace falta: cabe de sobra.
 
+**El mapa de 128K y Next (v2.7).** Dos mitades con una regla: por debajo de
+`&C000` vive todo lo que el motor necesita siempre —código, índices, vocabulario,
+objetos, respuestas y la pila, en `&BFF0`—; `&C000-&FFFF` es una **ventana de
+paginación pura** por la que se leen, cada uno de su banco, el texto (por
+mensaje, vía `TXTPAGE`), la música del título, los FX, las imágenes y las
+muestras. Nada permanente vive en la ventana, así que se pagina cuando hace
+falta y no se devuelve nada a su sitio. La base de datos lleva, por mensaje, el
+banco (`msgbnk`) y la dirección en la ventana; `expand_msg` pagina antes de
+seguir el puntero. En 48K y CPC `TXTPAGE` es un `RET` y el texto sigue plano.
+El mapa plano son 24.432 bytes (`&6000-&BF70`): menos que los 40K del 48K, pero
+sin el texto, que es dos tercios de la base de datos. Y los bancos del 128K son
+**seis** (1, 3, 4, 6, 7 y 0, en ese orden de carga): el 0 dejó de ser la RAM
+alta del juego y es uno más. Como valor de `&7FFD` los ids son 17, 19, 20, 22,
+23 y 16 — nunca 0, que en `msgbnk`/`fxbnk`/`psgbnk` significa «plano».
+
 `z80asm.py` ensambla (incluye Z80N) y `z80.py` simula (incluye Z80N, puertos y
 NextRegs). Eso permite verificar el motor entero sin emulador.
 
@@ -265,6 +280,14 @@ los másteres de `img/Original`, en cambio, se escalan sin protestar. Margen del
   `scriba_pack.empaqueta()` lo comprueba en cada empaquetado y cambia la sal si
   hiciera falta. No quitar esa comprobación.
 
+- **En 128K y Next, nada del arnés puede vivir en `&C000-&FFFF`.** Es la
+  ventana de paginación: la primera llamada a `TXTPAGE` se lleva lo que hubiera
+  ahí. `verify_next.ejecutar` ponía su pila y su retorno postizo en `&FFEE`, y
+  al sacar el texto a bancos `describe` "no terminaba nunca": el `RET` final
+  volvía a un banco de texto. Ahora `PILA_ARNES` lo baja a `&BFEE` en
+  `verify_128` y en `verificar_nex`. Cualquier arnés nuevo para esas dos
+  máquinas tiene que hacer lo mismo.
+
 - **Los símbolos de plataforma que en una máquina son una rutina de verdad y en
   otra un `RET` se rompen en silencio.** `MCWAIT` estuvo así desde que existe el
   motor nativo en Spectrum: en CPC era la espera de barrido del firmware y en la
@@ -277,7 +300,7 @@ los másteres de `img/Original`, en cambio, se escalan sin protestar. Margen del
 
 ## Estado
 
-Rama de trabajo: `fix/predicados-objeto-v2.44`. Scriba 2.6.
+Rama de trabajo: `fix/predicados-objeto-v2.44`. Scriba 2.8.
 
 **Boriel se ha ido** (v2.54). Las cuatro máquinas salen del motor nativo Z80 y
 no hay otro camino: se borraron `next_export.py`, `cpc_export.py`,
@@ -290,7 +313,10 @@ de `EmbeddedMmuSwitchAssembleError` para upstream sigue en
 `reporte_boriel_splitmodules/`, ya solo como documento.
 
 El motor nativo del Next tiene imágenes (Layer 2, un banco por sala), pantalla
-de título, música del AY, efectos FX y muestras digitalizadas.
+de título, música del AY, efectos FX y muestras digitalizadas. Desde la 2.7, en
+128K y Next el texto, la música y los FX van en bancos (ver «El mapa de 128K y
+Next»); el CPC sigue plano y va al límite (`imgbuf` por encima de `&8B00` es el
+arreglo pendiente).
 
 Lo que queda: los glifos `_` y `q` siguen mal en los `.tap` de 128K y Next
 (`genera_font42.py` solo corrige la tabla del motor nativo), el DMA y el Copper
