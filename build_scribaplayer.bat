@@ -19,6 +19,7 @@ python -m PyInstaller --noconfirm --onefile --windowed --name ScribaPlayer ^
   --hidden-import fx_engine ^
   --hidden-import afx ^
   --hidden-import yaml ^
+  --hidden-import scriba_pack ^
   --hidden-import PIL ^
   --hidden-import PIL.Image ^
   --hidden-import PIL.ImageTk ^

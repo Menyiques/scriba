@@ -4423,10 +4423,10 @@ class ScribaEditor:
 
     def _build_smp_tab(self):
         fr = ttk.Frame(self.nb)
-        self.nb.add(fr, text=' Muestras ')
+        self.nb.add(fr, text=' Sonido WAV ')
         left = ttk.Frame(fr)
         left.pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=4)
-        ttk.Label(left, text='Muestras (úsalas con SAMPLE "nombre"):').pack(anchor=tk.W)
+        ttk.Label(left, text='Sonidos WAV (úsalos con SAMPLE "nombre"):').pack(anchor=tk.W)
         self.smp_list = tk.Listbox(left, width=30, height=16,
                                    exportselection=False, font=self.fnt_code)
         self.smp_list.pack(fill=tk.Y, expand=True)
@@ -4533,14 +4533,14 @@ class ScribaEditor:
             self._play_wav_bytes(wav2ay.wav_de_datos(
                 bytes.fromhex(m.get('data', '')), int(m.get('hz', 11025))))
         except Exception as e:
-            messagebox.showinfo('Muestras', 'No se pudo reproducir: %s' % e)
+            messagebox.showinfo('Sonido WAV', 'No se pudo reproducir: %s' % e)
 
     def _smp_rename(self):
         i = self._smp_sel()
         if i < 0:
             return
         m = self._smp_all()[i]
-        nuevo = simpledialog.askstring('Renombrar muestra', 'Nombre:',
+        nuevo = simpledialog.askstring('Renombrar sonido WAV', 'Nombre:',
                                        initialvalue=m.get('name', ''),
                                        parent=self.root)
         if nuevo:
@@ -4553,7 +4553,7 @@ class ScribaEditor:
         if i < 0:
             return
         m = self._smp_all()[i]
-        if not messagebox.askyesno('Borrar muestra',
+        if not messagebox.askyesno('Borrar sonido WAV',
                                    '¿Borrar "%s"?\n\nLos SAMPLE que la usen '
                                    'dejarán de sonar.' % m.get('name', '')):
             return
@@ -5957,11 +5957,17 @@ class ScribaEditor:
             return ''
 
     def _export_windows(self):
-        """Exporta el juego a un PAQUETE PORTABLE de Windows: copia el reproductor
-        ScribaPlayer.exe junto al juego (game.yaml + img/Original) en
-        <juego>/dist/Windows/<Título>/ y lo comprime en un .zip. NO compila nada:
-        ni quien exporta ni quien juega necesitan instalar nada. ScribaPlayer.exe
-        se compila UNA sola vez (build_scribaplayer.bat) y viaja junto a Scriba.exe."""
+        """Exporta el juego a UN SOLO .exe de Windows.
+
+        Copia ScribaPlayer.exe con el nombre del juego y le pega detrás el juego
+        entero —texto e imágenes— en un bloque comprimido y cifrado
+        (`scriba_pack`). El reproductor se lee a sí mismo al arrancar y lo
+        descifra en memoria. Hasta la v2.54 esto dejaba el `game.yaml` en texto
+        plano al lado del ejecutable, con todas las soluciones a la vista de
+        quien abriera la carpeta.
+
+        No compila nada: ScribaPlayer.exe se construye UNA vez con
+        build_scribaplayer.bat y viaja junto a Scriba.exe."""
         if not self.game.get('locations'):
             messagebox.showinfo('Exportar', 'Abre o crea un juego primero.')
             return
@@ -5973,8 +5979,6 @@ class ScribaEditor:
         except Exception:
             pass
 
-        import shutil
-        import json as _json
         import threading
         import zipfile
         import re as _re
@@ -6004,7 +6008,7 @@ class ScribaEditor:
         zip_name = self._dist_name(base, 'windows', 'zip')   # {juego}_windows_{idioma}.zip
         stem = zip_name[:-4]
         distdir = os.path.join(game_dir, 'dist')             # todo junto en dist/
-        outdir = os.path.join(distdir, stem)                 # carpeta ejecutable portable
+        exe_path = os.path.join(distdir, safe + '.exe')      # el juego, en un fichero
         zip_path = os.path.join(distdir, zip_name)
 
         win = tk.Toplevel(self.root)
@@ -6027,33 +6031,35 @@ class ScribaEditor:
 
         def trabajo():
             err = None
+            info = {}
             try:
-                if os.path.isdir(outdir):
-                    shutil.rmtree(outdir, ignore_errors=True)
-                os.makedirs(outdir, exist_ok=True)
-                shutil.copy2(player_exe, os.path.join(outdir, safe + '.exe'))
-                shutil.copy2(yaml_path, os.path.join(outdir, 'game.yaml'))
-                with open(os.path.join(outdir, 'player_cfg.json'), 'w',
-                          encoding='utf-8') as f:
-                    _json.dump({'game': 'game.yaml', 'title': title}, f,
-                               ensure_ascii=False)
+                import importlib
+                import scriba_pack
+                if not getattr(sys, 'frozen', False):
+                    importlib.reload(scriba_pack)
+                game = copy.deepcopy(self.game)
+                game.pop('_editor', None)
                 orig = os.path.join(game_dir, 'img', 'Original')
-                if os.path.isdir(orig):
-                    dst = os.path.join(outdir, 'img', 'Original')
-                    os.makedirs(dst, exist_ok=True)
-                    for fn in os.listdir(orig):
-                        if fn.lower().endswith(('.png', '.jpg', '.jpeg',
-                                                '.gif', '.bmp')):
-                            shutil.copy2(os.path.join(orig, fn),
-                                         os.path.join(dst, fn))
+                bloque = scriba_pack.empaqueta(
+                    game, orig if os.path.isdir(orig) else None, titulo=title)
+                os.makedirs(distdir, exist_ok=True)
+                scriba_pack.pega(player_exe, exe_path, bloque)
+                # Comprobacion: el .exe recien hecho tiene que devolver el juego
+                # y conservar la cabecera que busca el arranque de PyInstaller.
+                leido = scriba_pack.lee_de(exe_path)
+                if not leido or not leido[0].get('locations'):
+                    raise RuntimeError('el .exe no devuelve el juego al releerlo')
+                with open(exe_path, 'rb') as f:
+                    if scriba_pack.MAGIC_PYI not in f.read():
+                        raise RuntimeError(
+                            'el .exe de origen no parece un ejecutable de '
+                            'PyInstaller: no lleva su cabecera')
                 if os.path.isfile(zip_path):
                     os.remove(zip_path)
                 with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
-                    for root, _d, files in os.walk(outdir):
-                        for fn in files:
-                            fp = os.path.join(root, fn)
-                            arc = os.path.join(safe, os.path.relpath(fp, outdir))
-                            z.write(fp, arc)
+                    z.write(exe_path, safe + '.exe')
+                info = {'bloque': len(bloque), 'exe': os.path.getsize(exe_path),
+                        'imgs': len(leido[1])}
             except Exception as e:
                 err = str(e)
 
@@ -6067,16 +6073,21 @@ class ScribaEditor:
                     self.sv_status.set('Error al exportar a Windows')
                     messagebox.showerror(
                         'Exportar para Windows',
-                        'No se pudo crear el paquete portable.\n\n' + err)
+                        'No se pudo crear el ejecutable.\n\n' + err)
                 else:
-                    self.sv_status.set('Exportado a Windows: ' + outdir)
-                    if messagebox.askyesno(
-                            'Exportar para Windows',
-                            'Paquete portable creado (no necesita instalar nada):\n\n'
-                            'Carpeta: %s\nZIP para compartir: %s\n\n'
-                            'El jugador descomprime y ejecuta %s.exe.\n\n'
-                            '¿Abrir la carpeta?' % (outdir, zip_path, safe)):
-                        self._open_folder(distdir)
+                    self.sv_status.set('Exportado a Windows: ' + exe_path)
+                    self._ventana_resultado(
+                        'Exportar para Windows',
+                        'Un solo ejecutable, sin nada que instalar.\n'
+                        'El juego (texto y %d imagen(es)) va pegado detrás del '
+                        'reproductor en un bloque cifrado de %s bytes, y se '
+                        'descifra en memoria al arrancar: en la carpeta del '
+                        'jugador no queda nada legible.\n\n'
+                        'ZIP para compartir: %s'
+                        % (info.get('imgs', 0),
+                           '{:,}'.format(info.get('bloque', 0)).replace(',', '.'),
+                           os.path.basename(zip_path)),
+                        exe_path)
             self.root.after(0, _fin)
 
         threading.Thread(target=trabajo, daemon=True).start()

@@ -40,13 +40,40 @@ def _frozen_base():
 def cargar_config(argv):
     """Resuelve (game_dict, img_dir, titulo) según el modo.
 
-    Empaquetado, dos variantes:
+    Empaquetado, tres variantes, en este orden:
+      • PEGADO: el juego va en un bloque cifrado al final del propio .exe. Es lo
+        que produce «Exportar para Windows»: un único fichero, y en la carpeta
+        del jugador no queda nada legible. Ver scriba_pack.py.
       • PORTABLE: el juego (game.yaml + player_cfg.json + img/Original) está en la
-        MISMA carpeta que el .exe. Lo usa ScribaPlayer.exe (reproductor genérico).
-      • EMBEBIDO: el juego viaja dentro del .exe (bundle _MEIPASS).
+        MISMA carpeta que el .exe. Es el formato antiguo; se sigue leyendo para
+        que los paquetes ya repartidos no dejen de funcionar.
+      • EMBEBIDO: el juego viaja dentro del bundle de PyInstaller (_MEIPASS).
     Suelto (desde código): argv[1] = ruta al .yaml."""
     base = _frozen_base()
     if base:
+        # Pegado al final del ejecutable: se descifra en memoria y no toca disco.
+        try:
+            import scriba_pack
+            pack = scriba_pack.lee_de(sys.executable)
+        except Exception:
+            pack = None
+        if pack:
+            game, imgs, titulo = pack
+            return (game, imgs,
+                    titulo or game.get('metadata', {}).get('title', 'Scriba'))
+        # Mismo bloque, pero metido en el bundle por build_game_exe.py (un .exe
+        # por juego, compilado con PyInstaller). Sigue sin haber texto plano:
+        # lo que se descomprime en el temporal es el bloque cifrado.
+        pak = os.path.join(base, 'juego.pak')
+        if os.path.isfile(pak):
+            try:
+                import scriba_pack
+                with open(pak, 'rb') as f:
+                    game, imgs, titulo = scriba_pack.abre(f.read())
+                return (game, imgs,
+                        titulo or game.get('metadata', {}).get('title', 'Scriba'))
+            except Exception:
+                pass
         # Portable: ¿hay datos de juego junto al ejecutable?
         exedir = os.path.dirname(sys.executable)
         if (os.path.isfile(os.path.join(exedir, 'player_cfg.json'))
@@ -188,9 +215,17 @@ class GameSession:
 # ─── Imágenes ────────────────────────────────────────────────────────────────
 
 def buscar_imagen(img_dir, loc_id):
-    """Ruta de la imagen original de una localización, o None."""
+    """La imagen original de una localización, o None.
+
+    Devuelve una RUTA cuando el juego viene en carpeta, y un fichero en memoria
+    cuando viene pegado al .exe (entonces `img_dir` es el diccionario de
+    imágenes del paquete). `Image.open()` acepta las dos cosas, así que quien
+    llama no tiene que enterarse."""
     if not img_dir or not loc_id:
         return None
+    if isinstance(img_dir, dict):
+        import scriba_pack
+        return scriba_pack.imagen(img_dir, loc_id)
     for ext in ('.png', '.jpg', '.jpeg', '.gif', '.bmp'):
         p = os.path.join(img_dir, str(loc_id) + ext)
         if os.path.isfile(p):

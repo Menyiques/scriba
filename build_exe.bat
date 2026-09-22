@@ -54,6 +54,7 @@ python -m PyInstaller --noconfirm --onefile --windowed --name %SNAME% ^
   --hidden-import wav2ay ^
   --hidden-import sample_ay ^
   --hidden-import presupuesto ^
+  --hidden-import scriba_pack ^
   editor.py
 
 REM  Copia el .exe versionado a Scriba.exe para que Scriba.exe sea SIEMPRE la

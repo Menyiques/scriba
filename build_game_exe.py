@@ -2,9 +2,18 @@
 """
 build_game_exe.py — Empaqueta un juego de Scriba en un .exe de Windows por juego.
 
-Mete dentro del ejecutable el .yaml del juego, sus imágenes originales
-(img/Original) y la configuración (columnas), junto con el reproductor de ventana
-(player.py) y el intérprete. El jugador solo tiene que hacer doble clic.
+Mete dentro del ejecutable el juego entero —texto e imágenes— en el mismo
+bloque cifrado que usa «Exportar para Windows» del editor (scriba_pack), junto
+con el reproductor de ventana (player.py) y el intérprete. El jugador solo
+tiene que hacer doble clic.
+
+Hasta la v2.54 esto metía el `.yaml` tal cual, y un .exe onefile de PyInstaller
+se descomprime al arrancar en una carpeta temporal: el juego volvía a estar en
+texto plano, con todas las soluciones. Ahora lo que viaja (y lo que aparece en
+ese temporal) es el bloque cifrado.
+
+Para un solo fichero sin compilar nada, el camino corto es el del editor:
+copia ScribaPlayer.exe y le pega el bloque detrás.
 
 Uso:
     python build_game_exe.py <juego.yaml> [--name NOMBRE]
@@ -59,30 +68,19 @@ def main():
     # Carpeta de staging con los recursos que irán dentro del .exe
     stage = tempfile.mkdtemp(prefix='scriba_exe_')
     try:
-        shutil.copy2(yaml_path, os.path.join(stage, 'game.yaml'))
-        with open(os.path.join(stage, 'player_cfg.json'), 'w',
-                  encoding='utf-8') as f:
-            json.dump({'game': 'game.yaml', 'title': titulo}, f,
-                      ensure_ascii=False)
-        # Imágenes originales (si las hay)
+        sys.path.insert(0, aqui)
+        import yaml as _yaml
+        import scriba_pack
+        juego = _yaml.safe_load(open(yaml_path, encoding='utf-8'))
         orig = os.path.join(game_dir, 'img', 'Original')
-        stage_img = os.path.join(stage, 'img', 'Original')
-        n_img = 0
-        if os.path.isdir(orig):
-            os.makedirs(stage_img, exist_ok=True)
-            for fn in os.listdir(orig):
-                if fn.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
-                    shutil.copy2(os.path.join(orig, fn),
-                                 os.path.join(stage_img, fn))
-                    n_img += 1
+        bloque = scriba_pack.empaqueta(
+            juego, orig if os.path.isdir(orig) else None, titulo=titulo)
+        with open(os.path.join(stage, 'juego.pak'), 'wb') as f:
+            f.write(bloque)
+        n_img = len(scriba_pack.abre(bloque)[1])
 
         sep = os.pathsep  # ';' en Windows, ':' en otros
-        datos = [
-            os.path.join(stage, 'game.yaml') + sep + '.',
-            os.path.join(stage, 'player_cfg.json') + sep + '.',
-        ]
-        if n_img:
-            datos.append(stage_img + sep + os.path.join('img', 'Original'))
+        datos = [os.path.join(stage, 'juego.pak') + sep + '.']
 
         distdir = os.path.join(game_dir, 'dist', 'Windows')
         cmd = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--onefile',
@@ -92,8 +90,8 @@ def main():
                '--specpath', stage]
         for d in datos:
             cmd += ['--add-data', d]
-        for hi in ('interpreter', 'paws_lang', 'yaml', 'PIL', 'PIL.Image',
-                   'PIL.ImageTk'):
+        for hi in ('interpreter', 'paws_lang', 'scriba_pack', 'yaml', 'PIL',
+                   'PIL.Image', 'PIL.ImageTk'):
             cmd += ['--hidden-import', hi]
         cmd += ['--paths', aqui, player]
 

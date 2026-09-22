@@ -18,6 +18,47 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
 
 ---
 
+## 2.6 — 2026-09-22 — El juego, dentro del ejecutable
+
+### Novedades
+- **«Exportar para Windows» da un solo `.exe`, y el juego ya no viaja en texto
+  plano.** Hasta ahora dejaba el `game.yaml` al lado del ejecutable: cualquiera
+  que abriera la carpeta con el Bloc de notas tenia delante las soluciones de
+  los acertijos y el final. Ahora el juego entero —texto e imagenes— va en un
+  bloque serializado, comprimido y cifrado (`scriba_pack.py`) que se PEGA AL
+  FINAL de una copia del reproductor. El jugador recibe un fichero y en su
+  carpeta no hay nada que leer.
+  - El reproductor se lee a si mismo al arrancar y lo descifra **en memoria**:
+    no se escribe en disco en ningun momento.
+  - Cada exportacion lleva su propia sal, asi que dos copias del mismo juego no
+    se parecen entre si.
+  - Se sigue leyendo el formato antiguo (game.yaml + player_cfg.json +
+    img/Original al lado del .exe) para que los paquetes ya repartidos no dejen
+    de funcionar.
+  - `build_game_exe.py` (un `.exe` por juego, compilado con PyInstaller) tenia
+    el mismo agujero por otra puerta: un `.exe` *onefile* se descomprime al
+    arrancar en una carpeta temporal, donde el `.yaml` volvia a estar en claro.
+    Ahora lo que mete —y lo que aparece en ese temporal— es el bloque cifrado.
+  - Hasta donde protege: el reproductor tiene que leer el juego para jugarlo,
+    asi que la clave va dentro del binario. Es un candado contra la
+    curiosidad, no una caja fuerte.
+- La pestaña «Muestras» del editor pasa a llamarse **«Sonido WAV»**, que es lo
+  que se importa ahí y lo que la gente busca.
+- **`verify_pack.py`**, 12 comprobaciones: el juego vuelve identico, las
+  imagenes byte a byte, ninguna de las 638 frases largas de Tifon Negro se lee
+  en el bloque, y el reproductor lo encuentra solo dentro del `.exe`.
+
+### Notas
+- **Por que se puede pegar algo al final de un `.exe` de PyInstaller**: su
+  arranque no espera la cabecera en el ultimo byte, la busca escaneando de
+  atras hacia delante en trozos de 8 KB (`pyi_utils_find_magic_pattern`),
+  precisamente para sobrevivir a las firmas digitales. Como se queda con la
+  primera aparicion que encuentra yendo hacia atras, lo unico que hay que
+  garantizar es que el bloque no contenga por casualidad ese patron de 8 bytes:
+  `empaqueta()` lo comprueba y, si pasara, cambia la sal y vuelve a cifrar.
+
+---
+
 ## 2.54 — 2026-09-22 — Se acabo la partida, y vuelta a empezar
 
 ### Novedades

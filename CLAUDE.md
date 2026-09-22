@@ -32,6 +32,7 @@ Backends:
 | Fichero | Destino |
 |---|---|
 | `interpreter.py` | probador de PC y `.exe` de Windows |
+| `player.py` + `scriba_pack.py` | reproductor de ventana y el juego cifrado pegado al `.exe` |
 | `nativecc.py` + `game_engine.py` | motor Z80 nativo (bytecode), común a las cuatro máquinas |
 | `spectrum48_nativo.py`, `spectrum128_nativo.py` | ZX Spectrum 48K y 128K, a `.tap` |
 | `next_nativo.py` | ZX Spectrum Next, a `.nex` |
@@ -251,6 +252,19 @@ los másteres de `img/Original`, en cambio, se escalan sin protestar. Margen del
   el mismo código fuente. Nos costó dos vueltas con los FX del Next en la v2.53.
   Para comparar binarios, mirar la fecha de `dist/Scriba.exe` antes que nada.
 
+- **`ScribaPlayer.exe` no está en el repositorio** (`*.exe` está en
+  `.gitignore`) y se pierde en cuanto se limpia `dist/`. Sin él, «Exportar para
+  Windows» falla. Se reconstruye con `build_scribaplayer.bat`, una vez, y se
+  deja junto a `Scriba.exe`.
+
+- **El bloque que se pega al final del `.exe` no puede contener el patrón de
+  8 bytes de PyInstaller** (`MEI\x0c\x0b\x0a\x0b\x0e`). Su arranque busca su
+  archivo escaneando el fichero de atrás hacia delante y se queda con la
+  primera aparición; si la nuestra apareciera por casualidad, el `.exe` dejaría
+  de arrancar **en la máquina del jugador**, no en la nuestra.
+  `scriba_pack.empaqueta()` lo comprueba en cada empaquetado y cambia la sal si
+  hiciera falta. No quitar esa comprobación.
+
 - **Los símbolos de plataforma que en una máquina son una rutina de verdad y en
   otra un `RET` se rompen en silencio.** `MCWAIT` estuvo así desde que existe el
   motor nativo en Spectrum: en CPC era la espera de barrido del firmware y en la
@@ -263,7 +277,7 @@ los másteres de `img/Original`, en cambio, se escalan sin protestar. Margen del
 
 ## Estado
 
-Rama de trabajo: `fix/predicados-objeto-v2.44`. Scriba 2.54.
+Rama de trabajo: `fix/predicados-objeto-v2.44`. Scriba 2.6.
 
 **Boriel se ha ido** (v2.54). Las cuatro máquinas salen del motor nativo Z80 y
 no hay otro camino: se borraron `next_export.py`, `cpc_export.py`,
