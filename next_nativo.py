@@ -35,7 +35,7 @@ MTABLE = 0x5B00     # tabla de matrices de usuario (RAM libre bajo el motor)
 PANT = 0x4000       # pantalla ULA
 ATTR = 0x5800       # atributos
 COLS = 42           # columnas de texto (fuente de 6 pixeles)
-BANK_IMG = 16       # primer banco de 16K para imagenes (igual que next_export)
+BANK_IMG = 16       # primer banco de 16K para imagenes
 FILA_TEXTO = 8      # la imagen ocupa las filas 0..7; el texto empieza aqui
 PSG_MAX = 4480      # tope de musica que cabe plana (igual que el export BASIC)
 REVELADO_PASO = 4   # lineas por barrido al descubrir la imagen (64/4 = 16 frames)
@@ -352,6 +352,90 @@ NXL2INIT:
         ret
 '''
 
+# Sin muestras digitalizadas: el condact SAMPLE existe igual en las cuatro
+# maquinas -- la base de datos es la misma -- y aqui no hace nada.
+SMP_ASM_VACIO = r'''
+SMPPLAY: ret
+'''
+
+SMP_NEXT_ASM = r'''
+; ===========================================================================
+;  Muestras digitalizadas en el Next (SAMPLE n)
+; ===========================================================================
+; Cada muestra vive en los bancos de NXSMP en adelante y se lee por una ventana
+; de 16K sobre la ROM, &0000-&3FFF, paginando las dos mitades con NextReg $50 y
+; $51. Tapar la ROM entera parece temerario y no lo es: el unico sitio que hace
+; falta de ella es el gestor de interrupcion de &0038, y el reproductor corre
+; con las interrupciones quitadas de principio a fin -- si no, cada barrido se
+; oiria como un chasquido en mitad de la muestra.
+;
+; Aqui, a diferencia del 128K, la pila no estorba: vive en &FFF0 y eso no se
+; pagina. Por eso no hay pila de emergencia.
+;
+; SMPT: por muestra, desplazamiento/2 y longitud. &FFFF = ranura vacia.
+SMPPLAY:
+        or    a
+        ret   z
+        dec   a
+        ld    l,a
+        ld    h,0
+        add   hl,hl
+        add   hl,hl            ; 4 bytes por entrada
+        ld    de,SMPT
+        add   hl,de
+        ld    e,(hl)
+        inc   hl
+        ld    d,(hl)
+        inc   hl
+        ld    a,d
+        and   e
+        inc   a
+        ret   z                ; &FFFF -> esa muestra no existe
+        ld    (nxsmo),de
+        ld    e,(hl)
+        inc   hl
+        ld    d,(hl)
+        ld    (nxsml),de
+        di
+        ld    hl,(nxsmo)
+        add   hl,hl            ; desplazamiento real; el bit 16, al acarreo
+        ld    a,0
+        adc   a,a
+        rlca
+        rlca
+        ld    c,a
+        ld    a,h
+        rlca
+        rlca
+        and   3
+        add   a,c              ; A = par de paginas (banco relativo)
+        add   a,a
+        add   a,NXSMPPG        ; pagina de 8K de la mitad baja
+        ld    e,a
+        ld    a,h
+        and   &3F
+        ld    h,a              ; HL = &0000 + desplazamiento dentro del banco
+        push  hl
+        ld    d,&50
+        call  nxreg            ; mitad baja sobre &0000-&1FFF
+        inc   d
+        inc   e
+        call  nxreg            ; mitad alta sobre &2000-&3FFF
+        pop   hl
+        ld    de,(nxsml)
+        call  SMPLAY
+        ld    d,&50
+        ld    e,255
+        call  nxreg            ; la ROM, de vuelta
+        ld    d,&51
+        ld    e,255
+        call  nxreg
+        ei
+        ret
+nxsmo:  defw 0
+nxsml:  defw 0
+'''
+
 
 PLAT_ASM = r'''
 ; ===========================================================================
@@ -375,6 +459,7 @@ nxpcnt:  defb 0            ; lineas desplazadas desde la ultima pausa
 nxritmo: defb 0            ; caracteres impresos en el barrido actual
 nxultimo: defb 255         ; slot de imagen que hay puesta (255 = ninguna)
 nxcaps:  defb 0            ; CAPS SHIFT pulsado en el ultimo escaneo
+nxinv:   defb 0            ; INVERSE: 1 = el glifo se imprime complementado
 
 ; ---------------------------------------------------------------------------
 ; TXTO: imprime el caracter de A. Equivale a TXT OUTPUT del CPC.
@@ -582,7 +667,14 @@ nxp_l:  ld    a,(de)
         inc   de
         ld    c,0
         ld    b,a
-        ld    a,(nxsh)
+        ld    a,(nxinv)
+        or    a
+        jr    z,nxp_ni
+        ld    a,b
+        cpl                    ; INVERSE: tinta y papel al reves. Se complementa
+        and   &FC              ; SOLO los 6 pixeles del glifo; los dos de abajo
+        ld    b,a              ; son del vecino y tienen que quedarse a cero
+nxp_ni: ld    a,(nxsh)
         or    a
         jr    z,nxp_ya
 nxp_sh: srl   b                ; desplaza el glifo a su sitio; lo que sale
@@ -775,6 +867,51 @@ nxw_b:  ld    (nxwb),a
         ld    (nxrow),a
         ld    a,(nxwl)
         ld    (nxcol),a
+        ret
+
+; ---------------------------------------------------------------------------
+; SCRATTR: A = 0 BRIGHT, 1 FLASH, 2 INVERSE.  C = valor (0/1).
+; BRIGHT y FLASH son bits del atributo; INVERSE no lo es -- en el Spectrum
+; invierte los PIXELES del caracter, no sus colores -- asi que se guarda para
+; que nxplot complemente el glifo.
+; ---------------------------------------------------------------------------
+SCRATTR:
+        push  af
+        push  bc
+        push  hl
+        or    a
+        jr    z,scra_br
+        dec   a
+        jr    z,scra_fl
+        ld    a,c              ; INVERSE
+        and   1
+        ld    (nxinv),a
+        jr    scra_fin
+scra_br:
+        ld    b,&40            ; bit 6 del atributo
+        jr    scra_bit
+scra_fl:
+        ld    b,&80            ; bit 7
+scra_bit:
+        ld    a,(nxattr)
+        ld    l,a
+        ld    a,b
+        cpl
+        and   l                ; fuera el bit...
+        ld    l,a
+        ld    a,c
+        or    a
+        jr    z,scra_pon
+        ld    a,l
+        or    b                ; ...y dentro si el valor es 1
+        ld    l,a
+scra_pon:
+        ld    a,l
+        ld    (nxattr),a
+scra_fin:
+        pop   hl
+        pop   bc
+        pop   af
         ret
 
 ; ---------------------------------------------------------------------------
@@ -991,7 +1128,21 @@ CASCLOSE:
         ccf                    ; CF=0, A intacto
         ret
 
-MCWAIT:
+; ---------------------------------------------------------------------------
+; MCWAIT: espera un barrido de pantalla (~1/50 s). En el CPC es MC WAIT FLYBACK
+; del firmware (&BD19); aqui es un HALT, que con IM1 da exactamente eso.
+;
+; NO es decorativo, y estuvo en el grupo de stubs de abajo hasta la v2.53. El
+; motor lo llama en dos sitios: c_pause, entre frame y frame de PAUSE, y c_play,
+; entre frame y frame de un efecto de sonido. Con un RET, PAUSE no esperaba nada
+; y los FX se reproducian enteros en microsegundos, o sea mudos. En el CPC
+; siempre funcionaron, porque alli MCWAIT es la rutina de verdad; en Spectrum,
+; 128K y Next no ha sonado un FX nunca.
+; ---------------------------------------------------------------------------
+MCWAIT: ei
+        halt
+        ret
+
 TXTMATRIX:
 TXTMTABLE:
 KLINIT:
@@ -1128,6 +1279,31 @@ PUERTO_TRAZA = 0xCAFE      # el mismo que usa el demo del propio jnext
 PRUEBA_ASM = r"""
 ; --- modo prueba: teclado de guion y traza por puerto ----------------------
 nxgp:    defw NXGUION          ; siguiente tecla del guion
+nxgpg:   defb NXGUIONPG        ; pagina de 8K del guion que hay puesta
+
+; nxgpag: trae la siguiente pagina de 8K del guion a &2000. Una bateria larga
+; no cabe en una sola pagina -- tifon.pru pasa de 8 KB -- y partirla en el .pru
+; seria trasladar al autor de las pruebas un problema del arnes.
+nxgpag:
+        push  af
+        push  bc
+        push  de
+        ld    a,(nxgpg)
+        inc   a
+        ld    (nxgpg),a
+        ld    e,a
+        ld    bc,&243B
+        ld    a,&51
+        out   (c),a
+        ld    b,&25
+        ld    a,e
+        out   (c),a
+        ld    hl,NXGUION
+        ld    (nxgp),hl
+        pop   de
+        pop   bc
+        pop   af
+        ret
 
 ; nxtrc: manda el caracter de A al puerto de traza.
 nxtrc:
@@ -1238,7 +1414,7 @@ NXT_LOC: defb "#LOC ",0
 """
 
 
-def _modo_prueba(src, guion):
+def _modo_prueba(src, guion, maquina='next', sp=None):
     """Devuelve el fuente con los parches del modo prueba aplicados.
 
     KMREAD  pasa a sacar las teclas del guion embebido en vez de la matriz.
@@ -1286,6 +1462,10 @@ def _modo_prueba(src, guion):
     src = src[:i + 1] + ('KMREAD:\n'
                          '        push  hl\n'
                          'nxg_l:  ld    hl,(nxgp)\n'
+                         '        ld    a,h\n'
+                         '        cp    &40          ; fin de la ventana: pagina siguiente\n'
+                         '        call  z,nxgpag\n'
+                         '        ld    hl,(nxgp)\n'
                          '        ld    a,(hl)\n'
                          '        or    a\n'
                          '        jr    z,nxg_fin\n'
@@ -1316,7 +1496,21 @@ def _modo_prueba(src, guion):
                  '        ret\n')
 
     # 4. la CPU, a 28 MHz (NextREG 7 = 3): ocho veces mas partida por barrido
-    src = cambia('detect128:\n        xor   a\n',
+    #    En 48K/128K no hay detect128 que parchear -- la capa de esas maquinas
+    #    ya lo sustituye -- asi que el mismo arranque lo pone ZXPRINI.
+    if maquina != 'next':
+        # se engancha en 'call init', que no depende del comentario que
+        # lleve la linea de la pila en cada capa
+        src = cambia('\n        call  init\n',
+                     '\n        call  ZXPRINI       ; modo prueba: guion y turbo\n'
+                     '        call  init\n')
+        if maquina == '128':
+            # la espera de portada (con su musica) no pinta nada en una bateria
+            i = src.index(chr(10) + 'S128ESP:')
+            j = src.index('        jp    psgoff', i) + len('        jp    psgoff\n')
+            src = src[:i + 1] + 'S128ESP:\n        ret\n' + src[j:]
+    else:
+        src = cambia('detect128:\n        xor   a\n',
                  'detect128:\n'
                  '        ld    bc,&243B      ; modo prueba: el guion, sobre la ROM\n'
                  '        ld    a,&51\n'
@@ -1347,19 +1541,58 @@ def _modo_prueba(src, guion):
     # El guion NO va en el mapa plano: una bateria larga son varios KB y ahi no
     # sobran. Va en su propio banco, paginado sobre la ROM en &2000, que en modo
     # prueba no hace falta para nada.
+    cola = PRUEBA_ASM + ('\n' if maquina == 'next' else chr(10) + ZXPRUEBA_ASM)
     return (('NXTRAZA equ &%04X\nNXSP equ &%04X\nNXGUION equ &2000\n'
-             % (PUERTO_TRAZA, SP_NEX)) + src + PRUEBA_ASM + '\n')
+             % (PUERTO_TRAZA, sp or SP_NEX)) + src + cola + '\n')
 
 
-def banco_guion(nimg, titulo):
+ZXPRUEBA_ASM = r'''
+; ---------------------------------------------------------------------------
+; ZXPRINI: arranque del modo prueba en Spectrum 48K y 128K.
+;
+; El guion de la bateria no cabe en el mapa plano de estas maquinas (el de
+; tifon.pru son casi 9 KB y en 48K sobran 7), asi que se pagina por la misma
+; ventana que usa el Next: RAM sobre la ROM en &2000-&3FFF, con el MMU del
+; Next. Es andamiaje del emulador, no del juego: el binario que se distribuye
+; -- el .tap -- no lleva ni una de estas instrucciones, y el motor y la base de
+; datos son byte a byte los mismos.
+;
+; Se pagina SOLO el slot 1 (&2000-&3FFF). El slot 0 se deja con la ROM porque
+; ahi esta el gestor de interrupcion de &0038, y MCWAIT lo necesita: sin el,
+; el HALT de PAUSE y el de los efectos no volverian nunca.
+; ---------------------------------------------------------------------------
+ZXPRINI:
+        ld    bc,&243B
+        ld    a,&51
+        out   (c),a
+        ld    b,&25
+        ld    a,NXGUIONPG
+        out   (c),a
+        ld    bc,&243B      ; y la CPU a 28 MHz, que la bateria no tiene prisa
+        ld    a,7           ; por ser fiel al reloj: lo que mide es el texto
+        out   (c),a
+        ld    b,&25
+        ld    a,3
+        out   (c),a
+        ret
+'''
+
+
+def banco_muestras(nimg, titulo):
+    """Primer banco de 16K de las muestras digitalizadas: el siguiente al de
+    las paletas."""
+    return BANK_IMG + nimg + (3 if titulo else 0) + 1
+
+
+def banco_guion(nimg, titulo, nsmp=0):
     """Banco de 16K donde viaja el guion del modo prueba: el siguiente al de
     las paletas. Su primera mitad se pagina sobre la ROM en &2000-&3FFF, que es
     sitio que el motor no usa para nada -- la ranura de abajo, &0000-&1FFF, si
     la usa un instante nxsubepal para leer las paletas."""
-    return BANK_IMG + nimg + (3 if titulo else 0) + 1
+    return banco_muestras(nimg, titulo) + nsmp
 
 
-def prefijo(org, db_base, nimg=0, titulo=False, borde=7):
+def prefijo(org, db_base, nimg=0, titulo=False, borde=7, nsmp=0):
     """Constantes que el motor espera resueltas. A diferencia del CPC, aqui NO
     se declaran TXTO/KMW/... como equ: son etiquetas de PLAT_ASM."""
     L = ['ORIGIN equ &%04X' % org,          # el motor lleva dentro 'org ORIGIN'
@@ -1368,21 +1601,23 @@ def prefijo(org, db_base, nimg=0, titulo=False, borde=7):
          'NXIMG equ %d' % BANK_IMG,         # primer banco de imagen
          'NXTITLE equ %d' % (BANK_IMG + nimg),   # portada: 3 bancos seguidos
          'NXPALPG equ %d' % (2 * (BANK_IMG + nimg + (3 if titulo else 0))),
-         'NXGUIONPG equ %d' % (2 * banco_guion(nimg, titulo)),
+         'NXGUIONPG equ %d' % (2 * banco_guion(nimg, titulo, nsmp)),
+         'NXSMPPG equ %d' % (2 * banco_muestras(nimg, titulo)),
          'NXPALTIT equ %d' % nimg,              # slot de la paleta de la portada
          'NXREVPASO equ %d' % REVELADO_PASO,    # lineas por barrido al revelar
          'NXLENTO equ %d' % TEXTO_RITMO,        # caracteres por barrido al escribir
          'NXBORDE equ %d' % borde]              # color de borde al arrancar
     for n in ('SCANTGO', 'SEXITS', 'SNOUND', 'SSEE', 'STAKE', 'SDROP',
               'SNOTHERE', 'SNOTCARR', 'SINVEN', 'SEMPTY', 'SNOTAKE', 'SDARK',
-              'SSCORE', 'SHEAVY', 'SSCOREP', 'SSCORES',
+              'SSCORE', 'SHEAVY', 'SSCOREP', 'SSCORES', 'SFIN', 'SOTRA',
               'CARRIED', 'NOWHERE', 'WORN', 'CONTAINED'):
         L.append('%s equ %d' % (n, getattr(ge, n)))
     return chr(10).join(L) + chr(10)
 
 
 def assemble_engine_next(org=ORG, db_base=None, idioma='es', paletas=b'',
-                         titulo_pal=b'', psg=b'', borde=7, guion=None):
+                         titulo_pal=b'', psg=b'', borde=7, guion=None,
+                         smptab=None, nsmp=0, smphz=11025, nsmpbanco=0):
     """Ensambla motor + plataforma Next. Devuelve (bytes, tabla_de_simbolos).
     paletas:    256 bytes por imagen (un byte por color), en orden de slot
     titulo_pal: 256 bytes de la paleta de la portada (b'' = sin portada)
@@ -1400,7 +1635,19 @@ def assemble_engine_next(org=ORG, db_base=None, idioma='es', paletas=b'',
         partes.append(TITULO_ASM)
         partes.append(PSG_ASM + chr(10) + _datos_asm('NXPSG', psg)
                       if psg else PSG_ASM_VACIO)
-    fuente = (prefijo(org, db_base, nimg, titulo, borde) +
+    if smptab:
+        import sample_ay
+        if not (nimg or titulo):
+            partes.append(IMG_ASM)        # las muestras usan nxreg
+        partes.append(SMP_NEXT_ASM)
+        partes.append('SMPT:' + chr(10) + chr(10).join(
+            '        defw %d,%d' % (smptab[i][0] // 2, smptab[i][1])
+            if i in smptab else '        defw &FFFF,0'
+            for i in range(1, nsmp + 1)))
+        partes.append(sample_ay.asm(smphz, con_di=False))
+    else:
+        partes.append(SMP_ASM_VACIO)
+    fuente = (prefijo(org, db_base, nimg, titulo, borde, nsmpbanco) +
               _engine_next(nimg > 0, titulo) +
               PLAT_ASM + chr(10) + chr(10).join(partes) + chr(10) +
               _font_asm(idioma) + chr(10))
@@ -1572,6 +1819,14 @@ def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None,
 
     # Portada de 256x192 (3 bancos) y musica del AY. La musica solo tiene sentido
     # con portada: es lo que suena mientras se mira, igual que en el export BASIC.
+    # Muestras digitalizadas: van en sus propios bancos, entre las paletas y
+    # (en modo prueba) el guion de la bateria.
+    import sample_ay
+    smp_blob, smptab = sample_ay.muestras(game, 0)
+    nsmp = len(game.get('samples') or [])
+    smphz = int(((game.get('samples') or [{}])[0] or {}).get('hz', 11025))
+    nsmpbanco = (len(smp_blob) + 16383) // 16384
+
     titulo_bin, titulo_pal = _titulo(datadir)
     psg_bruto, psg_nom = (b'', None)
     if titulo_bin is not None:
@@ -1599,7 +1854,9 @@ def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None,
         return assemble_engine_next(org=org, db_base=base, idioma=idioma,
                                     paletas=paletas,
                                     titulo_pal=titulo_pal or b'', psg=psg,
-                                    borde=borde, guion=guion)
+                                    borde=borde, guion=guion,
+                                    smptab=smptab, nsmp=nsmp, smphz=smphz,
+                                    nsmpbanco=nsmpbanco)
 
     def _db(dbaddr):
         return ge.build_game_db(
@@ -1644,7 +1901,9 @@ def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None,
     extras = {'imgs': imgs, 'datadir': datadir, 'fx': fx_blob, 'borde': borde,
               'titulo': titulo_bin, 'titulo_pal': titulo_pal, 'paletas': paletas,
               'psg': psg, 'psg_nom': psg_nom, 'aviso_psg': aviso_psg,
-              'guion': None if guion is None else bytes(guion) + b'\x00'}
+              'guion': None if guion is None else bytes(guion) + b'\x00',
+              'muestras': smp_blob, 'nsmpbanco': nsmpbanco,
+              'smptab': smptab}
     return code, db, sym, spec, dbaddr, extras
 
 
@@ -1653,6 +1912,8 @@ def export_nex(game, salida, ancho=COLS, org=ORG, borde=None, datadir=None,
     """Compila el juego al motor nativo y lo empaqueta en un .nex arrancable.
     Sin zxbc, sin Boriel, sin NextBuild: todo en Python."""
     import empaqueta_nex
+    import presupuesto
+    presupuesto.empieza()
 
     code, db, sym, spec, dbaddr, ex = compila(
         game, ancho=ancho, org=org, datadir=datadir, musicdir=musicdir,
@@ -1660,12 +1921,17 @@ def export_nex(game, salida, ancho=COLS, org=ORG, borde=None, datadir=None,
     imgs, datadir, fx_blob = ex['imgs'], ex['datadir'], ex['fx']
     plano = bytes(code) + bytes(db)
     fin = org + len(plano)
-    if fin > SP_NEX - PILA_MIN:
-        raise ValueError(
-            'no cabe en el mapa plano: motor+datos llegan a &%04X y la pila esta '
-            'en &%04X (con %d bytes de margen). Para mas sitio habria que mapear '
-            'RAM sobre la ROM y ganar los 16K de &0000-&3FFF.'
-            % (fin, SP_NEX, PILA_MIN))
+    presupuesto.comprueba(
+        'ZX Spectrum Next',
+        [('motor + plataforma', len(code) - len(ex['psg'])),
+         ('musica del titulo', len(ex['psg'])),
+         ('base de datos', len(db))],
+        SP_NEX - PILA_MIN - org,
+        'el mapa plano &%04X-&%04X, bajo la pila de &%04X'
+        % (org, SP_NEX - PILA_MIN, SP_NEX),
+        presupuesto.RECORTA_PLANO + (
+            'para mas sitio habria que mapear RAM sobre la ROM y ganar los '
+            '16K de &0000-&3FFF',))
 
     bancos = {}
     for i, b in enumerate(plano):
@@ -1684,14 +1950,24 @@ def export_nex(game, salida, ancho=COLS, org=ORG, borde=None, datadir=None,
         base = BANK_IMG + len(imgs)
         for k in range(3):
             bancos[base + k] = ex['titulo'][k * 16384:(k + 1) * 16384]
-    if ex['guion'] is not None:            # modo prueba: el guion, en su banco
-        if len(ex['guion']) > 8192:
-            raise ValueError(
-                'el guion de la bateria son %d bytes y en su pagina caben 8192. '
-                'Acortalo (p. ej. "* 40 I" en vez de repetir una orden larga) o '
-                'partelo en dos ficheros .pru' % len(ex['guion']))
-        bancos[banco_guion(len(imgs), ex['titulo'] is not None)] = \
-            ex['guion'].ljust(16384, b'\x00')
+    if ex['muestras']:                     # muestras: un banco por cada 16K
+        base = banco_muestras(len(imgs), ex['titulo'] is not None)
+        for k in range(ex['nsmpbanco']):
+            bancos[base + k] = ex['muestras'][k * 16384:(k + 1) * 16384] \
+                .ljust(16384, b'\x00')
+    if ex['guion'] is not None:            # modo prueba: el guion, en sus bancos
+        # El guion se lee por una ventana de 8K sobre la ROM, y el motor salta a
+        # la pagina siguiente al agotarla (nxgpag). Asi que va troceado en
+        # paginas de 8K consecutivas, dos por banco.
+        g = ex['guion']
+        paginas = [g[i:i + 8192].ljust(8192, b'\x00')
+                   for i in range(0, max(1, len(g)), 8192)]
+        base = banco_guion(len(imgs), ex['titulo'] is not None,
+                           ex['nsmpbanco'])
+        for k in range(0, len(paginas), 2):
+            par = paginas[k] + (paginas[k + 1] if k + 1 < len(paginas)
+                                else b'\x00' * 8192)
+            bancos[base + k // 2] = par
     if ex['paletas'] or ex['titulo'] is not None:            # banco de paletas
         pal = ex['paletas'] + (ex['titulo_pal'] or b'')
         if len(pal) > 16384:
@@ -1699,17 +1975,40 @@ def export_nex(game, salida, ancho=COLS, org=ORG, borde=None, datadir=None,
         bancos[BANK_IMG + len(imgs) + (3 if ex['titulo'] is not None else 0)] = \
             pal.ljust(16384, b'\x00')
 
+    import presupuesto
+    # Un .nex admite bancos 0..111. Con una imagen por sala, la portada (3), las
+    # paletas, las muestras y -- en modo prueba -- el guion, un juego grande
+    # puede pasarse sin que nadie lo diga hasta que el emulador no arranca.
+    alto = max(bancos) if bancos else 0
+    presupuesto.comprueba(
+        'ZX Spectrum Next',
+        [('imagenes de sala', len(imgs)),
+         ('portada', 3 if ex['titulo'] is not None else 0),
+         ('paletas', 1 if (ex['paletas'] or ex['titulo'] is not None) else 0),
+         ('muestras digitalizadas', ex['nsmpbanco']),
+         ('guion de la bateria', 0 if ex['guion'] is None
+          else (len(ex['guion']) + 16383) // 16384)],
+        112 - BANK_IMG, 'bancos de 16K disponibles en el .nex, del 16 al 111',
+        ('quita imagenes de localizacion: en Next cada una ocupa un banco entero',
+         'acorta la bateria de pruebas si estas en modo prueba'),
+        unidad='bancos')
+    if alto > 111:
+        raise ValueError('banco %d fuera del rango del formato .nex (0..111)' % alto)
+
     empaqueta_nex.build_nex(salida, bancos, pc=sym['start'], sp=SP_NEX,
                             border=ex['borde'] if borde is None else borde)
     return {'codigo': len(code), 'datos': len(db), 'total': len(plano),
             'org': org, 'fin': fin, 'pc': sym['start'], 'sp': SP_NEX,
             'bancos': sorted(bancos), 'simbolos': sym, 'imagenes': imgs,
             'inicio': spec['startloc'], 'fx': len(fx_blob),
+            'muestras': len(ex['smptab']),
+            'muestras_bytes': len(ex['muestras']),
             'titulo': ex['titulo'] is not None,
             'psg': len(ex['psg']), 'psg_nom': ex['psg_nom'],
             'aviso_psg': ex['aviso_psg'],
             'localizaciones': len(spec['locations']),
-            'objetos': len(spec['objects'])}
+            'objetos': len(spec['objects']),
+            'presupuesto': presupuesto.informe()}
 
 
 def carga_nex(path):

@@ -13,10 +13,6 @@ for /f "usebackq tokens=2 delims='" %%v in (`findstr /b "SCRIBA_VERSION" scriba_
 set SNAME=Scriba_v_%SVER:.=_%
 
 python -m PyInstaller --noconfirm --onefile --windowed --name %SNAME% ^
-  --add-data "print42_es.bas;." ^
-  --add-data "print64_es.bas;." ^
-  --add-data "print42_pt.bas;." ^
-  --add-data "print64_pt.bas;." ^
   --add-data "scriba_logo.png;." ^
   --add-data "Scriba_Manual.pdf;." ^
   --add-data "Scriba_Referencia_Sintaxis.md;." ^
@@ -30,15 +26,11 @@ python -m PyInstaller --noconfirm --onefile --windowed --name %SNAME% ^
   --hidden-import paws_lang ^
   --hidden-import interpreter ^
   --hidden-import yaml ^
-  --hidden-import next_export ^
-  --hidden-import empaqueta_nextap ^
   --hidden-import mensajes ^
   --hidden-import traduccion ^
   --hidden-import png2next ^
   --hidden-import png2spectrum ^
-  --hidden-import cpc_export ^
   --hidden-import png2cpc ^
-  --hidden-import empaqueta_cpc ^
   --hidden-import mid2psg ^
   --hidden-import txtpack ^
   --hidden-import z80asm ^
@@ -53,6 +45,15 @@ python -m PyInstaller --noconfirm --onefile --windowed --name %SNAME% ^
   --hidden-import afx ^
   --hidden-import vocab_base ^
   --hidden-import scriba_info ^
+  --hidden-import next_nativo ^
+  --hidden-import spectrum48_nativo ^
+  --hidden-import spectrum128_nativo ^
+  --hidden-import font42 ^
+  --hidden-import empaqueta_nex ^
+  --hidden-import z80 ^
+  --hidden-import wav2ay ^
+  --hidden-import sample_ay ^
+  --hidden-import presupuesto ^
   editor.py
 
 REM  Copia el .exe versionado a Scriba.exe para que Scriba.exe sea SIEMPRE la

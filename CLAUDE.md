@@ -31,11 +31,12 @@ Backends:
 
 | Fichero | Destino |
 |---|---|
-| `interpreter.py` | probador de PC |
-| `spectrum_export.py` | ZX BASIC (48K, 128K y Next lo heredan) |
-| `nativecc.py` + `game_engine.py` | motor Z80 nativo (bytecode) |
-| `cpc_export.py`, `cpc_nativo.py` | Amstrad CPC |
-| `next_nativo.py` | ZX Spectrum Next nativo, a `.nex` |
+| `interpreter.py` | probador de PC y `.exe` de Windows |
+| `nativecc.py` + `game_engine.py` | motor Z80 nativo (bytecode), común a las cuatro máquinas |
+| `spectrum48_nativo.py`, `spectrum128_nativo.py` | ZX Spectrum 48K y 128K, a `.tap` |
+| `next_nativo.py` | ZX Spectrum Next, a `.nex` |
+| `cpc_nativo.py` | Amstrad CPC, a `.dsk` |
+| `spectrum_export.py` | ya NO es un backend: queda como biblioteca (`recolecta`, acentos, PSG, dzx0, imágenes) de la que tiran todos los demás |
 
 **`compiler.py::check_predicates()`** detecta predicados no soportados por
 destino. Pásalo antes de dar nada por bueno.
@@ -234,25 +235,48 @@ los másteres de `img/Original`, en cambio, se escalan sin protestar. Margen del
 
 - **Los glifos `_` y `q` de `print42_es.bas` / `print42_pt.bas` están mal**: el
   subrayado apunta al índice de la `á`, y la cola de la `q` invade un píxel del
-  carácter siguiente. `genera_font42.py` los corrige para el motor nativo, pero
-  **los builds BASIC de 128K y Next siguen teniéndolos**.
+  carácter siguiente. `genera_font42.py` los corrige al generar la tabla del
+  motor nativo, así que hoy no afecta a ningún binario; los `.bas` siguen ahí
+  porque son la fuente de esa tabla.
+
+---
+
+## Trampas
+
+- **Tras tocar un módulo del motor, reconstruir `Scriba.exe` ANTES de probar una
+  exportación desde el editor.** El `.exe` es una foto congelada: lleva dentro su
+  propia copia de `game_engine`, `nativecc`, `next_nativo`, `spectrum*_nativo`…
+  Si exportas desde el `.exe` viejo obtienes un binario sin el arreglo, y desde
+  la línea de comandos el mismo juego sale bien — dos resultados distintos para
+  el mismo código fuente. Nos costó dos vueltas con los FX del Next en la v2.53.
+  Para comparar binarios, mirar la fecha de `dist/Scriba.exe` antes que nada.
+
+- **Los símbolos de plataforma que en una máquina son una rutina de verdad y en
+  otra un `RET` se rompen en silencio.** `MCWAIT` estuvo así desde que existe el
+  motor nativo en Spectrum: en CPC era la espera de barrido del firmware y en la
+  capa de Spectrum/Next un `RET` del montón de stubs. `PAUSE` no esperaba y
+  **ningún FX sonó nunca** en 48K, 128K ni Next. Mismo patrón que `END`
+  compilándose a `DONE`. Al añadir un símbolo de plataforma, comprobar que las
+  CUATRO implementaciones hacen algo, y dejar una prueba que lo verifique.
 
 ---
 
 ## Estado
 
-Rama de trabajo: `fix/predicados-objeto-v2.44`. Scriba 2.52.
+Rama de trabajo: `fix/predicados-objeto-v2.44`. Scriba 2.54.
 
-El camino `.nex` con Boriel está **parado**: `next_export.moduliza_texto()` está
-escrito pero no lo llama nadie, bloqueado por `EmbeddedMmuSwitchAssembleError`
-de Boriel 2.0.0-beta21. El informe para upstream está en
-`reporte_boriel_splitmodules/`. El backend nativo resuelve lo mismo sin Boriel.
+**Boriel se ha ido** (v2.54). Las cuatro máquinas salen del motor nativo Z80 y
+no hay otro camino: se borraron `next_export.py`, `cpc_export.py`,
+`empaqueta_cpc.py`, `empaqueta_nextap.py`, `construye_nextap.py`,
+`empaqueta48.py` y `build_nextap.bat`, y con ellos el submenú «Exportaciones
+heredadas», el diálogo de configuración del TAP y todo lo que invocaba `zxbc`.
+Queda un resto: el transpilador a BASIC sigue DENTRO de `spectrum_export.py`,
+sin que lo llame nadie, esperando a que se separe lo que sí se usa. El informe
+de `EmbeddedMmuSwitchAssembleError` para upstream sigue en
+`reporte_boriel_splitmodules/`, ya solo como documento.
 
-El motor nativo del Next ya tiene imágenes (Layer 2, un banco por sala),
-pantalla de título, música del AY, efectos FX, y es el destino «Exportar ZX
-Spectrum Next (.nex, motor nativo)» del editor. El camino BASIC a `.tap` para
-Next sigue en `next_export.py` y en `editor._export_next`, pero ya no está en el
-menú.
+El motor nativo del Next tiene imágenes (Layer 2, un banco por sala), pantalla
+de título, música del AY, efectos FX y muestras digitalizadas.
 
 Lo que queda: los glifos `_` y `q` siguen mal en los `.tap` de 128K y Next
 (`genera_font42.py` solo corrige la tabla del motor nativo), el DMA y el Copper

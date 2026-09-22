@@ -31,10 +31,15 @@ except Exception:                       # por si se usa aislado
 # Condacts "de autor" comprobables. Se excluyen los estructurales (IF/ELSE/...)
 # y los internos del compilador (JMP).
 CONDACTS = {
-    'MESSAGE', 'PRINT', 'PRINTLN', 'NEWLINE', 'LET',
-    'GOTO', 'GET', 'DROP', 'CREATE', 'DESTROY', 'PUT', 'PLACE',
+    # OJO: aqui estuvieron MESSAGE, INVEN, LOOK y PLACE hasta la v2.53. No las
+    # implementa NADIE, ni siquiera el interprete de PC, que es la referencia:
+    # MESSAGE y PLACE son opcodes internos del motor y LOOK e INVEN son VERBOS
+    # que teclea el jugador, no condacts. Tenerlas aqui hacia que el contrato
+    # prometiera cosas que no existen en el lenguaje.
+    'PRINT', 'PRINTLN', 'NEWLINE', 'LET',
+    'GOTO', 'GET', 'DROP', 'CREATE', 'DESTROY', 'PUT',
     'PUTIN', 'TAKEOUT', 'OPEN', 'CLOSE', 'LOCK', 'UNLOCK', 'WEAR', 'REMOVE',
-    'LIT', 'UNLIT', 'ADDSCORE', 'SCORE', 'DESC', 'LOOK', 'INVEN',
+    'LIT', 'UNLIT', 'ADDSCORE', 'SCORE', 'DESC',
     'TIMER_START', 'TIMER_STOP', 'TIMER_RESET',
     'PLAY',
     'END', 'MATCH', 'QUIT',
@@ -60,7 +65,9 @@ FEATURE_LABEL = {
 }
 
 TARGET_LABEL = {
-    'pc': 'PC (intérprete)', 'spectrum': 'ZX Spectrum 48K/128K',
+    'pc': 'PC (intérprete)', 'spectrum': 'ZX Spectrum 48K/128K (BASIC)',
+    'spectrum48': 'ZX Spectrum 48K (motor nativo)',
+    'spectrum128': 'ZX Spectrum 128K (motor nativo)',
     'next': 'ZX Spectrum Next', 'cpc': 'Amstrad CPC',
 }
 
@@ -81,17 +88,33 @@ CAPS = {
         'predicates': set(PREDICATES),
         'features': set(FEATURES),     # incluye peso desde v2.0
     },
-    'cpc': {
-        # Motor nativo Z80 (v2.0): paridad de logica completa (incluido NOUN2 con
-        # parser de dos nombres). Solo difiere en hardware: sonido (BEEP/SOUND) y
-        # atributos de pantalla no portados (BRIGHT/FLASH/INVERSE).
-        'condacts': set(CONDACTS) - {'BRIGHT', 'BEEP', 'SOUND', 'FLASH',
-                                     'INVERSE'},
-        'predicates': set(PREDICATES),
-        'features': set(FEATURES),
-    },
 }
-CAPS['next'] = CAPS['spectrum']        # Next reutiliza el motor de Spectrum
+
+# El MOTOR NATIVO Z80 (game_engine.py) es el mismo en las cuatro maquinas que lo
+# usan, asi que su contrato se define UNA vez. Paridad de logica completa
+# (incluido NOUN2 con parser de dos nombres); lo que le falta es de hardware:
+# sonido por beeper (BEEP/SOUND) y atributos de pantalla no portados
+# (BRIGHT/FLASH/INVERSE).
+CAPS_NATIVO = {
+    'condacts': set(CONDACTS) - {'BEEP', 'SOUND'},
+    'predicates': set(PREDICATES),
+    'features': set(FEATURES),
+}
+# El CPC no tiene atributos de brillo/parpadeo ni impresion inversa: ahi los
+# tres condacts existen pero no hacen nada (SCRATTR es un RET).
+CAPS['cpc'] = dict(CAPS_NATIVO,
+                   condacts=CAPS_NATIVO['condacts'] - {'BRIGHT', 'FLASH',
+                                                       'INVERSE'})
+CAPS['spectrum128'] = CAPS_NATIVO
+# El 48K no lleva AY: los efectos de PLAY se quedan mudos. En 128K, Next y CPC
+# suenan (desde la v2.53: hasta entonces MCWAIT era un RET en la capa de
+# Spectrum/Next y los efectos se reproducian en microsegundos).
+CAPS['spectrum48'] = dict(CAPS_NATIVO,
+                          condacts=CAPS_NATIVO['condacts'] - {'PLAY'})
+# Next dejo de ir en BASIC en la v2.0: lleva el mismo motor nativo que el CPC.
+# Hasta la v2.53 esta linea decia CAPS['next'] = CAPS['spectrum'], o sea que
+# daba via libre a un BEEP que en el .nex no suena.
+CAPS['next'] = CAPS_NATIVO
 
 
 # ─── Escaneo del juego ───────────────────────────────────────────────────────
@@ -242,7 +265,7 @@ if __name__ == '__main__':
     print('Usados -> condacts:', ', '.join(sorted(used['condacts'])) or '(ninguno)')
     print('         predicados:', ', '.join(sorted(used['predicates'])) or '(ninguno)')
     print('         funciones:', ', '.join(sorted(used['features'])) or '(ninguna)')
-    for t in ('spectrum', 'next', 'cpc'):
+    for t in ('spectrum', 'spectrum48', 'spectrum128', 'next', 'cpc'):
         r = report(g, t)
         print('\n=== %s ===' % TARGET_LABEL[t])
         print(r if r else '  OK: todo soportado.')

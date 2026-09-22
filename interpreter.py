@@ -41,6 +41,19 @@ DIR_NAMES_L = {
     'pt': {'N': 'Norte', 'S': 'Sul', 'E': 'Este', 'O': 'Oeste', 'U': 'Acima', 'D': 'Abaixo'},
 }
 
+# Los nombres de las salidas salen del catalogo compartido de mensajes
+# (dir_n..dir_d), que es de donde los saca tambien el motor nativo de Z80. Si no
+# lo estuvieran, una traduccion hecha en el editor cambiaria el Spectrum y no el
+# PC, que es como estaba hasta v2.53. La tabla de arriba se queda de ultimo
+# recurso, por si se usa el interprete sin el catalogo al lado.
+DIR_MID = {'N': 'dir_n', 'S': 'dir_s', 'E': 'dir_e',
+           'O': 'dir_o', 'U': 'dir_u', 'D': 'dir_d'}
+try:
+    import mensajes as _mensajes
+    _MSG_DEF = _mensajes.defaults()
+except Exception:
+    _MSG_DEF = {}
+
 # Mensajes del sistema del INTÉRPRETE de PC por idioma (es/en/pt). El idioma sale
 # de metadata['language']; metadata['mensajes'][id] (catálogo compartido) tiene
 # prioridad si existe, así una traducción personalizada del editor vale también en
@@ -652,7 +665,16 @@ class PAWSInterpreter:
         return txt
 
     def _dir_name(self, d):
-        """Nombre de la dirección 'd' (N/S/E/O/U/D) en el idioma del juego."""
+        """Nombre de la dirección 'd' (N/S/E/O/U/D). Prioridad: lo que el autor
+        haya puesto en el catálogo (metadata['mensajes'][dir_x]) > el valor por
+        defecto del catálogo compartido > la tabla por idioma. Es el mismo orden
+        que sigue el motor nativo (cpc_nativo._sys_msgs_y_salidas), así que las
+        salidas se escriben igual en PC que en Spectrum, CPC y Next."""
+        mid = DIR_MID.get(d)
+        if mid:
+            txt = (self.meta.get('mensajes') or {}).get(mid) or _MSG_DEF.get(mid)
+            if txt and str(txt).strip():
+                return str(txt).strip()
         return DIR_NAMES_L.get(self._lang, DIR_NAMES_L['es']).get(d, d)
 
     def __init__(self, game: dict):
@@ -1420,7 +1442,10 @@ class PAWSInterpreter:
         exits = loc.get("exits", {})
         available = [self._dir_name(d) for d, dest in exits.items() if dest]
         if available:
-            print("\n" + self._t('salidas', dirs=', '.join(available)))
+            # Separadas por un espacio, no por coma: es como las escribe el
+            # motor nativo, y con los nombres saliendo ya del mismo catalogo la
+            # linea de salidas queda identica en PC y en las maquinas.
+            print("\n" + self._t('salidas', dirs=' '.join(available)))
         else:
             print("\n" + self._t('sin_salidas'))
 

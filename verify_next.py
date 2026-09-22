@@ -408,7 +408,7 @@ def verificar(game):
     return res, desc, nco, ndb
 
 
-def teclea(cpu, sym, tec, texto, tope=6000000):
+def teclea(cpu, sym, tec, texto, tope=6000000, fin=None):
     """Escribe una orden en el juego. Va cambiando el estado del teclado justo
     antes de cada entrada en KMREAD: pulsa una tecla, la suelta en la siguiente
     lectura (que es lo que espera el antirrebote) y pasa a la siguiente."""
@@ -419,6 +419,8 @@ def teclea(cpu, sym, tec, texto, tope=6000000):
     kmw = sym.get('kmw')
     n = 0
     while n < tope:
+        if fin is not None and cpu.pc == fin:
+            return False              # mainloop ha salido: se acabo la partida
         if kmw is not None and cpu.pc == kmw:
             # El juego se ha parado a que leamos (pausa de pagina al desplazar, o
             # un PAUSE 0). Eso NO es el comando: se le da una tecla cualquiera y
@@ -467,13 +469,17 @@ class Mmu:
         self.rom = bytes(mem[0:0x2000])
         cpu.mmu = self
 
-    def pagina(self, v):
+    def pagina(self, v, slot=0):
+        """slot 0 = &0000-&1FFF, slot 1 = &2000-&3FFF. El modo prueba usa el 1
+        para el guion de la bateria, y deja la ROM en el 0 por el gestor de
+        interrupcion de &0038."""
+        a = slot * 0x2000
         if v == 255:
-            self.mem[0:0x2000] = self.rom
+            self.mem[a:a + 0x2000] = self.rom if slot == 0 else bytes(0x2000)
             return
         banco, mitad = divmod(v, 2)
         datos = self.bancos.get(banco, bytes(16384))
-        self.mem[0:0x2000] = datos[mitad * 8192:(mitad + 1) * 8192]
+        self.mem[a:a + 0x2000] = datos[mitad * 8192:(mitad + 1) * 8192]
 
 
 class EspiaNextReg:
@@ -496,8 +502,8 @@ class EspiaNextReg:
         if self.reg is not None:
             cpu.nextreg[self.reg] = val
             self.flujo.append((self.reg, val))
-            if self.reg == 0x50 and getattr(cpu, 'mmu', None) is not None:
-                cpu.mmu.pagina(val)
+            if self.reg in (0x50, 0x51) and getattr(cpu, 'mmu', None) is not None:
+                cpu.mmu.pagina(val, self.reg - 0x50)
 
     def paleta(self):
         """La ultima tirada de 256 valores seguidos escritos en $41. No tiene por

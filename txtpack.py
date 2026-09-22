@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-txtpack.py — Compresion de texto por diccionario (BPE) para el .bas del CPC,
-en Python puro y sin dependencias. Lo usa cpc_export para tokenizar los
-literales A$="..." (sustituye subcadenas frecuentes por bytes-token 128-255) y
-generar el diccionario que el runtime expande en la rutina PW.
+txtpack.py — Compresion de texto por diccionario (BPE), en Python puro y sin
+dependencias. Nacio para los literales A$="..." del .bas del CPC; hoy la usa el
+motor nativo Z80 (game_engine.build_game_db) para meter todo el texto del juego
+en la base de datos: sustituye las subcadenas frecuentes por bytes-token
+128-255 y genera el diccionario que el motor expande al imprimir.
 
   build_dict(text, ntok)  -> dict  {token_byte: (a, b)}  (merges BPE)
   tokenize(s, dict)       -> bytes (s con las subcadenas sustituidas por tokens)

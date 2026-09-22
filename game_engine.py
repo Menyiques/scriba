@@ -9,7 +9,9 @@ SNOTHERE=6; SNOTCARR=7; SINVEN=8; SEMPTY=9; SNOTAKE=10; SDARK=11; SSCORE=12
 SHEAVY=13
 SSCOREP=14                       # prefijo de "+N puntos" (ADDSCORE)
 SSCORES=15                       # sufijo de "+N puntos"
-NSYS=16
+SFIN=16                          # cierre de partida (END), prefijo de la puntuacion
+SOTRA=17                         # "pulsa una tecla para jugar otra vez"
+NSYS=18
 NRAM=64                          # tamano de las matrices de estado en RAM
 CARRIED=255
 NOWHERE=254
@@ -22,9 +24,10 @@ EOP={'END':0,'CONST':1,'VAR':2,'ADD':3,'SUB':4,'EQ':5,'NE':6,'LT':7,'GT':8,
  'AND':9,'OR':10,'NOT':11,'AT':12,'NOTAT':13,'ZERO':14,'NOTZERO':15,'DARK':16,
  'CARRIED':17,'PRESENT':18,'ABSENT':19,'NOTCARR':20,
  'ISAT':21,'CHANCE':22,'WORN':23,'NOTWORN':24,'VERB':25,'NOUN1':26,
- 'TIMER':27,'HASOBJOPEN':28,'NOUN2':29,'ISIN':30}
+ 'TIMER':27,'HASOBJOPEN':28,'NOUN2':29,'ISIN':30,'ENTERED':31}
 # condacts extra: LETX (var,expr) e IF (expr -> salta cuerpo si falso)
-COP_EXTRA={'SHOWPIC':50,'PRVAR':51,
+COP_EXTRA={'SHOWPIC':50,'PRVAR':51,'ENDGAME':52,
+ 'BRIGHT':53,'FLASH':54,'INVERSE':55,'SAMPLE':56,'QUIT':57,
  'LETX':26,'IF':27,'JMP':28,
  'INK':29,'PAPER':30,'BORDER':31,'PAUSE':32,'CLS':33,
  'WEAR':34,'REMOVE':35,'LIT':36,'UNLIT':37,'SCORE':38,
@@ -256,7 +259,28 @@ start:  call  init
         call  run_proc
         call  describe
         call  mainloop
-        ret
+gameover:                      ; etiqueta para el arnes de pruebas: aqui, y solo
+        ; aqui, se sabe que la partida ha terminado (antes solo se notaba porque
+        ; 'start' hacia RET, y ya no lo hace).
+        ; Se acabo la partida. Volver aqui con un RET deja al jugador en el
+        ; BASIC de la maquina -- en Next, el copyright de Sinclair Research; en
+        ; cinta, teniendo que recargar -- que es lo que hacia hasta la v2.53.
+        ; Una aventura de los ochenta ofrece otra partida, y eso es 'jp start':
+        ; init reinicia variables, objetos y temporizadores desde la base de
+        ; datos, que es lo mismo que hace el #RESET del modo prueba.
+        call  newline
+        ld    de,SOTRA
+        call  print_msg
+        call  KMW
+        ; Pantalla limpia antes de volver: si no, la portada del 128/Next se
+        ; levanta sobre el texto de la partida anterior y, en el 48K -- que no
+        ; tiene portada que repintar -- la partida nueva empieza debajo del
+        ; "FIN DEL JUEGO" de la anterior.
+        ld    a,12
+        call  TXTO
+        xor   a
+        ld    (col),a
+        jp    start
 
 init:   ld    hl,(DBB+0)
         ld    (dictidx),hl
@@ -442,14 +466,22 @@ mainloop:
         call  parse
         ld    hl,(beforep)
         call  run_proc
+        ld    a,(quitf)      ; END dentro de before_turn: se acabo aqui mismo,
+        or    a              ; igual que hace el interprete de PC
+        jr    nz,ml_fin
         call  dispatch
+        ld    a,(quitf)      ; END dentro de una respuesta (o el verbo SALIR):
+        or    a              ; ni after_turn ni temporizadores
+        jr    nz,ml_fin
         ld    hl,(afterp)
         call  run_proc
+        ld    a,(curloc)      ; cerrado el turno, ya no es "recien entrado"
+        ld    (prevloc),a
         call  tick_timers
         ld    a,(quitf)
         or    a
         jr    z,mainloop
-        ret
+ml_fin: ret
 
 dispatch:
         call  run_response
@@ -2143,7 +2175,7 @@ rc_loop:
         cp    e
         jr    nc,rc_end
 rc_go:  call  getop
-        cp    52
+        cp    58
         jr    nc,rc_loop
         add   a,a
         ld    e,a
@@ -2317,6 +2349,26 @@ c_score:
         call  print_dec
         call  newline
         jp    rc_loop
+
+; ENDGAME (el condact END del autor): cierra la partida. Imprime el remate con
+; la puntuacion y levanta quitf, que es lo que mira mainloop para salir. Hasta
+; v2.53 END se compilaba a DONE, que solo significa "esta entrada ha acertado,
+; siguiente turno": el texto del final salia y el juego seguia, asi que en
+; maquina real ninguna aventura terminaba nunca.
+c_endgame:
+        call  newline
+        call  getop          ; indice del flag PUNTOS
+        call  flag_addr
+        ld    a,(hl)
+        push  af
+        ld    de,SFIN
+        call  print_msg
+        pop   af
+        call  print_dec
+        call  newline
+        ld    a,1
+        ld    (quitf),a
+        jp    rc_loop
 c_tstart:
         call  getop
         ld    (ctmp),a
@@ -2448,7 +2500,7 @@ eval_expr:
         xor   a
         ld    (esp),a
 ev_l:   call  getop
-        cp    31
+        cp    32
         jr    nc,ev_l
         add   a,a
         ld    e,a
@@ -2554,6 +2606,17 @@ ex_not: call  e_pop
         or    a
         jp    z,ex_t
         jp    ex_f
+; ENTERED: cierto si el jugador ha cambiado de sala en este turno. Es lo que
+; permite compilar los on_enter del autor sin tocar el formato de la base de
+; datos: nativecc los sintetiza en after_turn con este predicado delante.
+; prevloc arranca a 255 para que la sala inicial tambien cuente como entrada.
+ex_entered:
+        ld    a,(curloc)
+        ld    hl,prevloc
+        cp    (hl)
+        jp    nz,ex_t
+        jp    ex_f
+
 ex_at:  call  getop
         ld    hl,curloc
         cp    (hl)
@@ -2743,7 +2806,7 @@ ex_f:   xor   a
 ETAB:   defw ex_end,ex_const,ex_var,ex_add,ex_sub,ex_eq,ex_ne,ex_lt,ex_gt,ex_and
         defw ex_or,ex_not,ex_at,ex_notat,ex_zero,ex_nzero,ex_dark,ex_carr,ex_pres,ex_abs,ex_ncar
         defw ex_isat,ex_chance,ex_worn,ex_nworn,ex_verb,ex_noun1,ex_timer,ex_hasopen
-        defw ex_noun2,ex_isin
+        defw ex_noun2,ex_isin,ex_entered
 ; c_prvar: imprime el valor de una variable en decimal, donde este el cursor.
 ; Es la mitad que le faltaba a PRINT "...{_VARIABLE}...": nativecc parte el
 ; texto por las llaves y va alternando trozo de mensaje y variable.
@@ -2794,6 +2857,45 @@ c_paper:
         ld    a,0
         call  SCRINK
         jp    rc_loop
+; BRIGHT / FLASH / INVERSE: atributos de pantalla del Spectrum. Los tres pasan
+; por SCRATTR, que los resuelve cada plataforma: en Spectrum y Next son bits del
+; atributo (y el impresor complementa el glifo para INVERSE), y en el CPC, que
+; no los tiene, SCRATTR es un RET. Hasta v2.53 estos tres condacts ni existian
+; en el motor nativo: nativecc los rechazaba y Apolo 11 los perdia.
+;   A = 0 BRIGHT, 1 FLASH, 2 INVERSE     C = valor (0/1)
+c_bright:
+        call  getop
+        ld    c,a
+        xor   a
+        call  SCRATTR
+        jp    rc_loop
+c_flash:
+        call  getop
+        ld    c,a
+        ld    a,1
+        call  SCRATTR
+        jp    rc_loop
+c_inverse:
+        call  getop
+        ld    c,a
+        ld    a,2
+        call  SCRATTR
+        jp    rc_loop
+
+; SAMPLE n: reproduce la muestra digitalizada n (1-based) por el AY. Como
+; BRIGHT y compania, va por un simbolo de plataforma: donde no hay AY -- el 48K
+; y el CPC -- SMPPLAY es un RET y el condact no hace nada.
+c_sample:
+        call  getop
+        call  SMPPLAY
+        jp    rc_loop
+
+; QUIT: acaba la partida SIN el remate que imprime END. Es lo que hace el
+; interprete de PC (running = False y ya), y lo que hace el verbo SALIR.
+c_quit: ld    a,1
+        ld    (quitf),a
+        jp    rc_loop
+
 c_border:
         call  getop           ; BORDER n: color del borde
         ld    b,a
@@ -2932,12 +3034,30 @@ CTAB:   defw c_at,c_notat,c_present,c_absent,c_carried,c_notcarr,c_zero,c_notzer
         defw c_score,c_tstart,c_tstop,c_treset
         defw c_open,c_close,c_lock,c_unlock,c_putin,c_takeout
         defw c_play,c_addscore
-        defw c_showpic,c_prvar
+        defw c_showpic,c_prvar,c_endgame
+        defw c_bright,c_flash,c_inverse,c_sample,c_quit
 
 show_title:
         ld    a,(hastitle)
         or    a
         ret   z
+        ; La portada la deja puesta el cargador BASIC (MODE 0 + LOAD"TITLE.SCR"),
+        ; asi que la primera vez ya esta en pantalla y aqui solo hay que ponerle
+        ; la paleta y la musica. Al acabar una partida y empezar otra ya no esta:
+        ; el juego ha escrito encima. Entonces hay que volver al Modo 0 y
+        ; recargarla del disco -- que es lo que el CPC hace de todas formas con
+        ; las imagenes de las salas. Si no hay disco, se sigue sin portada en vez
+        ; de dejar al jugador mirando una pantalla en blanco con musica.
+        ld    a,(titdone)
+        or    a
+        jr    z,st_puesta
+        xor   a
+        call  SCRMODE         ; Modo 0: la portada son 16 colores
+        call  st_load
+        jr    nc,st_done      ; sin disco: Modo 2, pantalla limpia y a jugar
+st_puesta:
+        ld    a,1
+        ld    (titdone),a
         call  set_title_pal
         ld    a,(hasmusic)
         or    a
@@ -2990,6 +3110,23 @@ st_done:
         ld    a,12
         call  TXTO
         ret
+
+; st_load: TITLE.SCR -> pantalla (&C000, 16K en Modo 0). CF=1 ok, CF=0 no esta.
+; Mismo camino que sli_loadfile para las imagenes de sala, pero sin pasar por
+; imgbuf: la portada no va comprimida, va tal cual a la pantalla.
+st_load:
+        ld    b,9
+        ld    hl,ftitle
+        ld    de,(hdrbufp)
+        call  CASOPEN
+        ret   nc
+        ld    hl,&C000
+        call  CASDIR
+        call  CASCLOSE
+        scf
+        ret
+titdone: defb 0               ; 0 = la portada sigue siendo la que cargo el BASIC
+
 set_title_pal:
         ld    hl,(titlepal)
         ld    a,h
@@ -3106,6 +3243,7 @@ mblk:     defw 0
 hdrbufp:  defw 0
 imgbufp:  defw 0
 locslotp: defw 0
+prevloc:  defb 255
 vnamep:   defw 0
 has128:   defb 0
 curslot:  defb 0
@@ -3138,6 +3276,19 @@ TCUR:     defs 16
 TACT:     defs 16
 BUF:      defs 1024
 '''
+
+CPC_PLAT_ASM = r'''
+; ===========================================================================
+;  Añadido SOLO para el Amstrad CPC
+; ===========================================================================
+; El CPC no tiene atributos de brillo ni parpadeo, ni impresion inversa. El
+; condact se compila igual en las cuatro maquinas -- la base de datos es la
+; misma -- y aqui simplemente no hace nada. En Spectrum, 128K y Next, SCRATTR
+; es una etiqueta de la capa de plataforma (next_nativo.PLAT_ASM).
+SCRATTR: ret
+SMPPLAY: ret
+'''
+
 
 def assemble_engine(org=ORG, db_base=DB):
     import z80asm
@@ -3189,9 +3340,11 @@ def assemble_engine(org=ORG, db_base=DB):
     L.append('SHEAVY equ %d'%SHEAVY)
     L.append('SSCOREP equ %d'%SSCOREP)
     L.append('SSCORES equ %d'%SSCORES)
+    L.append('SFIN equ %d'%SFIN)
+    L.append('SOTRA equ %d'%SOTRA)
     L.append('CARRIED equ %d'%CARRIED)
     L.append('NOWHERE equ %d'%NOWHERE)
     L.append('WORN equ %d'%WORN)
     L.append('CONTAINED equ %d'%CONTAINED)
     prefix=chr(10).join(L)+chr(10)
-    return z80asm.assemble(prefix+ENGINE_ASM, org=org)
+    return z80asm.assemble(prefix+ENGINE_ASM+CPC_PLAT_ASM, org=org)

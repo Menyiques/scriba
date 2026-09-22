@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-spectrum_export.py — Exporta un juego Scriba (dict/YAML) a ZX BASIC (Boriel)
-para ZX Spectrum 48K, con transpilador de condacts y compresion de textos
-por diccionario (tokens 1-2 bytes + pack DEFM accedido por PEEK).
+spectrum_export.py — Dos modulos en un fichero, y solo uno sigue vivo.
 
-Uso CLI:    python spectrum_export.py juego.yaml salida.bas
-Desde el editor: from spectrum_export import export_bas; export_bas(game, path)
+LO QUE SE USA: la recoleccion del juego (`recolecta`), el troceado de parrafos,
+la translitracion y las tablas de acentos, el lector de PSG y el reproductor de
+musica, el simulador de dzx0 y la conversion de imagenes. De aqui tiran los
+cinco exportadores nativos (CPC, 48K, 128K, Next) y todos los verificadores.
+
+LO QUE NO: el transpilador a ZX BASIC (Boriel) y su empaquetado de .tap. Desde
+la v2.54 no lo llama nadie -- el menu del editor y los empaquetadores que lo
+acompanaban se retiraron -- y los ficheros a los que hace referencia
+(empaqueta48.py, empaqueta128.py) ya no existen. Se queda aqui hasta que se
+separe lo de arriba en su propio modulo; mientras tanto, no es codigo que
+funcione, es codigo que espera la mudanza.
+
+Uso CLI:    python spectrum_export.py juego.yaml salida.bas   (heredado, roto)
 
 Compilar el resultado:
   zxb --tap --BASIC --autorun --org 24000 --heap-size 1792 -O2 salida.bas

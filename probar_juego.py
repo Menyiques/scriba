@@ -94,6 +94,7 @@ class Juego:
         tec = vn.Teclado(cpu, mem, self.sym)
         cpu.pc = pc
         self.cpu, self.mem, self.tec = cpu, mem, tec
+        self.marca_fin(sp)
         fr = self.sym.get('nxframe')
         soltar = False
         n = 0
@@ -126,14 +127,36 @@ class Juego:
                 out.append(ch)
         return ''.join(out).strip()
 
+    FIN = 0xFFFE          # sentinela antigua, por si el motor no trae etiqueta
+
+    def marca_fin(self, sp):
+        """Deja el arnes listo para reconocer el fin de la partida.
+
+        Desde la v2.53 el motor ya no vuelve al BASIC cuando se acaba el juego:
+        ofrece otra partida y hace 'jp start'. Asi que la vieja sentinela en la
+        pila ya no se pisa nunca, y lo que se vigila es la etiqueta 'gameover',
+        justo despues del 'call mainloop'. Se llega a ella con la pantalla del
+        final todavia puesta, antes del "pulsa una tecla", que es exactamente lo
+        que la prueba quiere leer. La sentinela se sigue dejando en la pila por
+        si se juega con un motor viejo."""
+        self.mem[sp] = self.FIN & 0xFF
+        self.mem[sp + 1] = (self.FIN >> 8) & 0xFF
+        self.fin = self.sym.get('gameover', self.FIN)
+        self._acabado = False
+
     def escribe(self, orden):
         texto = self.tecleable(orden)
         if not texto:
             raise ValueError('orden vacia o no tecleable: %r' % orden)
+        if getattr(self, '_acabado', False):
+            return self.pantalla()        # la partida ya termino; no hay turno
         # margen amplio: una respuesta larga se escribe a 4 caracteres por
         # barrido y puede pararse varias veces a esperar tecla
         if not vn.teclea(self.cpu, self.sym, self.tec, texto + chr(13),
-                         tope=40000000):
+                         tope=40000000, fin=self.fin):
+            if self.cpu.pc == self.fin or self.mem[self.sym['quitf']]:
+                self._acabado = True
+                return self.pantalla()
             raise RuntimeError('se colgo escribiendo: %s' % orden)
         return self.pantalla()
 

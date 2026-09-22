@@ -174,7 +174,13 @@ def compile_stmt(ln, up, ctx):
         except: n=1
         # suma n a PUNTOS y muestra "[+n puntos]" (c_addscore en el motor).
         return bytes([ge.COP_EXTRA['ADDSCORE'], ctx.var('PUNTOS'), n&0xFF])
-    if up.startswith('MATCH') or up.startswith('END'): return bytes([COP['DONE']])
+    # MATCH y END NO son lo mismo. MATCH dice "esta entrada ha acertado, no
+    # sigas mirando" (DONE). END acaba la partida, y hasta v2.53 se compilaba
+    # tambien a DONE: el texto del final salia y el juego seguia pidiendo
+    # ordenes, o sea que en maquina real no habia forma de terminar.
+    if up.startswith('MATCH'): return bytes([COP['DONE']])
+    if up == 'END' or up.startswith('END '):     # END exacto: ni ENDIF ni ENDON
+        return bytes([ge.COP_EXTRA['ENDGAME'], ctx.var('PUNTOS')])
     # --- comandos de pantalla/tiempo: equivalentes CPC en el motor nativo ---
     # Color Spectrum (0-7) -> color firmware CPC mas parecido (versiones vivas).
     _ZX2CPC = (0, 2, 6, 8, 18, 20, 24, 26)
@@ -193,6 +199,28 @@ def compile_stmt(ln, up, ctx):
         n=_ints(ln[5:]); return bytes([CX['PAPER'], _col(n[0]) if n else 0])
     if up.startswith('INK'):
         n=_ints(ln[3:]); return bytes([CX['INK'], _col(n[0]) if n else 26])
+    # Tres condacts que el motor lleva soportando desde siempre -- sus opcodes
+    # estan en COP -- y que nadie habia cableado al lenguaje del autor: se
+    # compilaban a NADA y la sentencia desaparecia del binario con un aviso que
+    # no siempre se ve.
+    if up == 'DESC' or up.startswith('DESC '):
+        return bytes([COP['DESC']])
+    if up == 'NEWLINE' or up.startswith('NEWLINE '):
+        return bytes([COP['NEWLINE']])
+    if up == 'QUIT' or up.startswith('QUIT '):
+        return bytes([CX['QUIT']])
+    if up.startswith('SAMPLE'):
+        import fx_engine
+        idx = fx_engine.fx_index(getattr(ctx, 'smplist', []), ln[6:].strip())
+        if not idx:
+            ctx.warnings.append('SAMPLE: muestra no encontrada %r' % ln[6:].strip())
+        return bytes([CX['SAMPLE'], idx & 0xFF])
+    if up.startswith('BRIGHT'):
+        n=_ints(ln[6:]); return bytes([CX['BRIGHT'], 1 if (n and n[0]) else 0])
+    if up.startswith('FLASH'):
+        n=_ints(ln[5:]); return bytes([CX['FLASH'], 1 if (n and n[0]) else 0])
+    if up.startswith('INVERSE'):
+        n=_ints(ln[7:]); return bytes([CX['INVERSE'], 1 if (n and n[0]) else 0])
     if up.startswith('PAUSE'):
         n=_ints(ln[5:]); return bytes([CX['PAUSE'], (n[0] & 0xFF) if n else 0])
     if up.startswith('CLS'):
@@ -395,6 +423,7 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False):
     ctx.nouns={w.upper():nid for w,nid in c.nounalias.items()}
     ctx.timers={str(tid).upper():i for i,tid in enumerate(getattr(c,'timids',[]))}
     ctx.fxlist=(g.get('fx') or [])      # para resolver PLAY "nombre" -> índice
+    ctx.smplist=(g.get('samples') or [])   # idem para SAMPLE "nombre"
     # vocabulario
     vocab=[]
     for w,vid in c.verbalias.items(): vocab.append((w, vid, 2 if vid<=6 else 0))
@@ -409,6 +438,31 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False):
     responses=compile_responses(cd.get('responses','') or '', ctx, vocab_id)
     before=compile_lines((cd.get('before_turn','') or '').split('\n'), ctx)
     after=compile_lines((cd.get('after_turn','') or '').split('\n'), ctx)
+    # on_enter de cada localizacion. El motor nativo no tiene tabla de procs por
+    # sala -- eso obligaria a tocar el formato de la base de datos, que comparten
+    # las cuatro maquinas -- asi que se sintetizan aqui, al final de after_turn,
+    # con el predicado ENTERED delante: "si he cambiado de sala en este turno y
+    # estoy en @x, corre el on_enter de @x".
+    #
+    # Hasta la v2.53 on_enter NO se compilaba: lo miraban el interprete de PC y
+    # el camino BASIC, y en las cuatro maquinas nativas no se ejecutaba nunca.
+    # Un juego que lo usara se comportaba distinto en PC sin decir nada.
+    #
+    # Diferencia que queda con el interprete: alli el on_enter corre DURANTE el
+    # movimiento y aqui al cerrar el turno, o sea despues del resto de after_turn.
+    for _nom, _lid in loc_by_id:
+        _oe = (g['locations'][_nom] or {}).get('on_enter')
+        if isinstance(_oe, (list, tuple)):
+            _oe = chr(10).join(str(x) for x in _oe)
+        if not (_oe or '').strip():
+            continue
+        _cuerpo = compile_lines(str(_oe).split(chr(10)), ctx)
+        if not _cuerpo:
+            continue
+        _cond = ge.enc_expr([('ENTERED',), ('AT', _lid - 1), ('AND',)])
+        # mismo formato que emite compile_lines para un IF: [27, len(cuerpo)]
+        # + condicion + cuerpo
+        after += bytes([ge.COP_EXTRA['IF'], len(_cuerpo)]) + _cond + _cuerpo
     onstart=compile_lines((cd.get('on_start','') or '').split('\n'), ctx)
     # Inicializa las variables a su valor inicial al arrancar. El motor pone todos
     # los flags a 0, pero el juego espera valores como HORA_H=3 o LLEVAR_MAX=100.

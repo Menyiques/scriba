@@ -521,13 +521,16 @@ class ScribaEditor:
         fm.add_separator()
         fm.add_command(label="Validar juego",
                        command=lambda: self._run_validation(silent=False))
+        # Las cuatro maquinas van por el MOTOR NATIVO Z80: se compilan aqui,
+        # en Python puro. Desde la v2.54 no hay otro camino: el que pasaba por
+        # ZX BASIC (Boriel + zxbc) se retiro con sus exportadores.
         fm.add_command(label="Exportar ZX Spectrum 48K (.tap)…",
-                       command=lambda: self._export_spectrum('48k'))
+                       command=lambda: self._export_spectrum_nativo('48'))
         fm.add_command(label="Exportar ZX Spectrum 128K (.tap)…",
-                       command=lambda: self._export_spectrum('128k'))
-        fm.add_command(label="Exportar ZX Spectrum Next (.nex, motor nativo)…",
+                       command=lambda: self._export_spectrum_nativo('128'))
+        fm.add_command(label="Exportar ZX Spectrum Next (.nex)…",
                        command=self._export_next_nativo)
-        fm.add_command(label="Exportar Amstrad CPC (.dsk, motor nativo)…",
+        fm.add_command(label="Exportar Amstrad CPC (.dsk)…",
                        command=lambda: self._export_cpc_nativo(2))
         fm.add_command(label="Exportar para Windows (.exe)…",
                        command=self._export_windows)
@@ -537,8 +540,6 @@ class ScribaEditor:
         fm.add_command(label="Importar literales traducidos (CSV → YAML)…",
                        command=self._import_literales)
         fm.add_separator()
-        fm.add_command(label="Configuración de compilación (TAP)…",
-                       command=self._build_config_dialog)
         self._zx_cols = tk.IntVar(value=42)
         cm = tk.Menu(fm, tearoff=0)
         fm.add_cascade(label="Columnas de texto ZX", menu=cm)
@@ -817,6 +818,7 @@ class ScribaEditor:
         self._build_vars_tab()
         self._build_timers_tab()
         self._build_fx_tab()
+        self._build_smp_tab()
         self._build_condacts_tab()
         self._build_crossref_tab()
         self._build_problems_tab()
@@ -4409,6 +4411,158 @@ class ScribaEditor:
             ttk.Button(bb, text=txt, width=9, command=cmd).pack(side=tk.LEFT, padx=1)
         ttk.Button(bb, text='▶ Probar', command=self._fx_play).pack(side=tk.RIGHT, padx=1)
 
+    # ─── Muestras digitalizadas ──────────────────────────────────────────
+    #
+    # Un WAV se convierte a niveles de volumen del AY (4 bits, curva
+    # logaritmica del chip) y se guarda en el .yaml como hex. Solo suena en
+    # 128K y Next, que son las maquinas con AY; en 48K y CPC el condact existe
+    # y no hace nada. Ojo al presupuesto: bloquea el turno mientras suena y se
+    # come los bancos a razon de 5,5 KB por segundo.
+
+    TOPE_BANCOS_128 = 5 * 16384
+
+    def _build_smp_tab(self):
+        fr = ttk.Frame(self.nb)
+        self.nb.add(fr, text=' Muestras ')
+        left = ttk.Frame(fr)
+        left.pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=4)
+        ttk.Label(left, text='Muestras (úsalas con SAMPLE "nombre"):').pack(anchor=tk.W)
+        self.smp_list = tk.Listbox(left, width=30, height=16,
+                                   exportselection=False, font=self.fnt_code)
+        self.smp_list.pack(fill=tk.Y, expand=True)
+        self.smp_list.bind('<Double-Button-1>', lambda e: self._smp_play())
+        b1 = ttk.Frame(left)
+        b1.pack(fill=tk.X, pady=(4, 0))
+        ttk.Button(b1, text='Importar WAV…', command=self._smp_import).pack(
+            side=tk.LEFT, padx=1)
+        ttk.Button(b1, text='▶ Probar', command=self._smp_play).pack(
+            side=tk.LEFT, padx=1)
+        b2 = ttk.Frame(left)
+        b2.pack(fill=tk.X, pady=(2, 0))
+        for txt, cmd in (('Renombrar', self._smp_rename), ('Borrar', self._smp_del)):
+            ttk.Button(b2, text=txt, width=12, command=cmd).pack(side=tk.LEFT, padx=1)
+        right = ttk.Frame(fr)
+        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4, pady=4)
+        ttk.Label(right, text='Sonido digitalizado por el AY',
+                  font=self.fnt_bold).pack(anchor=tk.W)
+        ttk.Label(right, font=self.fnt_sm, justify=tk.LEFT, text=(
+            'El AY no tiene DAC: se usa su registro de volumen como uno de 4 bits.\n'
+            'Suena en 128K y Next. En 48K y CPC no hay AY y SAMPLE no hace nada.\n'
+            '\n'
+            'Mientras suena, el juego se PARA: sirve para un golpe corto, no para\n'
+            'ambiente. Y ocupa: a 11 kHz son 5,5 KB por segundo, de los bancos que\n'
+            'comparte con las imágenes.\n'
+            '\n'
+            '▶ Probar reproduce los MISMOS 16 niveles que oirás en la máquina,\n'
+            'no el WAV original: si aquí suena mal, allí sonará peor.'
+        )).pack(anchor=tk.W, pady=(0, 6))
+        self.smp_info = ttk.Label(right, text='', font=self.fnt_code,
+                                  justify=tk.LEFT)
+        self.smp_info.pack(anchor=tk.W)
+        self.smp_bar = ttk.Label(right, text='', font=self.fnt_sm)
+        self.smp_bar.pack(anchor=tk.W, pady=(8, 0))
+        self._smp_refresh()
+
+    def _smp_all(self):
+        smp = self.game.setdefault('samples', [])
+        if not isinstance(smp, list):
+            smp = []
+            self.game['samples'] = smp
+        return smp
+
+    def _smp_refresh(self):
+        if not hasattr(self, 'smp_list'):
+            return
+        self.smp_list.delete(0, tk.END)
+        total = 0
+        for m in self._smp_all():
+            nb = len(m.get('data', '')) // 2
+            total += nb
+            hz = int(m.get('hz', 11025))
+            self.smp_list.insert(tk.END, '%-16s %4.2fs %5dB' % (
+                str(m.get('name', '?'))[:16], (nb * 2) / float(hz), nb))
+        libre = self.TOPE_BANCOS_128 - total
+        self.smp_bar.config(text=(
+            'Total: %d bytes en %d muestra(s).  En 128K los bancos son %d bytes '
+            'y los comparten con las imágenes.' % (total, len(self._smp_all()),
+                                                   self.TOPE_BANCOS_128)))
+        self.smp_info.config(text='' if not self._smp_all() else
+                             'Quedarían %d bytes de banco si el juego no '
+                             'llevara imágenes.' % max(0, libre))
+
+    def _smp_sel(self):
+        s = self.smp_list.curselection()
+        return s[0] if s else -1
+
+    def _smp_import(self):
+        ruta = filedialog.askopenfilename(
+            title='Importar WAV', filetypes=[('WAV', '*.wav'), ('Todos', '*.*')])
+        if not ruta:
+            return
+        try:
+            import sample_ay
+            import wav2ay
+            # al ritmo REAL del reproductor Z80, no al nominal: el bucle marca
+            # el compás y si no coinciden la muestra sale desafinada
+            _nb, _na, real = sample_ay.plan(11025)
+            hz = int(round(real))
+            datos, nmuestras, info = wav2ay.convierte(ruta, hz=hz)
+        except Exception as e:
+            messagebox.showerror('Importar WAV', str(e))
+            return
+        if len(datos) > 16384:
+            messagebox.showerror(
+                'Importar WAV',
+                'La muestra ocupa %d bytes y en un banco caben 16384 (unos 2,9 s '
+                'a %d Hz).\nRecórtala antes de importarla.' % (len(datos), hz))
+            return
+        nombre = os.path.splitext(os.path.basename(ruta))[0].lower()[:16]
+        self._smp_all().append({'name': nombre, 'hz': hz, 'data': datos.hex()})
+        self._smp_refresh()
+        self.dirty = True
+        self.sv_status.set('Muestra "%s": %d bytes, %.2f s a %d Hz'
+                           % (nombre, len(datos), nmuestras / float(hz), hz))
+
+    def _smp_play(self):
+        i = self._smp_sel()
+        if i < 0:
+            return
+        m = self._smp_all()[i]
+        try:
+            import wav2ay
+            self._play_wav_bytes(wav2ay.wav_de_datos(
+                bytes.fromhex(m.get('data', '')), int(m.get('hz', 11025))))
+        except Exception as e:
+            messagebox.showinfo('Muestras', 'No se pudo reproducir: %s' % e)
+
+    def _smp_rename(self):
+        i = self._smp_sel()
+        if i < 0:
+            return
+        m = self._smp_all()[i]
+        nuevo = simpledialog.askstring('Renombrar muestra', 'Nombre:',
+                                       initialvalue=m.get('name', ''),
+                                       parent=self.root)
+        if nuevo:
+            m['name'] = nuevo.strip()[:16]
+            self._smp_refresh()
+            self.dirty = True
+
+    def _smp_del(self):
+        i = self._smp_sel()
+        if i < 0:
+            return
+        m = self._smp_all()[i]
+        if not messagebox.askyesno('Borrar muestra',
+                                   '¿Borrar "%s"?\n\nLos SAMPLE que la usen '
+                                   'dejarán de sonar.' % m.get('name', '')):
+            return
+        # NO se renumera: los índices de SAMPLE que ya estén compilados siguen
+        # apuntando a su ranura, igual que hace la tabla de FX.
+        del self._smp_all()[i]
+        self._smp_refresh()
+        self.dirty = True
+
     def _fx_all(self):
         fx = self.game.setdefault('fx', [])
         if not isinstance(fx, list):
@@ -4426,6 +4580,7 @@ class ScribaEditor:
                                 % (i, tag, e.get('name', 'efecto')))
         self._fx_cur = -1
         self._fx_load_blocks()
+        self._smp_refresh()      # las dos pestanas de sonido se recargan juntas
 
     def _fx_select(self):
         s = self.fx_list.curselection()
@@ -5606,135 +5761,6 @@ class ScribaEditor:
         except Exception as e:
             messagebox.showerror('Error al guardar', str(e))
 
-    # ── Compilación automática a .TAP ──────────────────────────────────────
-    _BUILD_DEFAULTS = {
-        'auto_tap': True,
-        # Auto-contenido: usa el zxbc.exe y el python embebidos en <Scriba>/zxbasic/
-        # (no depende del PATH ni de un Python del sistema, y funciona en cualquier PC).
-        # {zxdir} = carpeta zxbasic empaquetada con Scriba (ruta absoluta). Antes
-        # se usaba .\zxbasic (relativo), pero ahora el .bas se compila en
-        # <juego>/temp, asi que la ruta a zxbc debe ser absoluta.
-        'cmd_48': (r'"{zxdir}\zxbc.exe" --org 24576 --heap-size 4096 --array-base=0 '
-                   r'--string-base=0 -O2 -M memory.txt "{bas}" && '
-                   r'"{zxdir}\python\python.exe" empaqueta48.py "{base}.bin" "{tap}" 24576'),
-        'cmd_128_compile': (r'"{zxdir}\zxbc.exe" --org 24576 --heap-size 4096 '
-                            r'--array-base=0 --string-base=0 -O2 -M memory.txt "{bas}"'),
-        'cmd_128_pack': r'"{zxdir}\python\python.exe" empaqueta128.py "{bin}" "{texto}" "{tap}" 24576',
-        # ZX Spectrum Next (SELF-CONTAINED, sin NextBuild ni NextLib):
-        #   1) se compila el .bas con zxbc PELADO a un binario crudo en org
-        #      $8000 (--arch zxnext).
-        #   2) empaqueta_nex.py (junto al editor) construye el .nex propio:
-        #      motor en banco 2, sysvars.bin en banco 10, y cada imagen
-        #      (.nxi de data/) en su banco 16K segun el manifiesto "<bas>.banks".
-        # {nb} = carpeta donde estan zxbc y Tools\sysvars.bin (vale la de
-        # NextBuild, que ya trae un zxbc bundle, o cualquier zxbasic).
-        'auto_nex': True,
-        'nextbuild_dir': '.',
-        'cmd_next_compile': (r'"{nb}\zxbasic\python\python.exe" '
-                             r'"{nb}\zxbasic\zxbc.py" --arch zxnext -O2 '
-                             r'--org 32768 --heap-size 4096 --array-base=0 '
-                             r'--string-base=0 -o "{bin}" "{bas}"'),
-        'sysvars': r'{nb}\Tools\sysvars.bin',
-    }
-
-    def _build_cfg_path(self):
-        # Congelado (PyInstaller): junto al .exe; si no, junto a editor.py
-        base = (os.path.dirname(sys.executable) if getattr(sys, 'frozen', False)
-                else os.path.dirname(os.path.abspath(__file__)))
-        return os.path.join(base, 'scriba_build.json')
-
-    def _build_cfg(self):
-        cfg = dict(self._BUILD_DEFAULTS)
-        try:
-            with open(self._build_cfg_path(), encoding='utf-8') as f:
-                cfg.update(json.load(f))
-        except Exception:
-            pass
-        return cfg
-
-    def _save_build_cfg(self, cfg):
-        try:
-            with open(self._build_cfg_path(), 'w', encoding='utf-8') as f:
-                json.dump(cfg, f, ensure_ascii=False, indent=2)
-            self.sv_status.set('Configuración de compilación guardada')
-        except Exception as e:
-            messagebox.showerror('Error', str(e))
-
-    def _build_config_dialog(self):
-        cfg = self._build_cfg()
-        win = tk.Toplevel(self.root)
-        win.title('Configuración de compilación (TAP)')
-        win.transient(self.root)
-        win.grab_set()
-        auto = tk.BooleanVar(value=cfg.get('auto_tap', True))
-        ttk.Checkbutton(win, text='Generar el .TAP automáticamente al exportar',
-                        variable=auto).grid(row=0, column=0, columnspan=2,
-                                            sticky=tk.W, padx=10, pady=(10, 6))
-        rows = [('48K — zxbc:', 'cmd_48'),
-                ('128K — zxbc (compilar):', 'cmd_128_compile'),
-                ('128K — empaquetar:', 'cmd_128_pack')]
-        entries = {}
-        for i, (lab, key) in enumerate(rows, start=1):
-            ttk.Label(win, text=lab).grid(row=i, column=0, sticky=tk.W,
-                                          padx=10, pady=3)
-            e = tk.Entry(win, width=74, font=self.fnt_ui)
-            e.insert(0, cfg.get(key, ''))
-            e.grid(row=i, column=1, sticky=tk.EW, padx=10, pady=3)
-            entries[key] = e
-        # Next: carpeta donde esta zxbasic (con zxbc). Por defecto "." (directorio
-        # actual); ademas siempre se prueba el zxbasic empaquetado con Scriba.
-        ttk.Label(win, text='Next — carpeta zxbasic:').grid(
-            row=4, column=0, sticky=tk.W, padx=10, pady=3)
-        nbf = ttk.Frame(win)
-        nbf.grid(row=4, column=1, sticky=tk.EW, padx=10, pady=3)
-        nb_entry = tk.Entry(nbf, font=self.fnt_ui)
-        nb_entry.insert(0, cfg.get('nextbuild_dir', '.'))
-        nb_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-        def _examinar_nb():
-            from tkinter import filedialog
-            d = filedialog.askdirectory(
-                title='Carpeta que contiene zxbasic/ con zxbc',
-                parent=win)
-            if d:
-                nb_entry.delete(0, tk.END)
-                nb_entry.insert(0, d)
-        ttk.Button(nbf, text='Examinar…', command=_examinar_nb).pack(
-            side=tk.LEFT, padx=(4, 0))
-        ttk.Label(win, foreground='#667788', justify=tk.LEFT,
-                  text='Variables: {bas} {bin} {texto} {tap} {base}   (rutas '
-                       'relativas a la carpeta del .bas). El 48K usa el primer '
-                       'comando; el 128K sus dos.\nEsto es solo para 48K y 128K: '
-                       'el Next usa el motor nativo, que compila en Python y no '
-                       'necesita zxbc. Si zxbc no está junto a Scriba (carpeta '
-                       'zxbasic/), indica arriba una carpeta que lo contenga '
-                       '(zxbc.exe, o zxbc.py + python/), o la carpeta zxbasic '
-                       'directamente.'
-                  ).grid(row=5, column=0, columnspan=2, sticky=tk.W,
-                         padx=10, pady=(2, 8))
-        bf = ttk.Frame(win)
-        bf.grid(row=6, column=0, columnspan=2, pady=(0, 10))
-
-        def guardar():
-            nc = dict(cfg)                 # preserva claves no editadas (auto_nex…)
-            nc['auto_tap'] = auto.get()
-            for key, e in entries.items():
-                nc[key] = e.get().strip()
-            nc['nextbuild_dir'] = nb_entry.get().strip()
-            self._save_build_cfg(nc)
-            win.destroy()
-
-        def restaurar():
-            for k, e in entries.items():
-                e.delete(0, tk.END)
-                e.insert(0, self._BUILD_DEFAULTS[k])
-
-        ttk.Button(bf, text='Guardar', command=guardar).pack(side=tk.LEFT, padx=4)
-        ttk.Button(bf, text='Restaurar valores',
-                   command=restaurar).pack(side=tk.LEFT, padx=4)
-        ttk.Button(bf, text='Cancelar', command=win.destroy).pack(side=tk.LEFT, padx=4)
-        win.columnconfigure(1, weight=1)
-
     def _game_root(self):
         """Carpeta raiz del juego = carpeta del .yaml abierto (o None)."""
         return (os.path.dirname(os.path.abspath(self.filepath))
@@ -5795,190 +5821,12 @@ class ScribaEditor:
         name = os.path.splitext(os.path.basename(self.filepath))[0]
         return os.path.join(temp, name + '.bas')
 
-    def _zxbasic_dir(self, cfg):
-        """Carpeta zxbasic ABSOLUTA. Como el .bas se compila en <juego>/temp,
-        la ruta a zxbc NO puede ser relativa. Busca, en orden: junto al editor/
-        .exe, en su carpeta padre (p.ej. .exe en dist\\ y zxbasic al lado de
-        Scriba), y la carpeta configurada (nextbuild_dir, ignorando '.')."""
-        here = (os.path.dirname(sys.executable) if getattr(sys, 'frozen', False)
-                else os.path.dirname(os.path.abspath(__file__)))
-        cands = [os.path.join(here, 'zxbasic'),
-                 os.path.join(os.path.dirname(here), 'zxbasic')]
-        nb = (cfg.get('nextbuild_dir', '') or '').strip()
-        if nb and nb not in ('.', './', '.\\'):
-            cands += [os.path.join(nb, 'zxbasic'), nb]
-        for c in cands:
-            if os.path.isdir(c):
-                return os.path.abspath(c)
-        return os.path.abspath(cands[0])
 
-    @staticmethod
-    def _trunc_psg(stream, maxb):
-        """Recorta un stream PSG a <=maxb en un limite de frame (0xFF) y lo cierra
-        con 0xFD (bucle)."""
-        cut = min(maxb, len(stream))
-        while cut > 0 and stream[cut] != 0xFF:
-            cut -= 1
-        if cut <= 0:
-            return b'\xFD'
-        return stream[:cut] + b'\xFD'
 
-    def _ajusta_musica_ram(self, bas_path, cfg, org=24576, heap=4096, margen=512):
-        """Recorta <base>_musica.bin (incbin de la musica del titulo) a la RAM
-        principal que quede LIBRE tras el motor, para que un MIDI largo no desborde
-        &FFFF y sin gastar bancos. Compila una vez con un stub para medir el codigo,
-        calcula el hueco (65536 - org - codigo - heap - margen) y trunca el PSG a un
-        limite de frame. Devuelve (orig, recortado, hueco) o None si no hay musica."""
-        import subprocess
-        d = os.path.dirname(os.path.abspath(bas_path))
-        base = os.path.splitext(os.path.basename(bas_path))[0]
-        mus = os.path.join(d, 'musica.bin')         # nombre fijo (= incbin del .bas)
-        if not os.path.isfile(mus):
-            return None
-        full = open(mus, 'rb').read()
-        zxbc = self._zxbc_base(cfg)
-        if not zxbc:                                    # sin compilador: corte seguro
-            self._trunc_write(mus, full, 6144)
-            return (len(full), min(len(full), 6145), 6144)
-        stub = b'\xFF\xFD'
-        probe = os.path.join(d, base + '_probe.bin')
-        try:
-            with open(mus, 'wb') as f:
-                f.write(stub)
-            cmd = zxbc + ['--org', str(org), '--heap-size', str(heap),
-                          '--array-base=0', '--string-base=0', '-O2',
-                          '-o', base + '_probe.bin', base + '.bas']
-            r = subprocess.run(cmd, cwd=d, capture_output=True, text=True,
-                               timeout=300)
-            if r.returncode != 0 or not os.path.isfile(probe):
-                self._trunc_write(mus, full, 6144)      # no se pudo medir: corte seguro
-                return (len(full), min(len(full), 6145), 6144)
-            codigo = os.path.getsize(probe) - len(stub)
-            try:
-                os.remove(probe)
-            except OSError:
-                pass
-            hueco = 65536 - org - codigo - heap - margen
-            if hueco < 64:
-                with open(mus, 'wb') as f:
-                    f.write(b'\xFD')                    # sin sitio: silencio
-                return (len(full), 1, 0)
-            self._trunc_write(mus, full, hueco)
-            recb = min(len(full), hueco) + 1
-            return (len(full), recb, hueco)
-        except Exception:
-            self._trunc_write(mus, full, 6144)
-            return (len(full), min(len(full), 6145), 6144)
 
-    def _trunc_write(self, path, full, maxb):
-        with open(path, 'wb') as f:
-            f.write(self._trunc_psg(full, maxb))
 
-    def _run_build(self, modo, bas_path, cfg):
-        """Ejecuta los comandos de compilación en la carpeta del .bas.
-        Devuelve (log, tap_ok, tap_path)."""
-        import subprocess
-        d = os.path.dirname(os.path.abspath(bas_path))
-        base = os.path.splitext(os.path.basename(bas_path))[0]
-        # el .tap final va a <raiz>/dist/<target> (o junto al .bas en el antiguo)
-        raiz, dist = self._dirs_salida(d)
-        os.makedirs(dist, exist_ok=True)
-        plat = '128kb' if modo == '128k' else '48kb'
-        tap_path = os.path.join(dist, self._dist_name(base, plat, 'tap'))
-        tap_rel = os.path.relpath(tap_path, d)
-        # carpeta zxbasic ABSOLUTA (el .bas se compila en <juego>/temp).
-        zxdir = self._zxbasic_dir(cfg)
-        subst = {'bas': base + '.bas', 'bin': base + '.bin',
-                 'texto': base + '_texto.bin', 'tap': tap_rel, 'base': base,
-                 'zxdir': zxdir}
-        cmds = ([cfg.get('cmd_128_compile', ''), cfg.get('cmd_128_pack', '')]
-                if modo == '128k' else [cfg.get('cmd_48', '')])
-        log, ok = [], True
-        for raw in cmds:
-            if not raw.strip():
-                continue
-            # compatibilidad: configs antiguas con .\zxbasic (relativo) -> {zxdir}
-            cmd = raw.replace('.\\zxbasic', '{zxdir}').replace('./zxbasic', '{zxdir}')
-            for k, v in subst.items():
-                cmd = cmd.replace('{' + k + '}', v)
-            log.append('$ ' + cmd)
-            try:
-                if os.name == 'nt':
-                    # CMD.EXE no admite rutas UNC (\\servidor\...) como directorio
-                    # de trabajo; 'pushd' le asigna una letra de unidad temporal y
-                    # se situa alli, asi la compilacion funciona desde un recurso de red.
-                    full = 'pushd "%s" && ( %s ) && popd' % (d, cmd)
-                    r = subprocess.run(full, shell=True, capture_output=True,
-                                       text=True, timeout=180)
-                else:
-                    r = subprocess.run(cmd, shell=True, cwd=d, capture_output=True,
-                                       text=True, timeout=180)
-                out = ((r.stdout or '') + (r.stderr or '')).rstrip()
-                if out:
-                    log.append(out)
-                if r.returncode != 0:
-                    ok = False
-                    log.append('[código de salida %d]' % r.returncode)
-                    break
-            except Exception as e:
-                ok = False
-                log.append('[ERROR al ejecutar: %s]' % e)
-                break
-        return '\n'.join(log), (ok and os.path.isfile(tap_path)), tap_path
 
-    def _mem48_line(self, bas_path, cfg=None):
-        """Línea de resumen con la memoria libre del .bin compilado (48K).
-        Mide el binario que produjo zxbc y la compara con el techo de RAM
-        (65536), descontando org y heap. Devuelve None si no hay .bin."""
-        import re as _re
-        ORG, HEAP, TOP = 24000, 1792, 65536
-        cmd = (cfg or {}).get('cmd_48', '') or ''
-        m = _re.search(r'--org[ =](\d+)', cmd)
-        if m:
-            ORG = int(m.group(1))
-        m = _re.search(r'--heap-size[ =](\d+)', cmd)
-        if m:
-            HEAP = int(m.group(1))
-        d = os.path.dirname(os.path.abspath(bas_path))
-        base = os.path.splitext(os.path.basename(bas_path))[0]
-        binf = os.path.join(d, base + '.bin')
-        if not os.path.isfile(binf):
-            return None
-        sz = os.path.getsize(binf)
-        end = ORG + sz
-        libre = TOP - end                 # bytes por encima del binario
-        tras_heap = libre - HEAP          # lo que queda para pila/datos
-        if tras_heap >= 0:
-            estado = '✓ cabe'
-        else:
-            estado = '⚠ NO cabe (faltan %d B)' % (-tras_heap)
-        return ('Memoria 48K: binario %d B, carga en %d–%d. Libre hasta '
-                '65535: %d B (%.1f KB); con heap de %d B quedan ~%d B para '
-                'pila/datos — %s.'
-                % (sz, ORG, end - 1, libre, libre / 1024.0, HEAP,
-                   tras_heap, estado))
 
-    def _show_build_result(self, informe, build_log, tap_ok, tap_path):
-        win = tk.Toplevel(self.root)
-        win.title('Compilación a TAP')
-        win.transient(self.root)
-        hdr = (('TAP generado: ' + os.path.basename(tap_path)) if tap_ok
-               else 'No se pudo generar el TAP (revisa los comandos y la salida)')
-        ttk.Label(win, text=hdr,
-                  foreground=('#2e7d32' if tap_ok else '#c62828'),
-                  font=self.fnt_bold).pack(anchor=tk.W, padx=10, pady=(10, 4))
-        body = scrolledtext.ScrolledText(win, width=94, height=26,
-                                         font=self.fnt_code, wrap=tk.NONE)
-        body.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
-        body.insert('1.0', informe + '\n\n===== COMPILACIÓN =====\n' + build_log)
-        body.configure(state=tk.DISABLED)
-        bf = ttk.Frame(win)
-        bf.pack(pady=(0, 10))
-        if tap_ok:
-            ttk.Button(bf, text='Abrir carpeta',
-                       command=lambda: self._open_folder(
-                           os.path.dirname(tap_path))).pack(side=tk.LEFT, padx=4)
-        ttk.Button(bf, text='Cerrar', command=win.destroy).pack(side=tk.LEFT, padx=4)
 
     def _open_folder(self, d):
         try:
@@ -6097,107 +5945,6 @@ class ScribaEditor:
         except Exception as e:
             messagebox.showerror('Referencia', 'No se pudo abrir el manual:\n%s' % e)
 
-    def _export_spectrum(self, modo='48k'):
-        """Exporta el juego a ZX BASIC (Boriel) para ZX Spectrum 48K/128K."""
-        self._commit_active_code_view()
-        if not self.game.get('locations'):
-            messagebox.showinfo('Exportar', 'Abre o crea un juego primero.')
-            return
-        path = self._bas_temp_path('128' if modo == '128k' else '48')
-        if not path:
-            messagebox.showinfo('Exportar', 'Guarda el juego (.yaml) primero para '
-                                'crear su carpeta. El .bas irá a temp\\<target>\\ y '
-                                'el .tap a dist\\ (nombre {juego}_{plataforma}_{idioma}).')
-            return
-        try:
-            here = os.path.dirname(os.path.abspath(__file__))
-            if here not in sys.path:
-                sys.path.insert(0, here)
-            import importlib
-            import spectrum_export
-            if not getattr(sys, 'frozen', False):
-                importlib.reload(spectrum_export)   # solo en desarrollo
-        except Exception as e:
-            messagebox.showerror('Error al exportar', str(e))
-            return
-        game = copy.deepcopy(self.game)
-        game.pop('_editor', None)
-
-        # Ventana de progreso (el export corre en un hilo aparte)
-        import threading
-        win = tk.Toplevel(self.root)
-        win.title('Exportando a ZX BASIC ' + ('128K' if modo == '128k' else '48K'))
-        win.transient(self.root)
-        win.grab_set()
-        win.resizable(False, False)
-        win.protocol('WM_DELETE_WINDOW', lambda: None)
-        sv_msg = tk.StringVar(value='Preparando...')
-        ttk.Label(win, textvariable=sv_msg, width=46,
-                  anchor=tk.W).pack(padx=14, pady=(12, 4))
-        bar = ttk.Progressbar(win, length=340, mode='determinate',
-                              maximum=100)
-        bar.pack(padx=14, pady=(0, 6))
-        sv_pct = tk.StringVar(value='0%')
-        ttk.Label(win, textvariable=sv_pct).pack(pady=(0, 10))
-
-        # Centrar sobre la ventana principal
-        win.update_idletasks()
-        px = self.root.winfo_rootx() + \
-            (self.root.winfo_width() - win.winfo_reqwidth()) // 2
-        py = self.root.winfo_rooty() + \
-            (self.root.winfo_height() - win.winfo_reqheight()) // 2
-        win.geometry(f'+{max(0, px)}+{max(0, py)}')
-
-        def cb(pct, msg):
-            def _ui():
-                try:
-                    bar.config(value=pct)
-                    sv_msg.set(msg)
-                    sv_pct.set(f'{int(pct)}%')
-                except tk.TclError:
-                    pass
-            self.root.after(0, _ui)
-
-        cols = self._zx_cols.get() if hasattr(self, '_zx_cols') else 42
-
-        def trabajo():
-            try:
-                informe = spectrum_export.export_bas(game, path,
-                                                     progreso=cb, modo=modo,
-                                                     columnas=cols)
-            except Exception as e:
-                self.root.after(0, lambda e=e: (
-                    win.destroy(),
-                    messagebox.showerror('Error al exportar', str(e))))
-                return
-            adv = self._aviso_caps(game, 'spectrum')
-            if adv:
-                informe = adv + '\n\n' + informe
-            cfg = self._build_cfg()
-            build_log = tap_ok = tap_path = None
-            if cfg.get('auto_tap'):
-                cb(96, 'Ajustando música a la RAM libre…')
-                try:
-                    self._ajusta_musica_ram(path, cfg)
-                except Exception:
-                    pass
-                cb(97, 'Generando TAP (zxbc / empaqueta)...')
-                build_log, tap_ok, tap_path = self._run_build(modo, path, cfg)
-            # Resumen de memoria 48K: se mide el binario que produjo zxbc.
-            if modo == '48k' and build_log is not None:
-                mem = self._mem48_line(path, cfg)
-                if mem:
-                    informe = informe + '\n' + mem
-            def _fin():
-                win.destroy()
-                if build_log is None:
-                    messagebox.showinfo('Exportar ZX Spectrum', informe)
-                else:
-                    self._show_build_result(informe, build_log, tap_ok, tap_path)
-                self.sv_status.set('Exportado a ZX BASIC: ' + path)
-            self.root.after(0, _fin)
-
-        threading.Thread(target=trabajo, daemon=True).start()
 
     def _aviso_caps(self, game, target):
         """Aviso (str) de las características que el juego usa pero el target NO
@@ -6334,100 +6081,71 @@ class ScribaEditor:
 
         threading.Thread(target=trabajo, daemon=True).start()
 
-    def _export_cpc(self, modo=2, con_imagenes=False):
-        """Exporta el juego a Amstrad CPC (.dsk, Locomotive BASIC).
-        modo: 1 (40 col) o 2 (80 col). con_imagenes: pantalla partida B/N (Modo 2)."""
-        self._commit_active_code_view()
-        if not self.game.get('locations'):
-            messagebox.showinfo('Exportar', 'Abre o crea un juego primero.')
-            return
-        path = filedialog.asksaveasfilename(
-            title='Exportar a Amstrad CPC (.dsk)',
-            defaultextension='.dsk',
-            filetypes=[('Imagen de disco CPC', '*.dsk'), ('Todos', '*.*')])
-        if not path:
-            return
-        try:
-            here = os.path.dirname(os.path.abspath(__file__))
-            if here not in sys.path:
-                sys.path.insert(0, here)
-            import importlib
-            import cpc_export, png2cpc, empaqueta_cpc
-            if not getattr(sys, 'frozen', False):
-                importlib.reload(cpc_export)
-                importlib.reload(png2cpc)
-                importlib.reload(empaqueta_cpc)
-        except Exception as e:
-            messagebox.showerror('Error al exportar', str(e))
-            return
-        game = copy.deepcopy(self.game)
-        game.pop('_editor', None)
 
-        img_dir = None
-        if con_imagenes:
-            cands = []
-            if self.filepath:
-                cands.append(os.path.join(os.path.dirname(self.filepath), 'img'))
-            cands.append(os.path.join(here, 'img'))
-            img_dir = next((d for d in cands
-                            if os.path.isdir(os.path.join(d, 'Original'))
-                            or os.path.isdir(os.path.join(d, 'AmstradCPC'))), None)
-            if not img_dir:
-                if not messagebox.askyesno(
-                        'Exportar Amstrad CPC',
-                        'No encuentro img/Original ni img/AmstradCPC.\n'
-                        '¿Exportar solo texto (Modo 2)?'):
-                    return
-                con_imagenes = False
+    def _ventana_resultado(self, titulo, msg, path, presupuesto='',
+                           avisos=(), notas=()):
+        """Ventana de resultado de una exportacion.
 
-        # Ventana de espera (la conversión de imágenes tarda unos segundos)
-        import threading
+        Esto era un messagebox, y valia mientras el resumen fueran cuatro
+        lineas. El presupuesto de memoria son tablas, y en la fuente
+        proporcional de un messagebox las columnas no cuadran; ademas los
+        avisos del exportador (efectos FX que no caben, musica recortada) se
+        quedaban en el dict de info sin que nadie los viera. Aqui el resumen va
+        en texto normal, las cuentas en monoespaciado y los avisos a la vista.
+        """
         win = tk.Toplevel(self.root)
-        win.title('Exportando a Amstrad CPC')
+        win.title(titulo)
         win.transient(self.root)
-        win.grab_set()
-        win.resizable(False, False)
-        win.protocol('WM_DELETE_WINDOW', lambda: None)
-        ttk.Label(win, text='Generando .dsk para Amstrad CPC…',
-                  width=42, anchor=tk.W).pack(padx=16, pady=(14, 6))
-        bar = ttk.Progressbar(win, length=320, mode='indeterminate')
-        bar.pack(padx=16, pady=(0, 14))
-        bar.start(12)
+        cuerpo = ttk.Frame(win, padding=14)
+        cuerpo.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(cuerpo, text=msg.strip(), justify=tk.LEFT, anchor=tk.W,
+                  wraplength=560).pack(fill=tk.X, anchor=tk.W)
+
+        for a in (avisos or ()):
+            ttk.Label(cuerpo, text='\u26a0  ' + a, justify=tk.LEFT, anchor=tk.W,
+                      wraplength=560, foreground='#b35c00').pack(
+                          fill=tk.X, anchor=tk.W, pady=(8, 0))
+        for n in (notas or ()):
+            ttk.Label(cuerpo, text=n, justify=tk.LEFT, anchor=tk.W,
+                      wraplength=560, foreground='#666666').pack(
+                          fill=tk.X, anchor=tk.W, pady=(6, 0))
+
+        if presupuesto:
+            caja = ttk.LabelFrame(cuerpo, text='Memoria', padding=(8, 6))
+            caja.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
+            lineas = presupuesto.split('\n')
+            alto = min(len(lineas), 20)
+            txt = tk.Text(caja, height=alto, width=max(len(l) for l in lineas) + 2,
+                          font=self.fnt_code, relief=tk.FLAT, wrap=tk.NONE,
+                          background=self.root.cget('background'))
+            txt.pack(fill=tk.BOTH, expand=True)
+            txt.insert('1.0', presupuesto)
+            txt.configure(state=tk.DISABLED)
+            if len(lineas) > alto:
+                sb = ttk.Scrollbar(caja, orient=tk.VERTICAL, command=txt.yview)
+                sb.pack(side=tk.RIGHT, fill=tk.Y)
+                txt.configure(yscrollcommand=sb.set)
+
+        ttk.Label(cuerpo, text='Guardado en:\n' + path, justify=tk.LEFT,
+                  anchor=tk.W, wraplength=560).pack(fill=tk.X, anchor=tk.W,
+                                                    pady=(12, 0))
+        botones = ttk.Frame(cuerpo)
+        botones.pack(fill=tk.X, pady=(12, 0))
+        ttk.Button(botones, text='Cerrar',
+                   command=win.destroy).pack(side=tk.RIGHT)
+        ttk.Button(botones, text='Abrir carpeta',
+                   command=lambda: self._open_folder(
+                       os.path.dirname(path))).pack(side=tk.RIGHT, padx=(0, 8))
+
         win.update_idletasks()
         px = self.root.winfo_rootx() + \
             (self.root.winfo_width() - win.winfo_reqwidth()) // 2
         py = self.root.winfo_rooty() + \
-            (self.root.winfo_height() - win.winfo_reqheight()) // 2
+            (self.root.winfo_height() - win.winfo_reqheight()) // 3
         win.geometry(f'+{max(0, px)}+{max(0, py)}')
-
-        def trabajo():
-            try:
-                if con_imagenes:
-                    dsk, avisos, locs = empaqueta_cpc.export_dsk_img(
-                        game, path, img_dir, modo=2)
-                    msg = ('Exportado a Amstrad CPC (Modo 2, pantalla partida B/N).\n'
-                           f'{len(dsk)} bytes — {len(locs)} localizaciones con imagen.\n\n'
-                           'Monta el .dsk en un emulador y arranca con  RUN"DISC"')
-                else:
-                    dsk, avisos = empaqueta_cpc.export_dsk(game, path, modo=modo)
-                    msg = (f'Exportado a Amstrad CPC (Modo {modo}, solo texto).\n'
-                           f'{len(dsk)} bytes.\n\n'
-                           'Monta el .dsk en un emulador y arranca con  RUN"DISC"')
-                if avisos:
-                    msg += f'\n\n({len(avisos)} avisos de conversion)'
-            except Exception as e:
-                self.root.after(0, lambda e=e: (
-                    win.destroy(),
-                    messagebox.showerror('Error al exportar CPC', str(e))))
-                return
-
-            def _fin():
-                win.destroy()
-                messagebox.showinfo('Exportar Amstrad CPC', msg)
-                self.sv_status.set('Exportado a Amstrad CPC: ' + path)
-            self.root.after(0, _fin)
-
-        threading.Thread(target=trabajo, daemon=True).start()
+        win.bind('<Escape>', lambda _e: win.destroy())
+        return win
 
     def _export_cpc_nativo(self, modo=2):
         """Exporta al MOTOR NATIVO Z80 (modelo PAW/DAAD) en un .dsk arrancable.
@@ -6523,10 +6241,10 @@ class ScribaEditor:
             def _fin():
                 win.destroy()
                 self.sv_status.set('Exportado a CPC nativo: ' + path)
-                if messagebox.askyesno(
-                        'Exportar CPC nativo',
-                        msg + '\n\nGuardado en:\n%s\n\n¿Abrir la carpeta?' % path):
-                    self._open_folder(os.path.dirname(path))
+                self._ventana_resultado(
+                    'Exportar CPC nativo', msg, path,
+                    info.get('presupuesto', ''),
+                    info.get('avisos', ()), info.get('notas', ()))
             self.root.after(0, _fin)
 
         threading.Thread(target=trabajo, daemon=True).start()
@@ -6591,6 +6309,138 @@ class ScribaEditor:
         if n_skip:
             cabecera += '  (%d omitida[s])' % n_skip
         return [cabecera] + lineas
+
+    def _export_spectrum_nativo(self, modelo='48'):
+        """Exporta al MOTOR NATIVO Z80 en un .tap para ZX Spectrum 48K o 128K.
+
+        Ni Boriel ni zxbc: motor, capa de plataforma y base de datos se ensamblan
+        aqui, en Python puro. El 48K lo mete todo en el mapa plano &6000-&FF00.
+        El 128K es lo mismo mas los cinco bancos conmutables, que aqui quedan
+        ENTEROS para las imagenes de img/Spectrum -- en el export de BASIC los
+        comparten con el texto, y el texto se lleva la mayor parte.
+        modelo: '48' o '128'."""
+        self._commit_active_code_view()
+        if not self.game.get('locations'):
+            messagebox.showinfo('Exportar', 'Abre o crea un juego primero.')
+            return
+        if not self.filepath:
+            messagebox.showinfo('Exportar', 'Guarda el juego (.yaml) primero.')
+            return
+        distdir = self._dir_juego('dist')
+        raiz = self._game_root()
+        if not distdir or not raiz:
+            messagebox.showinfo('Exportar', 'Guarda el juego (.yaml) primero.')
+            return
+        es128 = (str(modelo) == '128')
+        etiqueta = 'ZX Spectrum %sK' % ('128' if es128 else '48')
+        plat = '128kb_nativo' if es128 else '48kb_nativo'
+        destino = 'spectrum128' if es128 else 'spectrum48'
+        name = os.path.splitext(os.path.basename(self.filepath))[0]
+        path = os.path.join(distdir, self._dist_name(name, plat, 'tap'))
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+            if here not in sys.path:
+                sys.path.insert(0, here)
+            import importlib
+            import spectrum48_nativo
+            import spectrum128_nativo
+            if not getattr(sys, 'frozen', False):
+                for m in ('z80asm', 'txtpack', 'game_engine', 'nativecc',
+                          'font42', 'cpc_nativo', 'next_nativo',
+                          'spectrum_export', 'spectrum48_nativo',
+                          'spectrum128_nativo'):
+                    try:
+                        importlib.reload(importlib.import_module(m))
+                    except Exception:
+                        pass
+                import spectrum48_nativo
+                import spectrum128_nativo
+        except Exception as e:
+            messagebox.showerror('Error al exportar', str(e))
+            return
+        modulo = spectrum128_nativo if es128 else spectrum48_nativo
+        game = copy.deepcopy(self.game)
+        game.pop('_editor', None)
+
+        import threading
+        win = tk.Toplevel(self.root)
+        win.title('Exportando a ' + etiqueta)
+        win.transient(self.root)
+        win.grab_set()
+        win.resizable(False, False)
+        win.protocol('WM_DELETE_WINDOW', lambda: None)
+        sv_msg = tk.StringVar(value='Compilando motor nativo Z80…')
+        ttk.Label(win, textvariable=sv_msg, width=46,
+                  anchor=tk.W).pack(padx=16, pady=(14, 6))
+        bar = ttk.Progressbar(win, length=320, mode='indeterminate')
+        bar.pack(padx=16, pady=(0, 14))
+        bar.start(12)
+        win.update_idletasks()
+        px = self.root.winfo_rootx() + \
+            (self.root.winfo_width() - win.winfo_reqwidth()) // 2
+        py = self.root.winfo_rooty() + \
+            (self.root.winfo_height() - win.winfo_reqheight()) // 2
+        win.geometry(f'+{max(0, px)}+{max(0, py)}')
+
+        def trabajo():
+            try:
+                if es128:
+                    # tk no es seguro entre hilos: el texto se cambia desde el
+                    # hilo de la ventana, como en el export del Next
+                    self.root.after(0, lambda: sv_msg.set(
+                        'Comprimiendo imágenes a los bancos…'))
+                    info = modulo.export_tap(game, path, game_dir=raiz)
+                else:
+                    info = modulo.export_tap(game, path)
+                msg = ('Exportado al MOTOR NATIVO Z80 para %s (%d columnas).\n'
+                       'Motor + plataforma: %d bytes · Base de datos: %d bytes\n'
+                       'RAM principal: %d de %d bytes (&%04X–&%04X), '
+                       '%d libres.\n'
+                       % (etiqueta, modulo.COLS, info['codigo'], info['datos'],
+                          info['total'], info['mapa'], info['org'],
+                          info['fin'] - 1, info['libre']))
+                if es128:
+                    msg += ('Imágenes: %d bytes en %d banco(s), %d libres de '
+                            '%d.\n' % (info['payload'], info['bancos'],
+                                       info['banco_libre'],
+                                       modulo.TOPE_BANCOS))
+                msg += ('%d localizaciones · %d objetos\n'
+                        % (info['localizaciones'], info['objetos']))
+                if info['libre'] < 0:
+                    msg += ('\nNO CABE: el juego se sale del mapa plano por %d '
+                            'bytes.\n' % -info['libre'])
+                adv = self._aviso_caps(game, destino)
+                if adv:
+                    msg = adv + '\n\n' + msg
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                self.root.after(0, lambda e=e: (
+                    win.destroy(),
+                    messagebox.showerror('Error al exportar ' + etiqueta,
+                                         str(e))))
+                return
+
+            def _fin():
+                win.destroy()
+                self.sv_status.set('Exportado a %s nativo (.tap): %s'
+                                   % (etiqueta, path))
+                # 'avisos' del 128K es medio registro de conversion (una linea
+                # por imagen) y medio aviso de verdad. Las lineas de imagen no
+                # pintan nada aqui; de las demas, las que hablan de algo que se
+                # ha quedado fuera van como aviso y el resto como nota.
+                _av = [a for a in (info.get('avisos') or ())
+                       if not a.lstrip().startswith('- ')]
+                _ojo = ('recortad', 'no cabe', 'se omite', 'mudo', 'no queda')
+                _alerta = [a for a in _av
+                           if any(k in a.lower() for k in _ojo)]
+                self._ventana_resultado(
+                    'Exportar ' + etiqueta, msg, path,
+                    info.get('presupuesto', ''), _alerta,
+                    [a for a in _av if a not in _alerta])
+            self.root.after(0, _fin)
+
+        threading.Thread(target=trabajo, daemon=True).start()
 
     def _export_next_nativo(self):
         """Exporta al MOTOR NATIVO Z80 en un .nex arrancable para ZX Spectrum Next.
@@ -6680,7 +6530,6 @@ class ScribaEditor:
                     msg += 'Música: no (nada en music/)\n'
                 if info.get('aviso_psg'):
                     msg += 'Aviso: %s\n' % info['aviso_psg']
-                msg += '\nNo necesita zxbc ni NextBuild: se compila entero aquí.'
                 if lineas:
                     msg += '\n\n' + chr(10).join(lineas[:1])
                 adv = self._aviso_caps(game, 'next')
@@ -6697,144 +6546,12 @@ class ScribaEditor:
             def _fin():
                 win.destroy()
                 self.sv_status.set('Exportado a Next nativo (.nex): ' + path)
-                if messagebox.askyesno(
-                        'Exportar ZX Spectrum Next',
-                        msg + '\n\nGuardado en:\n%s\n\n¿Abrir la carpeta?' % path):
-                    self._open_folder(os.path.dirname(path))
+                self._ventana_resultado('Exportar ZX Spectrum Next', msg, path,
+                                        info.get('presupuesto', ''))
             self.root.after(0, _fin)
 
         threading.Thread(target=trabajo, daemon=True).start()
 
-    def _export_next(self):
-        """(YA NO ESTA EN EL MENU: el Next se exporta con el motor nativo, en
-        _export_next_nativo. Se conserva por si hiciera falta volver al camino
-        BASIC.)  Exporta el juego para ZX Spectrum Next como .tap:
-        convierte img/Next/*.png|jpg a Layer 2 (.nxi/.nxp en data/), genera el
-        ZX BASIC (texto comprimido en bancos + imagenes Layer 2 + pantalla de
-        titulo + musica), compila con zxbc y empaqueta el .tap (texto en bancos
-        bajos $7FFD, imagenes en altos $DFFD). Sin limite de tamano."""
-        self._commit_active_code_view()
-        if not self.game.get('locations'):
-            messagebox.showinfo('Exportar', 'Abre o crea un juego primero.')
-            return
-        path = self._bas_temp_path('Next')
-        if not path:
-            messagebox.showinfo('Exportar', 'Guarda el juego (.yaml) primero para '
-                                'crear su carpeta. El .bas irá a temp\\Next\\ y el '
-                                '.tap a dist\\ (nombre {juego}_next_{idioma}).')
-            return
-        game = copy.deepcopy(self.game)
-        game.pop('_editor', None)
-
-        import threading
-        win = tk.Toplevel(self.root)
-        win.title('Exportando a ZX Spectrum Next')
-        win.transient(self.root)
-        win.grab_set()
-        win.resizable(False, False)
-        win.protocol('WM_DELETE_WINDOW', lambda: None)
-        sv_msg = tk.StringVar(value='Preparando…')
-        ttk.Label(win, textvariable=sv_msg, width=50,
-                  anchor=tk.W).pack(padx=14, pady=(12, 4))
-        bar = ttk.Progressbar(win, length=360, mode='determinate', maximum=100)
-        bar.pack(padx=14, pady=(0, 6))
-        sv_pct = tk.StringVar(value='0%')
-        ttk.Label(win, textvariable=sv_pct).pack(pady=(0, 10))
-        win.update_idletasks()
-        px = self.root.winfo_rootx() + \
-            (self.root.winfo_width() - win.winfo_reqwidth()) // 2
-        py = self.root.winfo_rooty() + \
-            (self.root.winfo_height() - win.winfo_reqheight()) // 2
-        win.geometry(f'+{max(0, px)}+{max(0, py)}')
-
-        def cb(pct, msg):
-            def _ui():
-                try:
-                    if str(bar.cget('mode')) == 'determinate':
-                        bar.config(value=pct)
-                        sv_pct.set(f'{int(pct)}%')
-                    sv_msg.set(msg)
-                except tk.TclError:
-                    pass
-            self.root.after(0, _ui)
-
-        def pulse(on):
-            # barra pulsante para fases largas sin progreso medible (compilacion)
-            def _ui():
-                try:
-                    if on:
-                        bar.config(mode='indeterminate')
-                        bar.start(12)
-                        sv_pct.set('…')
-                    else:
-                        bar.stop()
-                        bar.config(mode='determinate')
-                except tk.TclError:
-                    pass
-            self.root.after(0, _ui)
-
-        cols = self._zx_cols.get() if hasattr(self, '_zx_cols') else 42
-
-        def trabajo():
-            informe_partes = []
-            # ── Paso 1: conversión de imágenes Layer 2 ──────────────────────
-            cb(5, 'Convirtiendo imágenes Layer 2 (img/Next)…')
-            try:
-                img_lineas = self._next_convert_images(path, cb)
-            except Exception as e:
-                img_lineas = ['imágenes Next: ERROR (%s)' % e]
-            informe_partes.append('\n'.join(img_lineas))
-
-            # ── Paso 2: generar el ZX BASIC para Next ───────────────────────
-            cb(55, 'Generando ZX BASIC para Next…')
-            bas_ok = False
-            try:
-                here = os.path.dirname(os.path.abspath(__file__))
-                if here not in sys.path:
-                    sys.path.insert(0, here)
-                import importlib
-                import next_export
-                if not getattr(sys, 'frozen', False):
-                    importlib.reload(next_export)
-                informe = next_export.export_bas(game, path, progreso=cb,
-                                                 columnas=cols, modo='tap')
-                informe_partes.append(informe)
-                bas_ok = os.path.isfile(path)
-            except ImportError:
-                informe_partes.append(
-                    'BASIC Next: PENDIENTE — falta el backend next_export.py. '
-                    'Las imágenes ya se han convertido; el .bas se generará '
-                    'cuando se añada el exportador.')
-            except Exception as e:
-                informe_partes.append('BASIC Next: ERROR — %s' % e)
-
-            # ── Paso 3: compilar (zxbc) + empaquetar el .tap para Next ──
-            cfg = self._build_cfg()
-            build_log = nex_ok = nex_path = None
-            if bas_ok and cfg.get('auto_nex'):
-                cb(92, 'Compilando con zxbc y empaquetando el .tap…')
-                pulse(True)
-                build_log, nex_ok, nex_path = self._build_nextap(
-                    path, cfg, cb)
-                pulse(False)
-
-            adv = self._aviso_caps(game, 'next')
-            if adv:
-                informe_partes.insert(0, adv)
-            informe = '\n\n'.join(informe_partes)
-
-            def _fin():
-                win.destroy()
-                if build_log is None:
-                    messagebox.showinfo('Exportar ZX Spectrum Next', informe)
-                else:
-                    self._show_build_result(informe, build_log, nex_ok, nex_path)
-                self.sv_status.set('Exportado a ZX Spectrum Next (.tap): ' + path)
-            self.root.after(0, _fin)
-
-        threading.Thread(target=trabajo, daemon=True).start()
-
-    # ─── Traducción: exportar / importar literales ─────────────────────────
     def _export_literales(self):
         """Exporta todos los literales del juego a un CSV (clave;original;
         traduccion) para traducir. Si el CSV ya existe, reaprovecha lo ya
@@ -6926,241 +6643,8 @@ class ScribaEditor:
         except Exception as e:
             messagebox.showerror('Importar literales', str(e))
 
-    def _zxbc_base(self, cfg):
-        """Comando-base ABSOLUTO para invocar zxbc (Boriel empaquetado con
-        Scriba). Usa _zxbasic_dir (junto al editor/.exe, su padre, o la carpeta
-        configurada). Devuelve ['.../zxbc.exe'] o ['.../python.exe', '.../zxbc.py']
-        o None. Rutas absolutas: el .bas se compila con cwd=<juego>/temp."""
-        dd = self._zxbasic_dir(cfg)
-        exe = os.path.join(dd, 'zxbc.exe')
-        if os.path.isfile(exe):
-            return [os.path.abspath(exe)]
-        zxpy = os.path.join(dd, 'zxbc.py')
-        if os.path.isfile(zxpy):
-            py = os.path.join(dd, 'python', 'python.exe')
-            if os.path.isfile(py):
-                return [os.path.abspath(py), os.path.abspath(zxpy)]
-            if not getattr(sys, 'frozen', False):
-                return [sys.executable, os.path.abspath(zxpy)]
-            return ['python', os.path.abspath(zxpy)]
-        return None
 
-    def _build_nextap(self, bas_path, cfg, cb=None):
-        """Compila el .bas (modo tap) con zxbc y empaqueta el .tap para Next:
-        texto comprimido en bancos bajos ($7FFD) + imagenes Layer 2 en bancos
-        altos ($DFFD), que el cargador 128 del .tap pagina con BANKM sincronizado.
-        El empaquetado se hace EN PROCESO (sin python externo). El org se calcula
-        segun el nº de bancos (para que el cargador BASIC quepa bajo RAMTOP).
-        Devuelve (log, ok, salida)."""
-        import subprocess
-        d = os.path.dirname(os.path.abspath(bas_path))
-        base = os.path.splitext(os.path.basename(bas_path))[0]
-        bin_name = base + '.bin'
-        texto_name = base + '_texto.bin'
-        # intermedios (.bin, _texto.bin, .banks, .loading, data/) en temp = d;
-        # el .tap final va a <raiz>/dist con nombre {juego}_next_{idioma}.tap.
-        raiz, dist = self._dirs_salida(d)
-        os.makedirs(dist, exist_ok=True)
-        tap_name = self._dist_name(base, 'next', 'tap')
-        tap_path = os.path.join(dist, tap_name)
-        bin_path = os.path.join(d, bin_name)
-        texto_path = os.path.join(d, texto_name)
-        man = bas_path + '.banks'
-        log = []
 
-        # org adaptativo: PROG + cargador (crece con nº de bancos) + holgura.
-        n_img = 0
-        if os.path.isfile(man):
-            with open(man, encoding='ascii') as f:
-                n_img = sum(1 for ln in f if ln.strip())
-        n_text = ((os.path.getsize(texto_path) + 16383) // 16384
-                  if os.path.isfile(texto_path) else 0)
-        n_banks = n_text + n_img
-        # Cada banco son ~114 B de cargador (paginar + LOAD + actualizar el %);
-        # +1000 de base = linea de "CARGANDO", linea final y holgura de pila. Con
-        # esto el cargador BASIC cabe bajo RAMTOP (= org-1) y no da "RAMTOP no good".
-        org = 23755 + 120 * n_banks + 1000
-        org = max(24576, ((org + 255) // 256) * 256)
-
-        # ── 1) compilar con zxbc (empaquetado con Scriba o, si no, configurado) ──
-        zxbc_base = self._zxbc_base(cfg)
-        if not zxbc_base:
-            log.append('[no se encontro zxbc: incluye el compilador Boriel en '
-                       '<Scriba>/zxbasic/ (zxbc.exe, o zxbc.py + python/) o '
-                       'configura una carpeta valida en Compilacion → Next].')
-            return '\n'.join(log), False, tap_path
-        # Heap: 2 KB solo si el juego usa FX (el reproductor + datos van al final del
-        # binario y la RAM de Next va muy justa; bajar el heap libera ~2 KB para que
-        # quepan). Sin FX se deja 4 KB (más holgura para cadenas).
-        try:
-            with open(os.path.join(d, base + '.bas'), encoding='latin-1') as _f:
-                _usa_fx = 'playfx' in _f.read()
-        except OSError:
-            _usa_fx = False
-        heapsz = '2048' if _usa_fx else '4096'
-        if cb:
-            cb(93, 'Compilando ZX BASIC (zxbc, org %d, %d bancos, heap %s)…'
-               % (org, n_banks, heapsz))
-        cmd = zxbc_base + ['--arch', 'zxnext', '-O2', '--org', str(org),
-                           '--heap-size', heapsz, '--array-base=0',
-                           '--string-base=0', '-M', 'memory_next.txt',
-                           '-o', bin_name, base + '.bas']
-        log.append('$ ' + ' '.join(cmd))
-        try:
-            r = subprocess.run(cmd, cwd=d, capture_output=True, text=True,
-                               timeout=300)
-            out = ((r.stdout or '') + (r.stderr or '')).rstrip()
-            if out:
-                log.append(out)
-        except Exception as e:
-            log.append('[ERROR al compilar: %s]' % e)
-            return '\n'.join(log), False, tap_path
-        if not os.path.isfile(bin_path):
-            log.append('[la compilacion no genero %s]' % bin_name)
-            return '\n'.join(log), False, tap_path
-
-        # ── 2) empaquetar el .tap EN PROCESO (empaqueta_nextap, sin python externo) ──
-        if cb:
-            cb(96, 'Empaquetando el .tap (texto en bancos + imagenes Layer 2)…')
-        ok = False
-        try:
-            here = os.path.dirname(os.path.abspath(__file__))
-            if here not in sys.path:
-                sys.path.insert(0, here)
-            import importlib
-            import empaqueta_nextap
-            if not getattr(sys, 'frozen', False):
-                importlib.reload(empaqueta_nextap)
-            code = open(bin_path, 'rb').read()
-            texto = (open(texto_path, 'rb').read()
-                     if os.path.isfile(texto_path) else b'')
-            imgs = []
-            deferidos = []          # bancos que carga el motor (2ª fase, LD-BYTES)
-            if os.path.isfile(man):
-                with open(man, encoding='ascii') as f:
-                    for line in f:
-                        parts = line.rstrip('\n').split('\t')
-                        if len(parts) < 2:
-                            continue
-                        bank, fn = parts[0], parts[1]
-                        p = os.path.join(d, 'data', fn)
-                        if bank and fn and os.path.isfile(p):
-                            imgs.append((int(bank), open(p, 'rb').read()))
-                            if len(parts) >= 3 and parts[2].strip() == 'D':
-                                deferidos.append(int(bank))
-            # texto de carga (metadato 'loading', traducible); lo escribe next_export
-            cargando = 'CARGANDO...'
-            load_txt = bas_path + '.loading'
-            if os.path.isfile(load_txt):
-                try:
-                    with open(load_txt, encoding='ascii', errors='replace') as f:
-                        t = f.read().strip()
-                    if t:
-                        cargando = t
-                except Exception:
-                    pass
-            try:
-                _bd = int(self.game.get('metadata', {}).get('border', 0) or 0) & 7
-            except (TypeError, ValueError):
-                _bd = 0
-            tap = empaqueta_nextap.construye_tap(code, texto, imgs, org=org,
-                                                 deferidos=deferidos,
-                                                 cargando=cargando, border=_bd)
-            with open(tap_path, 'wb') as f:
-                f.write(tap)
-            log.append('TAP: %s (%d bytes) | %d texto | %d img (%d en 2 fases)'
-                       % (tap_name, len(tap), n_text, len(imgs), len(deferidos)))
-            ok = True
-        except Exception as e:
-            log.append('[ERROR al empaquetar: %s]' % e)
-        ok = ok and os.path.isfile(tap_path)
-        if cb and ok:
-            cb(99, 'TAP creado.')
-        return '\n'.join(log), ok, tap_path
-
-    def _build_nex_selfcontained(self, bas_path, cfg, cb=None):
-        """Cadena PROPIA (sin NextBuild ni NextLib): compila el .bas con zxbc
-        PELADO a un binario crudo (org $8000) y luego empaqueta_nex.py construye
-        el .nex (motor en banco 2, sysvars.bin en banco 10, y cada imagen de
-        data/ en su banco 16K segun el manifiesto <bas>.banks).
-        Devuelve (log, ok, salida)."""
-        import subprocess
-        d = os.path.dirname(os.path.abspath(bas_path))
-        base = os.path.splitext(os.path.basename(bas_path))[0]
-        nb = cfg.get('nextbuild_dir', '').strip()
-        bin_name = base + '.bin'
-        nex_name = base + '.nex'
-        nex_path = os.path.join(d, nex_name)
-        log = []
-
-        # 1) compilar .bas -> .bin (cwd = carpeta del .bas: incbin/includes
-        #    se resuelven con ruta relativa: data/<id>.nxp, print*_es.bas).
-        cmd = cfg.get('cmd_next_compile', '')
-        for k, v in {'nb': nb, 'bas': base + '.bas', 'bin': bin_name,
-                     'base': base}.items():
-            cmd = cmd.replace('{' + k + '}', v)
-        log.append('$ ' + cmd)
-        if cb:
-            cb(93, 'Compilando ZX BASIC (zxbc -O2)…')
-        try:
-            r = subprocess.run(cmd, shell=True, cwd=d, capture_output=True,
-                               text=True, timeout=300)
-            out = ((r.stdout or '') + (r.stderr or '')).rstrip()
-            if out:
-                log.append(out)
-        except Exception as e:
-            log.append('[ERROR al compilar: %s]' % e)
-            return '\n'.join(log), False, nex_path
-        if r.returncode != 0 or not os.path.isfile(os.path.join(d, bin_name)):
-            log.append('[la compilacion no genero %s]' % bin_name)
-            return '\n'.join(log), False, nex_path
-
-        # 2) empaquetar el .nex propio con empaqueta_nex.py + manifiesto.
-        if cb:
-            cb(96, 'Empaquetando el .nex (motor + imagenes + sysvars)…')
-        here = os.path.dirname(os.path.abspath(__file__))
-        emp = os.path.join(here, 'empaqueta_nex.py')
-        # sysvars.bin: se prefiere una copia PROPIA junto a Scriba (independiente
-        # de NextBuild). Si no existe, se usa la ruta configurada ({nb}\Tools\...).
-        sysv = cfg.get('sysvars', '').replace('{nb}', nb)
-        bundled = os.path.join(here, 'sysvars.bin')
-        if os.path.isfile(bundled):
-            sysv = bundled
-        # interprete para el empaquetador: el bundle de NextBuild si existe;
-        # si no, el del editor (o 'python').
-        pyexe = os.path.join(nb, 'zxbasic', 'python', 'python.exe')
-        if not os.path.isfile(pyexe):
-            pyexe = (sys.executable if not getattr(sys, 'frozen', False)
-                     else 'python')
-        cmd2 = [pyexe, emp, bin_name, nex_name]
-        if sysv and os.path.isfile(sysv):
-            cmd2 += ['--sysvars', sysv]
-        else:
-            log.append('AVISO: no se encontro sysvars.bin (%s); el .nex puede '
-                       'no arrancar. Revisa la ruta en la configuracion.' % sysv)
-        man = bas_path + '.banks'           # manifiesto que escribe next_export
-        if os.path.isfile(man):
-            with open(man, encoding='ascii') as f:
-                for line in f:
-                    bank, _, fn = line.strip().partition('\t')
-                    if bank and fn:
-                        cmd2 += ['--img', '%s:%s'
-                                 % (bank, os.path.join('data', fn))]
-        log.append('$ ' + ' '.join(cmd2))
-        ok = False
-        try:
-            r2 = subprocess.run(cmd2, cwd=d, capture_output=True, text=True,
-                                timeout=120)
-            out = ((r2.stdout or '') + (r2.stderr or '')).rstrip()
-            if out:
-                log.append(out)
-            ok = (r2.returncode == 0)
-        except Exception as e:
-            log.append('[ERROR al empaquetar: %s]' % e)
-        ok = ok and os.path.isfile(nex_path)
-        if cb and ok:
-            cb(99, 'NEX creado.')
-        return '\n'.join(log), ok, nex_path
 
     def _quit(self):
         if self.dirty and not messagebox.askyesno(

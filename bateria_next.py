@@ -47,6 +47,12 @@ USO
                     donde acaba el jugador, la puntuacion y el principio de la
                     respuesta, y cada comprobacion con su ok o su fallo
     -vv             ademas, la respuesta entera de cada orden
+    --maquina M     next (por defecto), 48 o 128. En 48 y 128 se prueba el
+                    MISMO binario que va en el .tap, metido en un .nex para
+                    que jnext lo arranque: o sea el motor y la base de datos
+                    de esas maquinas, no el cargador BASIC de la cinta. El
+                    guion de la bateria viaja en bancos aparte y se pagina
+                    sobre la ROM, que es sitio que el motor no usa.
     --jnext RUTA    el emulador (si no, la variable JNEXT o el PATH)
     --sdcard FILE   imagen de tarjeta SD ya bajada (util en CI)
     --frames N      tope de barridos de emulador (por defecto se estima)
@@ -665,7 +671,8 @@ def _opcion(argv, nombre, por_defecto=None):
 
 def main():
     argv = sys.argv[1:]
-    conval = ('--jnext', '--sdcard', '--frames', '--traza', '--paciencia')
+    conval = ('--jnext', '--sdcard', '--frames', '--traza', '--paciencia',
+              '--maquina')
     sueltos, salta = [], False
     for a in argv:
         if salta:
@@ -681,6 +688,10 @@ def main():
     yaml_path, pru_path = sueltos[0], sueltos[1]
     nivel = 2 if '-vv' in argv else (1 if '-v' in argv else 0)
     frames = _opcion(argv, '--frames')
+    maquina = str(_opcion(argv, '--maquina', 'next')).lower()
+    if maquina not in ('next', '48', '128'):
+        print('--maquina admite next, 48 o 128 (no %r)' % maquina)
+        sys.exit(2)
     traza_out = _opcion(argv, '--traza')
 
     jnext = busca_jnext(_opcion(argv, '--jnext'))
@@ -692,18 +703,32 @@ def main():
     nchecks = sum(1 for _, p in pruebas for t, _d in p if t != 'orden')
 
     print('emulador   %s' % jnext)
+    print('maquina    %s' % {'next': 'ZX Spectrum Next (.nex)',
+                             '48': 'ZX Spectrum 48K (binario del .tap en un .nex)',
+                             '128': 'ZX Spectrum 128K (binario del .tap en un .nex)'}[maquina])
     print('juego      %s' % os.path.basename(yaml_path))
     print('bateria    %s: %d prueba(s), %d orden(es), %d comprobacion(es)'
           % (os.path.basename(pru_path), len(pruebas), nordenes, nchecks))
     sys.stdout.flush()
 
-    nex = os.path.join(tempfile.gettempdir(), 'scriba_bateria_next.nex')
+    nex = os.path.join(tempfile.gettempdir(),
+                       'scriba_bateria_%s.nex' % maquina)
     t0 = time.time()
     try:
-        info = nn.export_nex(game, nex,
-                             datadir=os.path.join(raiz, 'temp', 'Next', 'data'),
-                             musicdir=os.path.join(raiz, 'music'),
-                             guion=guion)
+        if maquina == '48':
+            # El .tap es lo que se distribuye; aqui el MISMO binario viaja en
+            # el contenedor que sabe cargar el emulador. Se prueba el motor y
+            # la base de datos de 48K, no el cargador BASIC de la cinta.
+            import spectrum48_nativo as s48
+            info = s48.export_nex_prueba(game, nex, guion)
+        elif maquina == '128':
+            import spectrum128_nativo as s128
+            info = s128.export_nex_prueba(game, nex, guion, game_dir=raiz)
+        else:
+            info = nn.export_nex(game, nex,
+                                 datadir=os.path.join(raiz, 'temp', 'Next', 'data'),
+                                 musicdir=os.path.join(raiz, 'music'),
+                                 guion=guion)
     except ValueError as e:
         # El guion viaja DENTRO del .nex, asi que una bateria larga puede no
         # caber. Decirlo con todas las letras en vez de soltar el error del

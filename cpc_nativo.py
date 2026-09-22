@@ -63,6 +63,12 @@ def _sys_msgs_y_salidas(meta):
         msgs += [pm[:mm.start()], pm[mm.end():]]
     else:
         msgs += [pm, '']
+    # SFIN: el remate de END. El motor imprime prefijo + puntuacion, asi que de
+    # "== FIN DEL JUEGO - Puntuacion: {p}/{max} ==" se toma solo el prefijo.
+    msgs.append(prefix('fin_juego'))
+    # SOTRA: lo que se ofrece al acabar. No esta en el catalogo historico,
+    # asi que se admite override del autor y si no, texto por defecto.
+    msgs.append(t('otra_partida') or 'Pulsa una tecla para jugar otra vez.')
     salidas = {1: t('dir_n').strip(), 2: t('dir_s').strip(), 3: t('dir_e').strip(),
                4: t('dir_o').strip(), 5: t('dir_u').strip(), 6: t('dir_d').strip()}
     return msgs, salidas
@@ -82,6 +88,8 @@ def export_native(game, dsk_path, modo=2, img_dir=None):
     import nativecc as nc
     import game_engine as ge
     import dsk
+    import presupuesto
+    presupuesto.empieza()
 
     c = sx.recolecta(game)
     # Ancho de wrap = columnas - 1: el firmware del CPC auto-salta de linea al
@@ -186,6 +194,36 @@ def export_native(game, dsk_path, modo=2, img_dir=None):
     # imgbuf se fija en &8B00 (zona de la musica, libre durante el juego) porque
     # esta FUERA de la ventana de banca &4000-&7FFF: asi sirve de buffer de
     # transferencia con los bancos extra sin que se pagine.
+    # Los FX, hasta donde haya hueco. El CPC es la maquina mas apretada -- su
+    # RAM util acaba en &8B00, donde empieza el buffer de imagen -- y un juego
+    # con muchos efectos se pasaba. En vez de no exportar, entran los que
+    # quepan EN EL ORDEN en que el autor los declaro, asi que la prioridad la
+    # marca el orden de la pestana FX. Los que se quedan fuera no rompen la
+    # numeracion: pack_ay_fx les deja la ranura a cero y c_play no hace nada
+    # con ellas, o sea que el PLAY sigue compilando y sale mudo.
+    fx_fuera = []
+    if fx_blob:
+        _sinfx, _guardado = fx_blob, fx_blob
+        fx_blob = b''
+        _db_sin = _mkdb(0, 0)
+        hueco = (0x8B00 - org) - len(code0) - len(_db_sin)
+        if len(_guardado) > hueco:
+            import capabilities
+            import fx_engine as _fe
+            _usados = sorted(capabilities.used_fx(game))
+            dentro, mejor = set(), b''
+            for i in _usados:
+                cand = _fe.pack_ay_fx(game.get('fx', []) or [], dentro | {i},
+                                      clock=1000000)
+                if len(cand) <= hueco:
+                    dentro.add(i)
+                    mejor = cand
+            fx_blob = mejor
+            fx_fuera = [i for i in _usados if i not in dentro]
+        else:
+            fx_blob = _guardado
+    info['fx_fuera'] = fx_fuera
+
     db0 = _mkdb(0, 0)
     db_end = dbaddr + len(db0)
     hdrbuf = (db_end + 0xFF) & ~0xFF       # buffer de cabecera CAS IN (2 KB)
@@ -224,7 +262,51 @@ def export_native(game, dsk_path, modo=2, img_dir=None):
         nm = 'PIC%02d' % n
         files.append((nm, 'SCR', dsk.bin_file(nm, 'SCR', comp, imgbuf)))
 
+    # La cache de 12 ranuras es una OPTIMIZACION, no un requisito: una sala sin
+    # ranura se lee del disco cada vez que entras (sli_disc en el motor), y la
+    # imagen sale igual. En un 464 sin expansion no hay cache en absoluto y el
+    # juego funciona. Asi que esto NO es un aviso, es informacion: dice cuantas
+    # salas van a tardar un instante al entrar.
+    _sobran = [n for n, c in loc_pics if len(c) > SLOT_SIZE]
+    info['sin_cache'] = max(0, len(loc_pics) - info['ncache'])
+    info['avisos'] = []
+    if fx_fuera:
+        _nom = [(game.get('fx') or [])[i - 1].get('name', str(i))
+                for i in fx_fuera if i - 1 < len(game.get('fx') or [])]
+        info['avisos'].append(
+            'CPC: %d efecto(s) FX no caben y quedan mudos: %s. La RAM util del '
+            'CPC acaba en &8B00; los demas entran por orden de la pestana FX.'
+            % (len(fx_fuera), ', '.join(_nom)))
+    info['notas'] = []
+    if info['sin_cache']:
+        info['notas'].append(
+            'CPC: %d de %d imagenes se leeran del disco cada vez (solo caben %d '
+            'en la cache de RAM del 6128). Se ven igual; solo tardan un instante '
+            'al entrar en la sala%s.'
+            % (info['sin_cache'], len(loc_pics), NSLOT,
+               ', y %d no cabrian en una ranura ni habiendo sitio (pasan de %d '
+               'bytes comprimidas)' % (len(_sobran), SLOT_SIZE) if _sobran else ''))
+    presupuesto.comprueba(
+        'Amstrad CPC',
+        [('motor + plataforma', len(code)),
+         ('base de datos (con los FX)', len(db))],
+        0x8B00 - org, 'la RAM libre bajo el buffer de imagen, &%04X-&8B00' % org,
+        presupuesto.RECORTA_PLANO)
     img = dsk.make_dsk(files)
+    # La cache de imagenes y el disco no son topes que rompan nada, pero son la
+    # otra mitad de la cuenta: cuantas salas se ven al instante, y cuanto ocupa
+    # el disquete.
+    _extra = []
+    if loc_pics:
+        _extra.append(
+            '   cache de imagenes: %d de %d salas en los bancos del 6128'
+            % (info['ncache'], len(loc_pics)))
+        _extra.append(
+            '   (%d ranuras de %s bytes); las demas, del disco cada vez'
+            % (NSLOT, presupuesto._miles(SLOT_SIZE)))
+    _extra.append('   disco: %s bytes en %d ficheros del .dsk'
+                  % (presupuesto._miles(len(img)), len(files)))
+    presupuesto.apunta(chr(10).join(_extra))
     with open(dsk_path, 'wb') as f:
         f.write(img)
 
@@ -235,6 +317,7 @@ def export_native(game, dsk_path, modo=2, img_dir=None):
     info['end_addr'] = org + len(blob)
     info['dsk_size'] = len(img)
     info['modo'] = modo
+    info['presupuesto'] = presupuesto.informe()
     return info
 
 
