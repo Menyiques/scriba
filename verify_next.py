@@ -42,14 +42,23 @@ def construir(game):
     code, sym = nn.assemble_engine_next(org=ORG, db_base=ORG)
     dbaddr = ORG + len(code)
     code, sym = nn.assemble_engine_next(org=ORG, db_base=dbaddr)
-    db, _ = ge.build_game_db(
-        spec['messages'], spec['locations'], spec['vocab'], spec['objects'],
-        spec['responses'], spec['startloc'], spec['sysverbs'], spec['width'],
-        load=dbaddr, proc_before=spec['proc_before'], proc_after=spec['proc_after'],
-        proc_onstart=spec['proc_onstart'], hdrbuf=0, imgbuf=0,
-        loc_slot=bytes([255] * len(spec['locations'])), vall=spec['vall'],
-        font_acc=spec['font_acc'], timers=spec['timers'],
-        llevarmax=spec['llevarmax'])
+
+    def _db(spec):
+        return ge.build_game_db(
+            spec['messages'], spec['locations'], spec['vocab'], spec['objects'],
+            spec['responses'], spec['startloc'], spec['sysverbs'], spec['width'],
+            load=dbaddr, proc_before=spec['proc_before'], proc_after=spec['proc_after'],
+            proc_onstart=spec['proc_onstart'], hdrbuf=0, imgbuf=0,
+            loc_slot=bytes([255] * len(spec['locations'])), vall=spec['vall'],
+            font_acc=spec['font_acc'], timers=spec['timers'],
+            llevarmax=spec['llevarmax'])[0]
+    db = _db(spec)
+    # Este arnes es un mapa plano de 64K sin bancos: si el juego con las
+    # descripciones de objeto (v2.11) no cabe bajo la pila, se prueba sin
+    # ellas, igual que hace el export de 48K. El .nex real las lleva en bancos.
+    if dbaddr + len(db) > 0xFF00:
+        spec, _ = nc.compile_game(c, sysm[:ge.NSYS], width=ANCHO, obj_desc=False)
+        db = _db(spec)
 
     mem = bytearray(65536)
     mem[ORG:ORG + len(code)] = code

@@ -23,6 +23,7 @@ import z80
 
 
 class Juego48(pj.Juego):
+    maquina = '48'
     """Un juego compilado al 48K nativo y listo para jugarse en el simulador."""
 
     def __init__(self, yaml_path, tap=None):

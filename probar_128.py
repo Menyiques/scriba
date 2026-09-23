@@ -24,6 +24,7 @@ import z80
 
 
 class Juego128(pj.Juego):
+    maquina = '128'
     """Un juego compilado al 128K nativo y listo para jugarse en el simulador."""
 
     def __init__(self, yaml_path, tap=None):

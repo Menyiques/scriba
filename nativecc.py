@@ -374,7 +374,7 @@ def desplaza_acentos(s):
     translit_disp convierte cada acento en '?'."""
     return ''.join(chr(ord(ch)+80) if 144<=ord(ch)<160 else ch for ch in s)
 
-def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False):
+def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj_desc=True):
     g=c.game
     # idioma para los acentos (es/pt). Fija el set de acentos de translit_disp.
     lang=str((getattr(c,'meta',{}) or {}).get('language','') or '').lower()
@@ -409,6 +409,13 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False):
         ii=0
         if _im:
             ii=len(messages); messages.append(translit(_im))
+        # Descripcion (lo que imprime EXAMINAR). Hasta v2.10 no se compilaba y
+        # EXAMINAR solo daba el nombre. obj_desc=False la deja fuera: el 48K
+        # y el CPC lo hacen cuando no cabe en el mapa plano.
+        _de=(O.get('description') or '').strip() if obj_desc else ''
+        di=0
+        if _de:
+            di=len(messages); messages.append(translit(_de))
         noun=c.nounid.get(O.get('noun','') or '',0)
         lname=O.get('location')
         attrs=[str(a).lower() for a in (O.get('attributes') or [])]
@@ -431,7 +438,7 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False):
         op=1 if (is_cont and O.get('open')) else 0
         lk=1 if (is_cont and O.get('locked')) else 0
         wt=int(O.get('weight',0) or 0)&0xFF
-        objects.append({'name':ni,'init':ii,'noun':noun,'loc':loc,'fixed':fixed,
+        objects.append({'name':ni,'init':ii,'desc':di,'noun':noun,'loc':loc,'fixed':fixed,
                         'light':light,'lit':lit,'open':op,'locked':lk,'incont':incont,
                         'weight':wt})
     # contexto con indices de recolecta

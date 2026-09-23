@@ -242,6 +242,18 @@ def export_native(game, dsk_path, modo=2, img_dir=None):
     # marca el orden de la pestana FX. Los que se quedan fuera no rompen la
     # numeracion: pack_ay_fx les deja la ranura a cero y c_play no hace nada
     # con ellas, o sea que el PLAY sigue compilando y sale mudo.
+    # Descripciones de objeto (EXAMINAR, desde v2.11): si con ellas no cabe ni
+    # aun sin FX, se quedan fuera con aviso y EXAMINAR imprime solo el nombre.
+    _fx_guard, fx_blob = fx_blob, b''
+    if (org + len(code) + len(_mkdb(0, 0)) > 0x8B00
+            and any(o.get('desc') for o in spec['objects'])):
+        _con = len(_mkdb(0, 0))
+        spec, _info2 = nc.compile_game(c, sys_msgs, width=width, obj_desc=False)
+        presupuesto.apunta(
+            'CPC: las descripciones de los objetos no caben (%s bytes) y se quedan '
+            'fuera: EXAMINAR imprime solo el nombre.'
+            % presupuesto._miles(_con - len(_mkdb(0, 0))))
+    fx_blob = _fx_guard
     fx_fuera = []
     if fx_blob:
         _sinfx, _guardado = fx_blob, fx_blob

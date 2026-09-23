@@ -108,7 +108,7 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
         raise ValueError('CPC: %d localizaciones (maximo 255).' % nloc)
     if nobj>255:
         raise ValueError('CPC: %d objetos (maximo 255).' % nobj)
-    HDR=87
+    HDR=89
     p=load+HDR
     dictidx=p; p+=ntok*2
     ddat=p; dptr=[]; dd=bytearray()
@@ -230,6 +230,11 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     objinit_a = p; p += nobj*2
     # nombre de cada localizacion (indice de mensaje, 0 = sin nombre)
     locname_a = p; p += nloc*2
+    # descripcion por objeto (indice de mensaje, 0 = no tiene); sin tabla
+    # si ningun objeto la trae (el export la omite cuando no cabe)
+    objdesc_a = 0
+    if any(o.get('desc') for o in objects):
+        objdesc_a = p; p += nobj*2
     # ── efectos de sonido FX (blob AY: [nfx][offsets][bloques]); 0 si no hay ──
     if fx_en_banco:
         fxbnk, fx_addr = fx_en_banco          # en su banco, detras del texto
@@ -272,6 +277,7 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     w16(locname_a)                                              # 84 (nombre de loc)
     w16(msgbnk)                                                 # 86 (banco por mensaje; 0 = texto plano)
     out.append(fxbnk & 0xFF)                                    # 87 (banco de los FX; 0 = planos)
+    w16(objdesc_a)                                              # 89 (descripcion por objeto; 0 = sin tabla)
     assert len(out)==HDR, len(out)
     for x in dptr: w16(x)
     out+=dd
@@ -311,6 +317,10 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     for L in locations:
         _ln=L.get('name',0)&0xFFFF
         out.append(_ln&0xFF); out.append((_ln>>8)&0xFF)
+    if objdesc_a:
+        for o in objects:
+            _d=o.get('desc',0)&0xFFFF
+            out.append(_d&0xFF); out.append((_d>>8)&0xFF)
     if not fx_en_banco: out+=bytes(fx)
     return bytes(out), dict(load=load,ntok=ntok,nmsg=nmsg,nloc=nloc,nvocab=nvocab,nobj=nobj,ntimers=nt,size=len(out),
                             bancos_texto=bancos_texto)
@@ -382,6 +392,8 @@ init:   ld    hl,(DBB+0)
         ld    (locnamep),hl   ; nombres de localizacion (0 = sin nombre)
         ld    hl,(DBB+84)
         ld    (msgbnk),hl     ; banco por mensaje (0 = el texto es plano)
+        ld    hl,(DBB+87)
+        ld    (objdescp),hl   ; descripciones de objeto (0 = sin tabla)
         ld    a,(DBB+86)
         ld    (fxbnk),a       ; banco de los FX (0 = planos)
         ld    hl,(DBB+20)
@@ -1392,7 +1404,13 @@ dx_l:   ld    a,(oidx)
         jr    nz,dx_nx
 dx_f:   call  newline
         ld    a,(oidx)
-        call  print_objname
+        call  objdesc_get     ; DE = descripcion del objeto (0 = no tiene)
+        ld    a,d
+        or    e
+        jr    z,dx_nom
+        jp    print_msg
+dx_nom: ld    a,(oidx)
+        call  print_objname   ; sin descripcion: el nombre, como siempre
         ret
 dx_nx:  ld    a,(oidx)
         inc   a
@@ -1442,6 +1460,22 @@ objinit_get:
         ld    d,(hl)
         ret
 oig_no: ld    de,0
+        ret
+; objdesc_get: A = objeto -> DE = indice del mensaje de descripcion (0 = no
+; tiene, o el juego no trae la tabla: el 48K la deja fuera cuando no cabe)
+objdesc_get:
+        ld    e,a
+        ld    d,0
+        ld    hl,(objdescp)
+        ld    a,h
+        or    l
+        jr    z,oig_no
+        ex    de,hl
+        add   hl,hl
+        add   hl,de
+        ld    e,(hl)
+        inc   hl
+        ld    d,(hl)
         ret
 ; locname_get: A = localizacion -> DE = indice del mensaje de su nombre (0 = sin)
 locname_get:
@@ -3389,6 +3423,7 @@ locidx:   defw 0
 vocabp:   defw 0
 objnamep: defw 0
 objinitp: defw 0
+objdescp: defw 0               ; tabla de descripciones de objeto (0 = sin tabla)
 locnamep: defw 0
 objnounp: defw 0
 objlocsrc: defw 0

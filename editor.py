@@ -1090,9 +1090,19 @@ class ScribaEditor:
                                                                     ruler=True)
         _f.grid(row=len(simple_fields), column=1, sticky=tk.EW, padx=4, pady=2)
 
+        # Mensaje inicial: lo que se imprime al describir la sala mientras el
+        # objeto siga donde empezo, en lugar de "Aqui hay <nombre>". En los
+        # objetos fijos (escenario, personajes) es lo unico que los hace
+        # visibles. Vacio = el motor dice "Aqui hay...".
+        ttk.Label(form, text="Mensaje inicial:").grid(row=len(simple_fields)+1, column=0,
+                                                       sticky=tk.NW, padx=6, pady=2)
+        _f, self._obj_w["initial_message"] = self._make_searchable_text(form, height=2, width=28,
+                                                                        ruler=True)
+        _f.grid(row=len(simple_fields)+1, column=1, sticky=tk.EW, padx=4, pady=2)
+
         # Checkboxes
         cb_fr = ttk.Frame(form)
-        cb_fr.grid(row=len(simple_fields)+1, column=0, columnspan=2, sticky=tk.W, padx=4)
+        cb_fr.grid(row=len(simple_fields)+2, column=0, columnspan=2, sticky=tk.W, padx=4)
         self._obj_cb = {}
         # 'fixed' NO es un campo booleano: se guarda en la lista attributes[].
         # Se muestra el primero por ser el mas habitual (objeto que no se coge).
@@ -1116,7 +1126,7 @@ class ScribaEditor:
 
         # Estado abrir/cerrar: opciones excluyentes, solo activas si 'openable'.
         est_fr = ttk.Frame(form)
-        est_fr.grid(row=len(simple_fields)+2, column=0, columnspan=2,
+        est_fr.grid(row=len(simple_fields)+3, column=0, columnspan=2,
                     sticky=tk.W, padx=4, pady=(2, 0))
         ttk.Label(est_fr, text="Estado:").pack(side=tk.LEFT, padx=(2, 4))
         self._obj_estado = tk.StringVar(value="cerrado")
@@ -1130,7 +1140,7 @@ class ScribaEditor:
             self._obj_estado_rb.append(rb)
 
         ttk.Button(form, text="💾 Guardar objeto",
-                   command=self._apply_obj).grid(row=len(simple_fields)+3, column=0,
+                   command=self._apply_obj).grid(row=len(simple_fields)+4, column=0,
                                                   columnspan=2, pady=6)
         form.columnconfigure(1, weight=1)
 
@@ -3882,6 +3892,8 @@ class ScribaEditor:
         self._obj_w["id"].delete(0, tk.END); self._obj_w["id"].insert(0, oid)
         self._obj_w["description"].delete("1.0", tk.END)
         self._obj_w["description"].insert("1.0", obj.get("description",""))
+        self._obj_w["initial_message"].delete("1.0", tk.END)
+        self._obj_w["initial_message"].insert("1.0", obj.get("initial_message") or "")
         for cb, v in self._obj_cb.items():
             v.set(bool(obj.get(cb, False)))
         self._obj_fixed.set('fixed' in (obj.get("attributes") or []))
@@ -3961,6 +3973,11 @@ class ScribaEditor:
         try:    obj["weight"] = int(self._obj_w["weight"].get())
         except: obj["weight"] = 0
         obj["description"] = self._obj_w["description"].get("1.0", tk.END).strip()
+        _im = self._obj_w["initial_message"].get("1.0", tk.END).strip()
+        if _im:
+            obj["initial_message"] = _im
+        else:
+            obj.pop("initial_message", None)
         for cb, v in self._obj_cb.items():
             obj[cb] = v.get()
         # Estado excluyente -> open/locked (evita el abierto+cerrado contradictorio).

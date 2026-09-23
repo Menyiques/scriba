@@ -11,6 +11,7 @@ arranque limpio, asi que no se contaminan entre si.
 Formato del fichero de pruebas (.pru), una cosa por linea:
 
     === nombre de la prueba     empieza una prueba nueva (reinicia el juego)
+    === [128 next pc] nombre    idem, pero solo en esas maquinas (48, 128, next, pc)
     # comentario                se ignora
     MIRAR                       una orden, tal cual la escribiria el jugador
     ? texto                     la pantalla DEBE contener ese texto
@@ -65,6 +66,7 @@ def _norm(t):
 
 
 class Juego:
+    maquina = 'next'
     """Un juego compilado a .nex y listo para jugarse en el simulador."""
 
     def __init__(self, yaml_path, nex=None):
@@ -278,6 +280,18 @@ def corre(juego, path_pru, nivel=0, salida=None):
             continue
         if linea.startswith('==='):
             nombre = linea.lstrip('= ').strip() or '(sin nombre)'
+            # "=== [128 next pc] nombre": la prueba solo corre en esas
+            # maquinas; en las demas se salta entera (ni cuenta ni falla).
+            m = re.match(r'\[([^\]]+)\]\s*(.*)', nombre)
+            saltar = False
+            if m:
+                maqs = m.group(1).lower().split()
+                nombre = m.group(2).strip() or '(sin nombre)'
+                saltar = getattr(juego, 'maquina', '') not in maqs
+            if saltar:
+                activa = None
+                di('=== %s (no aplica en %s)' % (nombre, getattr(juego, 'maquina', '?')))
+                continue
             juego.arranca()
             activa = True
             n = 0
@@ -285,6 +299,8 @@ def corre(juego, path_pru, nivel=0, salida=None):
             res.append((nombre, None, 'inicio'))
             di('=== %s' % nombre)
             cuenta('(arranque)')
+            continue
+        if activa is None:
             continue
         if not activa:
             juego.arranca()

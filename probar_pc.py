@@ -83,6 +83,7 @@ class Sesion(player.GameSession):
 
 
 class JuegoPC(pj.Juego):
+    maquina = 'pc'
     """Un juego jugandose en el interprete de Python, con la misma cara que
     `probar_juego.Juego` y `probar_48.Juego48`."""
 

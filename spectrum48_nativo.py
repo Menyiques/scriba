@@ -471,6 +471,7 @@ def compila(game, ancho=COLS, org=ORG, guion=None, game_dir=None):
                               ficha=ficha, imagen_intro=False)
     idioma = str((game.get('metadata') or {}).get('language', '') or 'es')
     borde = nx.borde_inicial(game)
+    import presupuesto
 
     def _db(dbaddr):
         return ge.build_game_db(
@@ -498,7 +499,20 @@ def compila(game, ancho=COLS, org=ORG, guion=None, game_dir=None):
                          guion=guion, pantallas=pant, nloc=nloc)
     assert org + len(code) == dbaddr, 'el motor cambio de tamano entre pasadas'
     db = _db(dbaddr)
-    import presupuesto
+    # Las descripciones de los objetos (EXAMINAR) van dentro de la base de
+    # datos desde v2.11. Si con ellas no cabe, se quedan fuera y se avisa:
+    # EXAMINAR imprime solo el nombre, como hasta ahora. Es lo ultimo que se
+    # sacrifica, antes de pedirle al autor que recorte.
+    if org + len(code) + len(db) > SP48 and any(o.get('desc') for o in spec['objects']):
+        _con = len(db)
+        spec, _ = nc.compile_game(c, sysm[:ge.NSYS], width=ancho, filas=0,
+                                  ficha=ficha, imagen_intro=False, obj_desc=False)
+        db = _db(dbaddr)
+        presupuesto.apunta(
+            '48K: las descripciones de los objetos no caben (%s bytes) y se quedan '
+            'fuera: EXAMINAR imprime solo el nombre. Sin ellas sobran %s bytes.'
+            % (presupuesto._miles(_con - len(db)),
+               presupuesto._miles(SP48 - org - len(code) - len(db))))
     presupuesto.comprueba(
         'ZX Spectrum 48K',
         [('motor + plataforma', len(code) - pant_bytes),

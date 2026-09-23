@@ -18,6 +18,35 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
 
 ---
 
+## 2.11 — 2026-09-23 — EXAMINAR describe los objetos en las máquinas nativas
+
+### Novedades
+- **Las descripciones de los objetos llegan al motor nativo.** Hasta ahora
+  `nativecc` no las emitía y EXAMINAR imprimía solo el nombre en 48K, 128K,
+  Next y CPC (en PC sí salían). Ahora cada objeto lleva su descripción como
+  un mensaje más (tabla nueva en la cabecera, `DBB+87`) y `do_exam` la
+  imprime; si el objeto no tiene, el nombre como antes. Las reglas `ON EXAMI`
+  del autor siguen mandando: si una casa, el motor no llega a describir.
+- **Si no caben, se quedan fuera con aviso.** En 48K y CPC, cuando la base de
+  datos con descripciones se pasa del mapa plano, el export las omite
+  (`obj_desc=False`), lo dice en el informe y EXAMINAR vuelve a dar solo el
+  nombre. En CPC van antes que los FX: Apolo 11 las incluye a cambio de un
+  efecto mudo. En 128K y Next van a bancos con el resto del texto y caben.
+- **El editor edita el mensaje inicial de los objetos.** El formulario de
+  Objetos tiene un campo «Mensaje inicial» bajo la descripción (con la misma
+  regla de columnas). Antes solo se podía tocar en el YAML a mano. Vacío =
+  sin mensaje: la clave desaparece del YAML y el motor dice «Aquí hay…».
+- **Pruebas por máquina en los `.pru`:** `=== [128 next pc] nombre` corre esa
+  prueba solo en las máquinas listadas (48, 128, next, pc); en las demás se
+  salta sin contar ni fallar. Sirve para lo que no cabe en 48K.
+
+### Correcciones
+- `verify_next` (arnés plano de 64K) recompila sin descripciones si el juego
+  no cabe bajo la pila; con Tifón desbordaba los 64K y el tick de los
+  temporizadores fallaba por corrupción, no por el motor.
+
+---
+
 ## 2.10 — 2026-09-23 — Respuestas compartidas y tres bugs viejos del motor
 
 ### Novedades
