@@ -18,6 +18,60 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
 
 ---
 
+## 2.10 — 2026-09-23 — Respuestas compartidas y tres bugs viejos del motor
+
+### Novedades
+- **Las respuestas con alternativas ya no se guardan por triplicado.** Un
+  `ON (USAR OR METER OR PONER) (PILAS OR LINTE) (LINTE OR PILAS)` generaba doce
+  entradas con el cuerpo completo repetido en cada una. Ahora `build_game_db`
+  guarda cada cuerpo una vez y las demás entradas llevan longitud 0 y un
+  puntero (el motor lo resuelve en `run_response`). También se comparten dos
+  reglas distintas con el mismo cuerpo. En Tifón son 3,8 KB menos; Apolo 11
+  gana 900 bytes en CPC sin tocar el juego. El cuerpo de una respuesta sigue
+  limitado a 255 bytes: ahora el export lo dice en vez de corromper la tabla.
+- **Tifón 2.0: seis cadenas de puzles nuevas** (cantimplora → prisionero →
+  cinta buena entre tres; cartas → botas → llave → prisionero libre → ganzúa
+  → candado del túnel; un solo paquete de pilas para linterna, detonador y
+  señal a Peregrine; Obstler → Brandt → pase; mochila → cigarrillos → Losung
+  del Bootsmann; reloj → ronda del maquinista). Título DAS BOOT, subtítulo
+  Operation Black Typhoon, 130 puntos, misión desde las 03:30. Batería de 40
+  pruebas en PC, 48K, 128K y Next. **El CPC queda fuera para este juego**: no
+  cabe ni recortando.
+
+### Correcciones
+- **`IF … PRESENT #obj …` falso saltaba mal en las cuatro máquinas nativas.**
+  `c_if` guardaba la longitud del cuerpo en `ctmp`, y `obj_present` (PRESENT
+  y ABSENT) usa `ctmp` de borrador: el salto era el índice del objeto en vez
+  de la longitud. Según el objeto, se comía o ejecutaba bytecode a ciegas
+  (en Tifón acababa con un GOTO a la playa). `LET` con una expresión que
+  llevara PRESENT tenía el mismo fallo. Ahora ambos usan `iftmp`.
+- **`END` dentro de una respuesta corta el bloque**, como en PC. Antes
+  levantaba `quitf` y seguía ejecutando lo que viniera detrás en la misma
+  respuesta (se veía el final y luego más texto).
+- **`nativecc` no emitía las descripciones de los objetos**: en las máquinas
+  nativas EXAMINAR sólo imprime el nombre. No se ha tocado (pendiente de
+  decidir), pero queda anotado: toda pista de un objeto debe ir en un
+  `ON EXAMI` propio si el juego sale de PC.
+
+---
+
+## 2.9 — 2026-09-23 — CREATE y PUT con destino en las máquinas nativas
+
+### Correcciones
+- **`CREATE #obj destino` y `PUT #obj destino` ignoraban el destino en 48K,
+  128K, Next y CPC.** El compilador nativo los convertía en `CREATE`/`DROP` a
+  secas, que dejan el objeto en la localización actual. En Tifón,
+  `CREATE #credencial_falsa INVEN` dejaba la credencial en el suelo de la
+  trastienda (quien no la cogía se quedaba en el puesto de control), y el
+  paquete de pilas de repuesto aparecía a los pies del jugador en vez de en el
+  sitio al azar. Ahora, con destino, compilan al `PLACE` del motor, que ya
+  admitía localizaciones y los centinelas `INVEN`, `PUESTO` y `NADA`; sin
+  destino siguen siendo `CREATE`/`DROP`. El intérprete de PC siempre lo hizo
+  bien: la batería de Tifón entraba en la base por la brecha y nunca pasó por
+  el puesto de control con la credencial, así que no se vio. Ahora sí lo prueba.
+
+---
+
 ## 2.8 — 2026-09-23 — El condact SCR: pantallas donde tú digas
 
 ### Novedades

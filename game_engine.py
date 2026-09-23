@@ -151,6 +151,13 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     objlit=p; p+=nobj            # 1 si la fuente de luz esta encendida (inicial)
     resptab=p
     rbytes=bytearray()
+    # Cuerpos compartidos: dos entradas con el mismo cuerpo (las alternativas
+    # de un ON, o dos reglas identicas) lo guardan una vez. La segunda lleva
+    # longitud 0 y un puntero al byte de longitud de la primera (el motor lo
+    # resuelve en run_response). Un cuerpo vacio seria confundible con un
+    # alias, asi que se sustituye por un opcode nulo (63: >= 60, el motor
+    # lo salta) que no marca la orden como atendida, igual que antes.
+    _cuerpos={}
     for _r in responses:
         # (verbo, sustantivo1, cuerpo) o (verbo, sustantivo1, sustantivo2,
         # cuerpo). 0 = ranura no declarada (vale cualquier cosa), 254 = '_'
@@ -159,8 +166,16 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
         if len(_r)==4: vb,nn,n2,cl=_r
         else:          (vb,nn,cl),n2=_r,0
         cb=bytes(cl) if isinstance(cl,(bytes,bytearray)) else enc_condacts(cl)
+        if not cb: cb=bytes([63])
+        if len(cb)>255:
+            raise ValueError('una respuesta compila a %d bytes y el motor nativo admite 255 como mucho: parte el bloque ON en dos'%len(cb))
         rbytes.append(vb&0xFF); rbytes.append(nn&0xFF); rbytes.append(n2&0xFF)
-        rbytes.append(len(cb)&0xFF); rbytes+=cb
+        if cb in _cuerpos:
+            _dir=_cuerpos[cb]
+            rbytes.append(0); rbytes.append(_dir&0xFF); rbytes.append((_dir>>8)&0xFF)
+        else:
+            _cuerpos[cb]=resptab+len(rbytes)
+            rbytes.append(len(cb)&0xFF); rbytes+=cb
     rbytes.append(255)
     p+=len(rbytes)
     def mkblk(b): return (bytes([len(b)&0xFF,(len(b)>>8)&0xFF])+bytes(b)) if b else b''
@@ -2175,7 +2190,24 @@ rr_e:   ld    a,(hl)
         inc   hl
         ld    a,(hl)          ; longitud del cuerpo
         inc   hl
+        or    a
+        jr    nz,rr_len
+        ; Longitud 0 = alias: los dos bytes siguientes apuntan al byte de
+        ; longitud de otra entrada, cuyo cuerpo se comparte. Asi las reglas
+        ; con alternativas (A OR B) y las que repiten cuerpo lo guardan una
+        ; sola vez (build_game_db los deduplica).
+        ld    e,(hl)
+        inc   hl
+        ld    d,(hl)
+        inc   hl
+        ld    (rnext),hl
+        ex    de,hl
+        ld    a,(hl)
+        inc   hl
         ld    e,a
+        ld    d,0
+        jr    rr_chk
+rr_len: ld    e,a
         ld    d,0
         push  hl
         push  de
@@ -2183,7 +2215,7 @@ rr_e:   ld    a,(hl)
         ld    (rnext),hl
         pop   de
         pop   hl
-        ld    a,(verbid)
+rr_chk: ld    a,(verbid)
         cp    b
         jr    nz,rr_nx
         push  de              ; DE = longitud del cuerpo, la quiere run_condacts
@@ -2450,7 +2482,8 @@ c_endgame:
         call  newline
         ld    a,1
         ld    (quitf),a
-        jp    rc_loop
+        jp    rc_handled     ; END corta el bloque en seco, como en PC: lo que
+                             ; venga detras en la respuesta ya no se ejecuta
 c_tstart:
         call  getop
         ld    (ctmp),a
@@ -2898,20 +2931,24 @@ c_prvar:
         ld    a,(hl)
         call  print_dec
         jp    rc_loop
+; LETX e IF guardan su operando en un sitio propio (iftmp) y no en ctmp:
+; eval_expr pasa por obj_present (PRESENT/ABSENT), que usa ctmp de borrador,
+; y un "IF PRESENT #x" falso saltaba tantos bytes como el indice del objeto
+; en vez de la longitud del cuerpo (Scriba 2.10).
 c_letx: call  getop
-        ld    (ctmp),a
+        ld    (iftmp),a
         call  eval_expr
         ld    c,a
-        ld    a,(ctmp)
+        ld    a,(iftmp)
         call  flag_addr
         ld    (hl),c
         jp    rc_loop
 c_if:   call  getop
-        ld    (ctmp),a
+        ld    (iftmp),a
         call  eval_expr
         or    a
         jp    nz,rc_loop
-        ld    a,(ctmp)
+        ld    a,(iftmp)
         ld    e,a
         ld    d,0
         ld    hl,(cptr)
@@ -3396,6 +3433,7 @@ scrfull:  defb 0
 rndseed:  defw 1
 col:      defb 0
 respp:    defw 0
+iftmp:    defb 0               ; operando de IF/LETX a salvo de obj_present
 cptr:     defw 0
 rcend:    defw 0
 rnext:    defw 0

@@ -164,11 +164,18 @@ def compile_stmt(ln, up, ctx):
         v=ctx.var(m.group(1)); eb=ge.enc_expr(expr_rpn(pl.parse_expr(m.group(2)),ctx))
         return bytes([26,v])+eb
     if up.startswith('GOTO'):  return bytes([COP['GOTO'],ctx.loc(ln.split()[1])])
-    if up.startswith('CREATE'):return bytes([COP['CREATE'],ctx.obj(ln.split()[1])])
+    if up.startswith('CREATE') or up.startswith('DROP') or (up.startswith('PUT') and not up.startswith('PUTIN')):
+        # CREATE/PUT/DROP #obj [destino]. Sin destino, el objeto va a la
+        # localizacion actual (CREATE/DROP del motor). Con destino -una
+        # localizacion o INVEN/PUESTO/NADA- es un PLACE: hasta v2.8 el
+        # destino se ignoraba y "CREATE #credencial INVEN" dejaba la
+        # credencial en el suelo de la trastienda.
+        a=ln.split()
+        if len(a)>=3:
+            return bytes([COP['PLACE'],ctx.obj(a[1]),_destval(ctx,a[2])&0xFF])
+        return bytes([COP['CREATE' if up.startswith('CREATE') else 'DROP'],ctx.obj(a[1])])
     if up.startswith('DESTROY'):return bytes([COP['DESTROY'],ctx.obj(ln.split()[1])])
     if up.startswith('GET'):   return bytes([COP['GET'],ctx.obj(ln.split()[1])])
-    if up.startswith('DROP') or (up.startswith('PUT') and not up.startswith('PUTIN')):
-        return bytes([COP['DROP'],ctx.obj(ln.split()[1])])
     if up.startswith('ADDSCORE'):
         try: n=int(ln.split()[1])
         except: n=1
