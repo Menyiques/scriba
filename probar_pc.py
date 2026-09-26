@@ -134,7 +134,7 @@ class JuegoPC(pj.Juego):
         las dos baterias tienen que meter exactamente lo mismo por la ranura, o
         no se estan comparando dos motores sino dos entradas distintas."""
         texto = self.tecleable(orden)
-        if not texto:
+        if not texto and orden != '':     # '' = ENTER sin nada, a proposito
             raise ValueError('orden vacia o no tecleable: %r' % orden)
         if self._acabado:
             return self.pantalla()         # la partida ya termino; no hay turno

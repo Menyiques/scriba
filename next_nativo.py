@@ -1642,6 +1642,7 @@ def prefijo(org, db_base, nimg=0, titulo=False, borde=7, nsmp=0, ntxt=0,
     for n in ('SCANTGO', 'SEXITS', 'SNOUND', 'SSEE', 'STAKE', 'SDROP',
               'SNOTHERE', 'SNOTCARR', 'SINVEN', 'SEMPTY', 'SNOTAKE', 'SDARK',
               'SSCORE', 'SHEAVY', 'SSCOREP', 'SSCORES', 'SFIN', 'SOTRA',
+              'SNADAC', 'SNADAD', 'SOSCHAY', 'SVACIO',
               'CARRIED', 'NOWHERE', 'WORN', 'CONTAINED'):
         L.append('%s equ %d' % (n, getattr(ge, n)))
     return chr(10).join(L) + chr(10)

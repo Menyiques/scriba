@@ -69,6 +69,11 @@ def _sys_msgs_y_salidas(meta):
     # SOTRA: lo que se ofrece al acabar. No esta en el catalogo historico,
     # asi que se admite override del autor y si no, texto por defecto.
     msgs.append(t('otra_partida') or 'Pulsa una tecla para jugar otra vez.')
+    # SNADAC / SNADAD / SOSCHAY: COGER TODO y DEJAR TODO sin nada, y COGER
+    # TODO a oscuras (v2.13; antes daban "No ves eso aqui" / "No llevas eso").
+    msgs += [t('nada_coger'), t('nada_dejar'), t('oscuro_hay')]
+    # SVACIO: ENTER sin nada (v2.16). Sin texto propio, el de "No entiendo".
+    msgs.append(t('linea_vacia') or t('no_entiendo'))
     salidas = {1: t('dir_n').strip(), 2: t('dir_s').strip(), 3: t('dir_e').strip(),
                4: t('dir_o').strip(), 5: t('dir_u').strip(), 6: t('dir_d').strip()}
     return msgs, salidas

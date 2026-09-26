@@ -45,8 +45,8 @@ def main():
     print('  base de datos    : %6d bytes  (&%04X-&%04X)'
           % (ndb, dbaddr, dbaddr + ndb - 1))
     print('  total            : %6d de %d bytes del mapa plano (&%04X-&%04X)'
-          % (nco + ndb, s48.SP48 - s48.ORG, s48.ORG, s48.SP48 - 1))
-    print('  libre            : %6d bytes' % (s48.SP48 - (s48.ORG + nco + ndb)))
+          % (nco + ndb, s48.TOPE48 - s48.ORG, s48.ORG, s48.TOPE48 - 1))
+    print('  libre            : %6d bytes (y %d de pila)' % (s48.TOPE48 - (s48.ORG + nco + ndb), s48.PILA48))
     print('  %d localizaciones, %d objetos, %d mensajes'
           % (len(spec['locations']), len(spec['objects']), len(spec['messages'])))
     print()

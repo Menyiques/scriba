@@ -10,6 +10,11 @@ CBROT = {'rlc':0,'rrc':1,'rl':2,'rr':3,'sla':4,'sra':5,'sll':6,'srl':7}
 
 class AsmError(Exception): pass
 
+# En la pasada final un simbolo sin definir es un error. Antes valia 0 en
+# silencio, y un "ld de,SNUEVO" olvidado en la lista de equates imprimia el
+# mensaje 0 ("No puedes ir en esa direccion") sin que nada avisara (v2.13).
+_FINAL = False
+
 def _ev(s, sym, cur):
     s = s.strip()
     m = re.fullmatch(r"'(.)'", s)
@@ -24,8 +29,13 @@ def _ev(s, sym, cur):
         if re.fullmatch(r'\d+', w): return w
         if w.lower() in sym: return str(sym[w.lower()])
         return 'UNRESOLVED'
+    faltan = [w for w in re.findall(r'[A-Za-z_][A-Za-z0-9_]*', e)
+              if not re.fullmatch(r'\d+', w) and w.lower() not in sym] if _FINAL else []
     e = re.sub(r'[A-Za-z_][A-Za-z0-9_]*', repl, e)
-    if 'UNRESOLVED' in e: return 0
+    if 'UNRESOLVED' in e:
+        if _FINAL:
+            raise AsmError('simbolo sin definir: %s (en "%s")' % (', '.join(faltan), s))
+        return 0
     try: return int(eval(e, {'__builtins__':{}}, {})) & 0xFFFF
     except Exception as ex: raise AsmError('no eval "%s"->"%s": %s'%(s,e,ex))
 
@@ -248,6 +258,14 @@ def assemble(source, org=0):
         if mnem in ('ds','defs'): parsed.append(('data',cur,mnem,arg)); cur+=_ev(arg.split(',')[0],sym,cur); continue
         parsed.append(('inst',cur,mnem,arg)); cur+=len(_enc(mnem,_split_ops(arg),cur,sym))
     out={}
+    global _FINAL
+    _FINAL = True
+    try:
+        return _segunda(parsed, sym, out)
+    finally:
+        _FINAL = False
+
+def _segunda(parsed, sym, out):
     for item in parsed:
         if item[0]=='org': continue
         if item[0]=='data':

@@ -1983,10 +1983,13 @@ class PAWSInterpreter:
                 print("\n" + self._t('hasta_luego'))
                 break
 
-            if not raw:
-                continue
-
-            self.last_command = raw
+            # ENTER sin nada: un turno como otro cualquiera (el reloj corre,
+            # como en las maquinas nativas) con su propio mensaje, que cada
+            # juego redacta en metadata['mensajes']['linea_vacia']; sin el, el
+            # de "No entiendo".
+            vacia = not raw
+            if not vacia:
+                self.last_command = raw
             self.turns += 1
 
             # CONDACTS before_turn
@@ -1997,7 +2000,9 @@ class PAWSInterpreter:
             # Parsear
             verb, noun1, noun2 = self.parse(raw)
 
-            if not verb:
+            if vacia:
+                print(self._t('linea_vacia') or self._t('no_entiendo_ayuda'))
+            elif not verb:
                 print(self._t('no_entiendo_ayuda'))
                 # El turno cuenta igualmente: before_turn ya corrió, así que
                 # timers y after_turn también deben correr (antes se saltaban

@@ -34,6 +34,11 @@ import z80asm
 
 ORG = 0x6000          # igual que el Next: justo encima de la pantalla ULA
 SP48 = 0xFF00         # pila del juego (por debajo de la zona de UDG de la ROM)
+# La pila baja desde SP48 hacia el final de la base de datos: hay que dejarle
+# sitio. Antes el presupuesto contaba hasta SP48 y un juego que llenaba el mapa
+# hasta el ultimo byte perdia la cola de la DB con la primera llamada anidada.
+PILA48 = 128       # la partida entera llega a 56 bytes; +20 de la ROM (IM1) y margen
+TOPE48 = SP48 - PILA48  # donde tiene que acabar motor + DB
 COLS = nx.COLS        # 42 columnas, la misma fuente de 6 pixeles
 
 
@@ -498,27 +503,117 @@ def compila(game, ancho=COLS, org=ORG, guion=None, game_dir=None):
     code, sym = ensambla(org=org, db_base=dbaddr, idioma=idioma, borde=borde,
                          guion=guion, pantallas=pant, nloc=nloc)
     assert org + len(code) == dbaddr, 'el motor cambio de tamano entre pasadas'
+    # Los efectos FX del AY son lo primero que se sacrifica en el 48K: el 48K
+    # de serie no tiene AY (solo suenan con una interfaz AY o en un 128K), y
+    # ocupan 5 bytes por frame en el mapa plano. Si no cabe todo, entran los
+    # que quepan EN EL ORDEN de la pestana FX, como en el CPC; los demas se
+    # quedan con la ranura a cero y su PLAY compila igual y sale mudo. El
+    # blob va al final de la DB, asi que su tamano se suma tal cual.
+    fx_todos, fx_fuera = fx_blob, []
+    _usados = sorted(usados) if fx_todos else []
+
+    def _cabe(n):
+        return org + len(code) + n <= TOPE48
+
+    def _fx_que_quepan(base):
+        dentro, mejor = set(), b''
+        for i in _usados:
+            cand = fx_engine.pack_ay_fx(game.get('fx', []) or [], dentro | {i})
+            if _cabe(base + len(cand)):
+                dentro.add(i)
+                mejor = cand
+        return mejor, [i for i in _usados if i not in dentro]
+
     db = _db(dbaddr)
+    if fx_todos and not _cabe(len(db)):
+        fx_blob = b''
+        _sin = len(_db(dbaddr))
+        if _cabe(_sin):
+            fx_blob, fx_fuera = _fx_que_quepan(_sin)
+        db = _db(dbaddr)
     # Las descripciones de los objetos (EXAMINAR) van dentro de la base de
     # datos desde v2.11. Si con ellas no cabe, se quedan fuera y se avisa:
     # EXAMINAR imprime solo el nombre, como hasta ahora. Es lo ultimo que se
     # sacrifica, antes de pedirle al autor que recorte.
-    if org + len(code) + len(db) > SP48 and any(o.get('desc') for o in spec['objects']):
+    if org + len(code) + len(db) > TOPE48 and any(o.get('desc') for o in spec['objects']):
         _con = len(db)
         spec, _ = nc.compile_game(c, sysm[:ge.NSYS], width=ancho, filas=0,
                                   ficha=ficha, imagen_intro=False, obj_desc=False)
         db = _db(dbaddr)
+        _resto = TOPE48 - org - len(code) - len(db)
         presupuesto.apunta(
             '48K: las descripciones de los objetos no caben (%s bytes) y se quedan '
-            'fuera: EXAMINAR imprime solo el nombre. Sin ellas sobran %s bytes.'
+            'fuera: EXAMINAR imprime solo el nombre. %s'
             % (presupuesto._miles(_con - len(db)),
-               presupuesto._miles(SP48 - org - len(code) - len(db))))
+               'Sin ellas sobran %s bytes.' % presupuesto._miles(_resto) if _resto >= 0
+               else 'Aun sin ellas faltan %s bytes.' % presupuesto._miles(-_resto)))
+        if fx_todos and not fx_blob:
+            _sin = len(db)
+            if _cabe(_sin):
+                fx_blob, fx_fuera = _fx_que_quepan(_sin)
+                db = _db(dbaddr)
+    # Las pantallas SCR van comprimidas en el mapa plano. Si ni sin FX ni
+    # sin descripciones cabe el juego, se quitan pantallas: primero las
+    # sueltas (SCR nombre), de la ultima en aparecer a la primera, y solo
+    # despues las que se asignan a una sala (SCR @sala nombre), que hacen de
+    # imagen de esa sala. Una pantalla quitada queda como si no existiera: su
+    # SCR compila igual y no pinta nada.
+    scr_fuera = []
+    if not _cabe(len(db)) and any(fl for _n, _f, fl in pant):
+        import capabilities as _cap
+        _sala = _cap.scr_de_sala(game)
+        _conimg = [i for i, (n, _f, fl) in enumerate(pant) if fl]
+        _orden = ([i for i in reversed(_conimg) if pant[i][0].lower() not in _sala] +
+                  [i for i in reversed(_conimg) if pant[i][0].lower() in _sala])
+        fx_blob = b''
+        for i in _orden:
+            scr_fuera.append(pant[i][0])
+            pant[i] = (pant[i][0], 0, [])
+            code, _sym = ensambla(org=org, db_base=org, idioma=idioma, borde=borde,
+                                  guion=guion, pantallas=pant, nloc=nloc)
+            dbaddr = org + len(code)
+            code, sym = ensambla(org=org, db_base=dbaddr, idioma=idioma, borde=borde,
+                                 guion=guion, pantallas=pant, nloc=nloc)
+            db = _db(dbaddr)
+            if _cabe(len(db)):
+                break
+        # la ultima quitada puede haber liberado de sobra: vuelven, por orden
+        # de importancia, las que ahora quepan
+        _guarda = {n: (f, fl) for n, f, fl in
+                   sx.pantallas_spectrum(os.path.join(game_dir, 'img', 'Spectrum'),
+                                         scr_fuera)[0]}
+        for i in reversed(_orden[:len(scr_fuera)]):
+            n = pant[i][0]
+            prueba = list(pant)
+            prueba[i] = (n,) + _guarda[n]
+            c1, _s = ensambla(org=org, db_base=org, idioma=idioma, borde=borde,
+                              guion=guion, pantallas=prueba, nloc=nloc)
+            c2, s2 = ensambla(org=org, db_base=org + len(c1), idioma=idioma,
+                              borde=borde, guion=guion, pantallas=prueba, nloc=nloc)
+            d2 = _db(org + len(c1))
+            if org + len(c2) + len(d2) <= TOPE48:
+                pant, code, sym, dbaddr, db = prueba, c2, s2, org + len(c1), d2
+                scr_fuera.remove(n)
+        if fx_todos and _cabe(len(db)):
+            fx_blob, fx_fuera = _fx_que_quepan(len(db))
+            db = _db(dbaddr)
+        pant_bytes = sum(len(f) for _, _, fl in pant for f in fl)
+        presupuesto.apunta(
+            '48K: %d pantalla(s) SCR no caben y no se pintan: %s. En 128K y Next '
+            'salen todas.' % (len(scr_fuera), ', '.join(scr_fuera)))
+    if fx_fuera:
+        _nom = [((game.get('fx') or [])[i - 1] or {}).get('name', str(i))
+                for i in fx_fuera if 0 < i <= len(game.get('fx') or [])]
+        presupuesto.apunta(
+            '48K: %d efecto(s) FX no caben y suenan mudos: %s. El 48K de serie '
+            'no tiene AY; en 128K y Next suenan todos.' % (len(_nom), ', '.join(_nom)))
     presupuesto.comprueba(
         'ZX Spectrum 48K',
         [('motor + plataforma', len(code) - pant_bytes),
          ('pantallas SCR', pant_bytes),
          ('base de datos', len(db))],
-        SP48 - org, 'el mapa plano &%04X-&%04X' % (org, SP48),
+        TOPE48 - org, 'el mapa plano &%04X-&%04X (encima, %d bytes de pila)'
+        % (org, TOPE48, PILA48),
         presupuesto.RECORTA_PLANO)
     return code, db, sym, spec, dbaddr
 
@@ -574,8 +669,8 @@ def export_tap(game, tap_path, ancho=COLS, org=ORG, game_dir=None):
                     nombre=str((game.get('metadata') or {}).get('title', 'juego'))[:10]))
     return {'codigo': len(code), 'datos': len(db), 'total': len(blob),
             'org': org, 'db': dbaddr, 'fin': org + len(blob),
-            'libre': SP48 - (org + len(blob)),
-            'mapa': SP48 - org,
+            'libre': TOPE48 - (org + len(blob)),
+            'mapa': TOPE48 - org,
             'localizaciones': len(spec['locations']),
             'objetos': len(spec['objects']),
             'presupuesto': presupuesto.informe(),
@@ -607,7 +702,7 @@ def main():
     print('  %d localizaciones, %d objetos'
           % (info['localizaciones'], info['objetos']))
     if info['libre'] < 0:
-        print('  NO CABE: se pasa de &%04X' % SP48)
+        print('  NO CABE: se pasa de &%04X' % TOPE48)
 
 
 if __name__ == '__main__':

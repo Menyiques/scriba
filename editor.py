@@ -7004,9 +7004,10 @@ class InterpreterWindow:
 
     def _submit(self):
         text = self.ivar.get().strip()
-        if not text or not self.interp.running:
+        if not self.interp.running:
             return
-        self.history.append(text)
+        if text:                  # ENTER sin nada tambien es un turno (linea_vacia)
+            self.history.append(text)
         self.history_pos = -1
         self.ivar.set('')
         self.editor.root.after(0, lambda: None)  # flush
@@ -7066,7 +7067,8 @@ class InterpreterWindow:
             # False si la sesión se reinició mientras este turno corría
             # (p. ej. Reiniciar con el debugger pausado)
             return self.interp is i
-        i.last_command = text
+        if text:
+            i.last_command = text
         i.turns += 1
         run_section_blocks('before_turn', i.condacts.get('before_turn', []))
         if not alive():
@@ -7074,7 +7076,9 @@ class InterpreterWindow:
         if not i.running:
             return self.editor.root.after(0, self._end)
         verb, noun1, noun2 = i.parse(text)
-        if not verb:
+        if not text:
+            self._write((i._t('linea_vacia') or 'No entiendo eso.') + chr(10), 'warn')
+        elif not verb:
             self._write('No entiendo eso.' + chr(10), 'warn')
             # El turno cuenta igualmente: timers y after_turn corren abajo
             # (paridad con el CLI; antes el reloj se congelaba).

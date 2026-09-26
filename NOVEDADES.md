@@ -18,6 +18,89 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
 
 ---
 
+## 2.16 — 2026-09-26 — ENTER sin nada tiene su propio mensaje
+
+### Novedades
+- **Mensaje de sistema `linea_vacia`**: lo que sale al pulsar ENTER sin
+  escribir nada. Cada juego lo redacta en la ventana de mensajes del editor
+  (p. ej. «El tiempo pasa.» en un juego con reloj); si se deja vacío, sale el
+  de «No entiendo eso.», como hasta ahora. Una línea con palabras que el
+  parser no conoce sigue diciendo «No entiendo»: solo cambia la línea vacía.
+  En las máquinas nativas es el mensaje de sistema `SVACIO` (NSYS pasa a 22).
+
+### Correcciones
+- **En PC, ENTER sin nada no hacía nada**: ni mensaje ni turno, así que el
+  reloj del juego no avanzaba, mientras que en Spectrum, Next y CPC sí. Ahora
+  en el intérprete de PC, en el reproductor del .exe y en la ventana de
+  prueba del editor es un turno completo (before_turn, temporizadores y
+  after_turn), igual que en las máquinas nativas.
+- Las baterías de pruebas (`.pru`) admiten `(ENTER)` para pulsar ENTER sin
+  escribir nada.
+
+---
+
+## 2.15 — 2026-09-26 — En el 48K, efectos FX y pantallas SCR entran si caben
+
+### Novedades
+- **48K: los efectos FX (PLAY) son lo primero que se sacrifica.** El 48K de
+  serie no tiene AY y los efectos ocupan 5 bytes por frame en el mapa plano:
+  si el juego no cabe, entran los que quepan en el orden de la pestaña FX y
+  los demás quedan mudos (su PLAY compila igual), como ya hacía el CPC. El
+  informe de presupuesto dice cuáles se quedan fuera. Primero se prueba a
+  guardar las descripciones de los objetos quitando FX; si ni así caben, se
+  quitan las descripciones y vuelven los FX que quepan.
+- **48K: las pantallas SCR también se ajustan al sitio.** Van comprimidas en el
+  mapa plano; si ni sin FX ni sin descripciones cabe el juego, se quitan
+  pantallas: primero las sueltas (`SCR nombre`), de la última en aparecer a la
+  primera, y solo después las que se asignan a una sala (`SCR @sala nombre`),
+  que hacen de imagen de la sala. Luego vuelven las que quepan. Una pantalla
+  quitada no pinta nada, como si faltara el fichero. El informe lo dice.
+
+---
+
+## 2.14 — 2026-09-24 — Un texto repetido se guarda una vez
+
+### Novedades
+- **Los textos fijos iguales comparten mensaje** en las máquinas nativas
+  (48K, 128K, CPC, Next). Dos objetos con el mismo nombre (un PNJ despierto y
+  dormido, el U-571 amarrado y hundido), dos descripciones iguales o un PRINT
+  que repite el mensaje inicial de un objeto ya no se guardan dos veces. Los
+  PRINT iguales ya se compartían; ahora también los nombres, descripciones y
+  mensajes iniciales. En *Tifón Negro* son 92 bytes menos en el 48K. Los
+  mensajes de sistema no entran: van en índices fijos.
+
+---
+
+## 2.13 — 2026-09-24 — COGER TODO y DEJAR TODO hablan claro, y el ensamblador ya no calla
+
+### Correcciones
+- **COGER TODO sin nada que coger** decía «No ves eso aquí.» en las máquinas
+  nativas; ahora dice el mensaje `nada_coger` («No ves nada que puedas coger
+  aquí.»), como en PC. **DEJAR TODO sin nada** decía «No llevas eso.»; ahora
+  `nada_dejar` («No llevas nada que dejar.»).
+- **COGER TODO a oscuras** cogía a ciegas lo que hubiera en la sala. Ahora
+  dice `oscuro_hay` («Está demasiado oscuro para ver qué hay.») y no coge
+  nada, igual que en PC.
+- Son tres mensajes de sistema nuevos (`SNADAC`, `SNADAD`, `SOSCHAY`; NSYS
+  pasa de 18 a 21), editables desde la pestaña de mensajes del editor.
+- **`z80asm`: un símbolo sin definir es un error en la pasada final.** Antes
+  valía 0 en silencio: el motor de Spectrum no llevaba los equates nuevos y
+  COGER TODO imprimía el mensaje 0 («No puedes ir en esa dirección») sin que
+  nada avisara. Ahora el ensamblado se para y dice qué símbolo falta.
+
+---
+
+## 2.12 — 2026-09-23 — El inventario, un objeto por línea
+
+### Correcciones
+- **INVENTARIO en las máquinas nativas salía todo seguido**, sin comas ni
+  saltos: «Llevas: un paquete de cigarrillos Juno una cantimplora de la
+  Wehrmacht una linterna militar». Ahora `do_inven` pone cada objeto en su
+  línea con «  - », igual que el intérprete de PC. Vale para 48K, 128K, Next
+  y CPC (motor común).
+
+---
+
 ## 2.11 — 2026-09-23 — EXAMINAR describe los objetos en las máquinas nativas
 
 ### Novedades

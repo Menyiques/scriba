@@ -24,6 +24,7 @@ _PH = re.compile(r'(\{[a-z]+\})')
 CATALOGO = [
     # ── parser / acciones generales ──
     ('no_entiendo',     "No entiendo eso.",                         {}, "Orden no reconocida por el parser"),
+    ('linea_vacia',     "",                                         {}, "ENTER sin nada (vacio = No entiendo)"),
     ('no_hacer',        "No puedes hacer eso.",                     {}, "Accion no permitida"),
     ('no_direccion',    "No puedes ir en esa direccion.",           {}, "Salida inexistente"),
     ('pulsa_tecla',     "Pulsa una tecla...",                       {}, "Espera de tecla (mas/paginado)"),
@@ -126,6 +127,8 @@ def aplica(src, overrides, max_score, translit):
         custom = overrides.get(mid)
         if not custom or str(custom) == defecto:
             continue
+        if not defecto:
+            continue    # mensaje solo del motor nativo (p. ej. linea_vacia): el BASIC no lo tiene
         viejo_expr = _expr(defecto, ph, max_score, lambda s: s)
         nuevo_expr = _expr(str(custom), ph, max_score, translit)
         # El motor imprime con pw(...) (con salto) o pri(...) (sin salto: "Salidas:"

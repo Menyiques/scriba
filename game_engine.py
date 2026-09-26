@@ -11,7 +11,11 @@ SSCOREP=14                       # prefijo de "+N puntos" (ADDSCORE)
 SSCORES=15                       # sufijo de "+N puntos"
 SFIN=16                          # cierre de partida (END), prefijo de la puntuacion
 SOTRA=17                         # "pulsa una tecla para jugar otra vez"
-NSYS=18
+SNADAC=18                        # COGER TODO sin nada que coger
+SNADAD=19                        # DEJAR TODO sin nada que dejar
+SOSCHAY=20                       # COGER TODO a oscuras
+SVACIO=21                        # ENTER sin nada (linea_vacia, configurable por juego)
+NSYS=22
 NRAM=64                          # tamano de las matrices de estado en RAM
 CARRIED=255
 NOWHERE=254
@@ -582,7 +586,7 @@ dispatch:
         ld    a,(verbid)
         ld    b,a
         or    a
-        jp    z,d_nound       ; sin verbo reconocido -> "No entiendo"
+        jp    z,d_vacio       ; sin verbo: linea vacia o "No entiendo"
         ld    a,(vquit)
         cp    b
         jr    nz,d_nq
@@ -628,6 +632,23 @@ d_mov:  ld    a,b
 d_cantgo:
         call  newline
         ld    de,SCANTGO
+        call  print_msg
+        ret
+; Sin verbo reconocido. Si la linea estaba vacia (ENTER sin nada, o solo
+; espacios) sale SVACIO, que cada juego redacta a su manera ("El tiempo
+; pasa."); si tenia palabras que el parser no conoce, el "No entiendo" de
+; siempre. El turno corre igual en los dos casos: after_turn y temporizadores.
+d_vacio:
+        ld    hl,INBUF
+dv_l:   ld    a,(hl)
+        or    a
+        jr    z,dv_si
+        cp    32
+        jr    nz,d_nound
+        inc   hl
+        jr    dv_l
+dv_si:  call  newline
+        ld    de,SVACIO
         call  print_msg
         ret
 d_nound:
@@ -1216,7 +1237,14 @@ dg_no:  call  newline
         call  print_msg
         ret
 ; ---- COGER TODO: coge todos los objetos presentes en la localizacion ----
-dg_all: xor   a
+dg_all: call  is_dark         ; a oscuras no se ve que hay (como en PC)
+        or    a
+        jr    z,dga_luz
+        call  newline
+        ld    de,SOSCHAY
+        jp    print_msg
+dga_luz:
+        xor   a
         ld    (oidx),a
         ld    (dgcnt),a       ; dgcnt = nº de objetos cogidos (ctmp lo usa
                               ; obj_present, que se llama en el bucle)
@@ -1261,7 +1289,9 @@ dga_nx: ld    a,(oidx)
 dga_e:  ld    a,(dgcnt)
         or    a
         ret   nz             ; cogio algo
-        jp    dg_no          ; nada que coger -> "No ves eso aqui."
+        call  newline        ; nada que coger (antes decia "No ves eso aqui")
+        ld    de,SNADAC
+        jp    print_msg
 
 ; ---- do_drop ----
 do_drop:
@@ -1332,7 +1362,9 @@ dda_nx: ld    a,(oidx)
 dda_e:  ld    a,(ctmp)
         or    a
         ret   nz
-        jp    dd_no          ; nada que dejar -> "No llevas eso."
+        call  newline        ; nada que dejar (antes decia "No llevas eso")
+        ld    de,SNADAD
+        jp    print_msg
 
 ; ---- do_inven ----
 do_inven:
@@ -1363,10 +1395,17 @@ di_l:   ld    a,(oidx)
         call  held_z
         jr    nz,di_nx
         push  bc
-        ld    a,(oidx)
-        call  print_objname
+        call  newline         ; un objeto por linea, "  - nombre", como en PC
         ld    a,32
         call  char_raw
+        ld    a,32
+        call  char_raw
+        ld    a,'-'
+        call  char_raw
+        ld    a,32
+        call  char_raw
+        ld    a,(oidx)
+        call  print_objname
         pop   bc
 di_nx:  ld    a,(oidx)
         inc   a
@@ -3711,6 +3750,10 @@ def assemble_engine(org=ORG, db_base=DB, nloc=256, pantallas=None):
     L.append('SSCORES equ %d'%SSCORES)
     L.append('SFIN equ %d'%SFIN)
     L.append('SOTRA equ %d'%SOTRA)
+    L.append('SNADAC equ %d'%SNADAC)
+    L.append('SNADAD equ %d'%SNADAD)
+    L.append('SOSCHAY equ %d'%SOSCHAY)
+    L.append('SVACIO equ %d'%SVACIO)
     L.append('CARRIED equ %d'%CARRIED)
     L.append('NOWHERE equ %d'%NOWHERE)
     L.append('WORN equ %d'%WORN)

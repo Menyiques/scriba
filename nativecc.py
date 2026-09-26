@@ -380,15 +380,23 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj
     lang=str((getattr(c,'meta',{}) or {}).get('language','') or '').lower()
     _sx._PT_LANG = lang.startswith('pt')
     messages=[translit(m) for m in sysm]; NSYS=len(messages)
+    # Textos repetidos, una sola vez: dos objetos que se llaman igual (el mismo
+    # PNJ despierto y dormido) o un PRINT que repite una descripcion comparten
+    # el mensaje. Los de sistema no entran: van en indices fijos.
+    _vistos={}
+    def _msg(t):
+        t=translit(t)
+        if t in _vistos: return _vistos[t]
+        i=len(messages); messages.append(t); _vistos[t]=i; return i
     # localizaciones por id (1-based -> 0-based)
     loc_by_id=sorted(c.locidx.items(), key=lambda kv: kv[1])
     locations=[]
     for name,_id in loc_by_id:
         L=g['locations'][name]
-        di=len(messages); messages.append(translit(L.get('description','')))
+        di=_msg(L.get('description',''))
         # Nombre de la localizacion, en mayusculas como en los exports BASIC.
         _nm=str(L.get('name') or name)
-        li=len(messages); messages.append(translit(_nm.upper()))
+        li=_msg(_nm.upper())
         exits=[]
         for d,dest in (L.get('exits') or {}).items():
             if dest and dest in c.locidx:
@@ -401,21 +409,21 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj
     objects=[]
     for name,_id in obj_by_id:
         O=g['objects'][name]
-        ni=len(messages); messages.append(translit(O.get('name','')))
+        ni=_msg(O.get('name',''))
         # Mensaje inicial del objeto: lo que se imprime al mirar la sala en vez de
         # "Aqui hay <nombre>". En los objetos fijos (escenario, PNJ) es ademas lo
         # unico que los hace visibles.
         _im=(O.get('initial_message') or '').strip()
         ii=0
         if _im:
-            ii=len(messages); messages.append(translit(_im))
+            ii=_msg(_im)
         # Descripcion (lo que imprime EXAMINAR). Hasta v2.10 no se compilaba y
         # EXAMINAR solo daba el nombre. obj_desc=False la deja fuera: el 48K
         # y el CPC lo hacen cuando no cabe en el mapa plano.
         _de=(O.get('description') or '').strip() if obj_desc else ''
         di=0
         if _de:
-            di=len(messages); messages.append(translit(_de))
+            di=_msg(_de)
         noun=c.nounid.get(O.get('noun','') or '',0)
         lname=O.get('location')
         attrs=[str(a).lower() for a in (O.get('attributes') or [])]
@@ -446,6 +454,7 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj
         raise ValueError('el motor nativo admite %d variables como mucho '
                          '(FLAGS), y el juego declara %d'%(ge.NRAM,len(c.vars)))
     ctx=Ctx(msgbase=len(messages)); ctx.strict=True
+    ctx.msgmap.update(_vistos)          # un PRINT igual que un texto fijo, lo reusa
     ctx.vars={k.upper().replace('_',''):i for i,k in enumerate(c.vars.keys())}
     ctx.locs={name:(c.locidx[name]-1) for name in c.locidx}
     ctx.objs={name.upper():(c.objidx[name]-1) for name in c.objidx}

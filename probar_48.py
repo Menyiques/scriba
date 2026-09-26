@@ -38,7 +38,7 @@ class Juego48(pj.Juego):
                      'imagenes': [],
                      'codigo': len(code), 'datos': len(db),
                      'total': len(code) + len(db),
-                     'libre': s48.SP48 - (s48.ORG + len(code) + len(db))}
+                     'libre': s48.TOPE48 - (s48.ORG + len(code) + len(db))}
         if tap:
             with open(tap, 'wb') as f:
                 f.write(s48.tap(code + db, org=s48.ORG))

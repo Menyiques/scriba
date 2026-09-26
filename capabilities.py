@@ -241,6 +241,20 @@ def used_scr(game):
     return out
 
 
+def scr_de_sala(game):
+    """Las pantallas que algun SCR asigna a una sala (SCR @sala nombre), en
+    minusculas. Cuentan como imagen de esa sala desde ese momento, asi que
+    donde falta sitio (48K) son lo ultimo que se quita."""
+    out = set()
+    for sc in _scripts(game):
+        for line in str(sc).split('\n'):
+            for m in _SCR.finditer(line.strip()):
+                sala, n = partes_scr(m.group(1), m.group(2))
+                if sala and n:
+                    out.add(n.lower())
+    return out
+
+
 def used_fx(game):
     """Devuelve el conjunto de números de efecto (1-based) referenciados por
     PLAY (por nombre o número) en cualquier script. La exportación retro embebe

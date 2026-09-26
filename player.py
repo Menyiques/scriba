@@ -312,8 +312,8 @@ def main(argv=None):
 
     def _enviar(*_):
         s = ent.get().strip()
-        if not s or not ses.alive:
-            return
+        if not ses.alive:
+            return              # ENTER sin nada tambien es un turno (linea_vacia)
         ent.delete(0, tk.END)
         _append('\n> %s\n' % s)
         ses.send(s)

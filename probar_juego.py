@@ -22,6 +22,7 @@ Formato del fichero de pruebas (.pru), una cosa por linea:
                                 localizacion (@sala), INVEN, PUESTO, NADA o un
                                 contenedor (#objeto)
     * 40 ESPERAR                repite una orden 40 veces (dejar pasar turnos)
+    (ENTER)                     pulsa ENTER sin escribir nada
     << fichero                  mete las ordenes de otro fichero (un walkthrough)
 
 Las comprobaciones miran el estado de DESPUES de la ultima orden. El texto se
@@ -148,7 +149,7 @@ class Juego:
 
     def escribe(self, orden):
         texto = self.tecleable(orden)
-        if not texto:
+        if not texto and orden != '':     # '' = ENTER sin nada, a proposito
             raise ValueError('orden vacia o no tecleable: %r' % orden)
         if getattr(self, '_acabado', False):
             return self.pantalla()        # la partida ya termino; no hay turno
@@ -372,7 +373,7 @@ def corre(juego, path_pru, nivel=0, salida=None):
                 else:
                     bien('@ %s' % esperada)
             else:
-                mete(linea)
+                mete('' if linea.upper() == '(ENTER)' else linea)
         except Exception as e:
             falla('%s: %s' % (type(e).__name__, e))
     return res
