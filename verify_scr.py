@@ -13,8 +13,8 @@ entera de 24 (SCR screen)- y se comprueba, en 48K, 128K y Next, que:
 
 En 48K y 128K se compara la pantalla ULA byte a byte contra el flujo ZX0
 descomprimido; en Next se mira el banco de Layer 2 y el clip, que es donde
-vive la imagen. El CPC va por disco (CAS IN) y su prueba es el export, no el
-simulador: se comprueba aparte que las pantallas entran en el .dsk.
+vive la imagen. El CPC se juega entero en el simulador de probar_cpc (disco,
+cargador y RAM de 128K) y se compara la pantalla con lo que convierte el export.
 
     python verify_scr.py [juego.yaml]
 """
@@ -142,24 +142,65 @@ def _next(yaml_path, res):
 
 
 def _cpc(yaml_path, res):
-    """El CPC va por disco: se comprueba que las pantallas del SCR se convierten
-    y se meten en el .dsk (o se avisa si no caben)."""
-    import cpc_nativo
+    """El CPC, en el simulador de probar_cpc: el .dsk entero, con su cargador,
+    su CAS IN y su RAM de 128K. La tira de 8 filas tiene que quedar en las 64
+    lineas de arriba tal cual la convierte el export (Modo 1, ZX0), y la de
+    24, en Modo 0 y entera en la pantalla, hasta el siguiente DESC."""
+    import cpc_nativo as cn
+    import png2cpc
+    import probar_cpc as pc
     game = yaml.safe_load(io.open(yaml_path, encoding='utf-8'))
     g = copy.deepcopy(game)
     g.setdefault('condacts', {})
     g['condacts']['responses'] = _RESP + (g['condacts'].get('responses') or '')
     raiz = os.path.dirname(os.path.abspath(yaml_path))
-    tmp = os.path.join(tempfile.gettempdir(), 'scriba_scr.dsk')
-    info = cpc_nativo.export_native(g, tmp, modo=2,
-                                    img_dir=os.path.join(raiz, 'img'))
-    d = open(tmp, 'rb').read()
-    # o entran en el disco, o hay un aviso claro de que no caben (Tifon va lleno)
-    metidas = sum(1 for k in range(8) if ('SCR%02d   SCR' % k).encode() in d)
+
+    def chk(n, ok):
+        res.append(('cpc  %s' % n, bool(ok)))
+
+    # Tifon llena el disco, y la pantalla de 24 filas son 16K: con todas sus
+    # salas no entraria. La prueba va con una carpeta de imagenes que solo
+    # trae las dos que usa (la tira y la pantalla entera, que es tambien la
+    # portada).
+    import shutil
+    img = os.path.join(tempfile.gettempdir(), 'scriba_scr_cpc', 'img')
+    shutil.rmtree(os.path.dirname(img), ignore_errors=True)
+    os.makedirs(os.path.join(img, 'Original'))
+    import glob
+    pantalla = sorted(glob.glob(os.path.join(raiz, 'img', 'Original', 'screen.*')))[0]
+    for f in (os.path.join(raiz, 'img', 'Original', '@acantilado.png'), pantalla):
+        shutil.copy(f, os.path.join(img, 'Original', os.path.basename(f)))
+    j = pc.JuegoCPC(yaml_path, game=g, img_dir=img)
+    metidas = sum(1 for k in j.ficheros if k.startswith('SCR'))
     aviso = any('pantalla' in a.lower() and 'no caben' in a.lower()
-                for a in info['avisos'])
-    res.append(('cpc  las pantallas del SCR entran en el .dsk o se avisa',
-                metidas > 0 or aviso))
+                for a in j.info['avisos'])
+    chk('las pantallas del SCR entran en el .dsk o se avisa', metidas > 0 or aviso)
+    if not metidas:
+        return
+    j.arranca()
+    mem, sym = j.mem, j.sym
+    tintas = cn._tintas_texto(g, 1)
+    raw, t23 = cn._loc_image(os.path.join(img, 'AmstradCPC'),
+                             os.path.join(img, 'Original'), '@acantilado', 1, tintas)
+
+    def tira():
+        return (png2cpc.lineal(mem[0xC000:0x10000], cn.IMG_LINEAS) == raw
+                and tuple(j.tintas[2:4]) == tuple(t23) and j.pant.w[2] == 8)
+
+    p = j.escribe('EXAMINAR BOMBA')             # SCR @playa acantilado (8 filas)
+    chk('SCR @sala pinta la tira arriba, con sus tintas, y el texto debajo', tira())
+    chk('SCR @sala deja el texto de la respuesta en pantalla',
+        'cambiada' in ' '.join(p))
+    j.escribe('MIRAR')                          # describe: repinta la reasignada
+    chk('la sala se describe con la pantalla reasignada', tira())
+    j.escribe('EXAMINAR CAJA')                  # SCR screen (24 filas)
+    scr, _inks = png2cpc.convert_menu(pantalla, contrast=True)
+    chk('SCR de 24 filas: Modo 0, la pantalla entera y scrfull=1',
+        j.modo == 0 and mem[sym['scrfull']] == 1
+        and bytes(mem[0xC000:0x10000]) == bytes(scr))
+    j.escribe('MIRAR')                          # DESC la quita
+    chk('un DESC vuelve al Modo 1 y a la sala (scrfull=0)',
+        j.modo == 1 and mem[sym['scrfull']] == 0 and tira())
 
 
 def main(argv=None):

@@ -572,12 +572,15 @@ def compila(game, game_dir, ancho=COLS, org=ORG, guion=None):
 # ---------------------------------------------------------------------------
 #  Empaquetado .tap
 # ---------------------------------------------------------------------------
-def tap(blob, payload, org=ORG, nombre='juego', borde=7):
+def tap(blob, payload, org=ORG, nombre='juego', borde=7, portada=None):
     """Cargador BASIC + codigo + un bloque por banco de imagenes.
 
     El cargador hace lo mismo que el del export de BASIC: por cada banco, POKE
     a la variable de sistema BANKM y OUT al puerto &7FFD antes de cargar en
-    &C000, y al final deja el banco 0 puesto y salta al motor."""
+    &C000, y al final deja el banco 0 puesto y salta al motor. Con `portada`
+    (6912 bytes), lo primero de la cinta es la pantalla de carga (LOAD ""
+    SCREEN$), que se ve mientras cargan los bancos y el codigo; al arrancar,
+    el motor pinta la misma desde su banco y pone la musica."""
     CLEAR, LOAD, CODE_T = 0xFD, 0xEF, 0xAF
     POKE, OUT, RND, USR, BORDER = 0xF4, 0xDF, 0xF9, 0xC0, 0xE7
     N = s48._num
@@ -588,6 +591,8 @@ def tap(blob, payload, org=ORG, nombre='juego', borde=7):
     cuerpo = (bytes([BORDER]) + N(borde) + b':' +
               bytes([CLEAR]) + N(org - 1) + b':' +
               bytes([POKE]) + N(23739) + b',' + N(111))   # sin "Bytes:" al cargar
+    if portada is not None:
+        cuerpo += b':' + bytes([LOAD]) + b'""' + bytes([0xAA])   # LOAD "" SCREEN$
     prog = s48._linea(10, cuerpo)
     nl = 20
     for j in range(len(trozos)):
@@ -603,6 +608,10 @@ def tap(blob, payload, org=ORG, nombre='juego', borde=7):
                        bytes([POKE]) + N(23739) + b',' + N(244) + b':' +
                        bytes([RND, USR]) + N(org))
     out = (s48._cab(0, nombre, len(prog), 10, len(prog)) + s48._bloque(prog, 255))
+    if portada is not None:
+        if len(portada) != 6912:
+            raise ValueError('la portada debe medir 6912 bytes (mide %d)' % len(portada))
+        out += s48._cab(3, nombre, 6912, 16384) + s48._bloque(bytes(portada), 255)
     for j, t in enumerate(trozos):
         out += (s48._cab(3, 'img%d' % (j + 1), len(t), 49152) +
                 s48._bloque(t, 255))
@@ -622,7 +631,8 @@ def export_tap(game, tap_path, game_dir=None, ancho=COLS, org=ORG):
     with open(tap_path, 'wb') as f:
         f.write(tap(blob, payload, org=org,
                     nombre=str(meta.get('title', 'juego'))[:10],
-                    borde=nx.borde_inicial(game)))
+                    borde=nx.borde_inicial(game),
+                    portada=s48.pantalla(game_dir)))
     return {'codigo': len(code), 'datos': len(db), 'total': len(blob),
             'org': org, 'db': dbaddr, 'fin': org + len(blob),
             'libre': SP128 - PILA_MIN - (org + len(blob)),

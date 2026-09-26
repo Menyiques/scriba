@@ -233,21 +233,33 @@ def _emit_data(mnem, arg, sym, cur):
 def assemble(source, org=0):
     sym={}; cur=org; parsed=[]
     DATADIR=('db','defb','dw','defw','ds','defs')
-    for raw in source.split('\n'):
+    # Las etiquetas no distinguen mayusculas (nxcol == NXCOL). Definir la
+    # misma dos veces es un error: antes ganaba la ultima sin avisar, y asi la
+    # columna del cursor del Next acabo escribiendose encima de su tabla de
+    # colores.
+    vistas={}
+    def define(nombre, valor, nlin):
+        k=nombre.lower()
+        if k in vistas:
+            raise ValueError('etiqueta duplicada: %s (linea %d; ya definida '
+                             'como %s en la linea %d)'
+                             % (nombre, nlin, vistas[k][0], vistas[k][1]))
+        vistas[k]=(nombre, nlin); sym[k]=valor
+    for nlin, raw in enumerate(source.split('\n'), 1):
         line=raw.split(';',1)[0].rstrip()
         if not line.strip(): continue
         mlabel=re.match(r'^([A-Za-z_][A-Za-z0-9_]*):', line)
         rest=line
         if mlabel:
-            sym[mlabel.group(1).lower()]=cur; rest=line[mlabel.end():]
+            define(mlabel.group(1), cur, nlin); rest=line[mlabel.end():]
         rest=rest.strip()
         if not rest: continue
         toks=rest.split(None,2)
         if len(toks)>=2 and toks[1].lower()=='equ':
-            sym[toks[0].lower()]=_ev(toks[2],sym,cur); continue
+            define(toks[0], _ev(toks[2],sym,cur), nlin); continue
         if len(toks)>=2 and toks[1].lower() in DATADIR and toks[0].lower() not in DATADIR \
                 and re.match(r'^[A-Za-z_]',toks[0]):
-            sym[toks[0].lower()]=cur
+            define(toks[0], cur, nlin)
             mnem=toks[1].lower(); arg=toks[2] if len(toks)>2 else ''
         else:
             parts=rest.split(None,1); mnem=parts[0].lower(); arg=parts[1] if len(parts)>1 else ''

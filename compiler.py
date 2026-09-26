@@ -406,7 +406,7 @@ def validate_file(input_path: str, verbose: bool = False) -> bool:
     # Compatibilidad por plataforma: lo que el juego usa y un destino no tiene.
     try:
         import capabilities
-        for target in ('spectrum', 'next', 'cpc'):
+        for target in ('spectrum', 'next', 'cpc', 'msx2'):
             aviso = capabilities.report(game, target)
             if aviso:
                 print(aviso)

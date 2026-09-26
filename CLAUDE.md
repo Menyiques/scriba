@@ -2,7 +2,7 @@
 
 Sistema de autoría de aventuras conversacionales. El juego se escribe en YAML y
 de ahí salen cinco destinos: probador de PC, ZX Spectrum 48K/128K, ZX Spectrum
-Next, Amstrad CPC y .exe de Windows.
+Next, Amstrad CPC, MSX2 y .exe de Windows.
 
 ---
 
@@ -37,6 +37,7 @@ Backends:
 | `spectrum48_nativo.py`, `spectrum128_nativo.py` | ZX Spectrum 48K y 128K, a `.tap` |
 | `next_nativo.py` | ZX Spectrum Next, a `.nex` |
 | `cpc_nativo.py` | Amstrad CPC, a `.dsk` |
+| `msx2_nativo.py` | MSX2, a cartucho `.rom` (MegaROM ASCII16) |
 | `spectrum_export.py` | ya NO es un backend: queda como biblioteca (`recolecta`, acentos, PSG, dzx0, imágenes) de la que tiran todos los demás |
 
 **`compiler.py::check_predicates()`** detecta predicados no soportados por
@@ -66,12 +67,39 @@ mensaje, vía `TXTPAGE`), la música del título, los FX, las imágenes y las
 muestras. Nada permanente vive en la ventana, así que se pagina cuando hace
 falta y no se devuelve nada a su sitio. La base de datos lleva, por mensaje, el
 banco (`msgbnk`) y la dirección en la ventana; `expand_msg` pagina antes de
-seguir el puntero. En 48K y CPC `TXTPAGE` es un `RET` y el texto sigue plano.
+seguir el puntero. En 48K `TXTPAGE` es un `RET` y el texto sigue plano; el
+CPC tiene su propio mapa (abajo).
 El mapa plano son 24.432 bytes (`&6000-&BF70`): menos que los 40K del 48K, pero
 sin el texto, que es dos tercios de la base de datos. Y los bancos del 128K son
 **seis** (1, 3, 4, 6, 7 y 0, en ese orden de carga): el 0 dejó de ser la RAM
 alta del juego y es uno más. Como valor de `&7FFD` los ids son 17, 19, 20, 22,
 23 y 16 — nunca 0, que en `msgbnk`/`fxbnk`/`psgbnk` significa «plano».
+
+**El mapa del CPC (v3.0).** La ventana de los bancos del 6128 es
+`&4000-&7FFF`, en medio de la RAM, así que no puede ser «pura» como la del
+128K: lo que corre mientras hay un banco puesto tiene que estar por debajo de
+`&4000` (el motor entero, con `TBUF`, acaba hacia `&3200`-`&3400`; el export lo
+comprueba) o por encima de `&8000` (la pila del firmware). Base: motor en
+`&1200` o más arriba: BASIC necesita 4K libres bajo `HIMEM` para el buffer de
+`LOAD` (si no, «Memory full»), y el cargador crece con las 16 tintas de la
+portada y, con texto en bancos, con la prueba del 6128; `export_native` sube
+el motor lo justo (`cpc_nativo.BASIC_BUFFER`, que `probar_cpc` también
+comprueba al interpretar el cargador). Detrás del motor, la DB; luego `hdrbuf` (2K de CAS IN, y la rutina de la música
+del título: el firmware la quiere en los 32K centrales, por eso nunca por
+debajo de `&4000`) y `MTABLE` (256 bytes), todo antes de `imgbuf` (`&8B00`).
+Si el juego no cabe, los primeros mensajes se quedan planos (banco 0 en
+`msgbnk`) y el resto va a los bancos `&C4-&C7`; el `TXTPAGE` del CPC copia el
+mensaje a `TBUF` y devuelve `&C0` antes de expandir, y `expand_msg` lee el
+puntero **antes** de paginar (el índice está en la RAM base, bajo la
+ventana). Todo lo propio del CPC se aplica sobre el texto de `ENGINE_ASM` en
+`game_engine._engine_cpc()`: el 48K, el 128K y el Next salen byte a byte
+igual. Imágenes: `[tinta 2][tinta 3][ZX0 de 64 líneas de 80 bytes seguidas]`,
+cargadas pegadas a `IMGTOP` (`&A67C`) y descomprimidas en el sitio al
+principio de `imgbuf`; `pinta_pic` las copia a la pantalla línea a línea.
+La portada va lo primero del disco, con su paleta ya puesta por el cargador,
+para que se vea mientras carga lo demás (en 48K y 128K, igual: `LOAD ""
+SCREEN$` al principio de la cinta; el 48K espera una tecla antes de `start`). La
+caché de imágenes son ranuras a medida en lo que deja el texto en los bancos.
 
 `z80asm.py` ensambla (incluye Z80N) y `z80.py` simula (incluye Z80N, puertos y
 NextRegs). Eso permite verificar el motor entero sin emulador.
@@ -93,7 +121,7 @@ python verify_next.py 'Games\apolo11\apolo11_pt.yaml'
 impresor de verdad contra la pantalla simulada y **decodifica los píxeles de
 vuelta a texto**. Además empaqueta el `.nex`, lo relee del disco y juega un par
 de órdenes. `verify_cpc.py` sí anula el firmware con stubs, o sea que el camino
-de texto del CPC nunca se prueba ahí.
+de texto del CPC no se prueba ahí: eso lo hace `probar_cpc.py` (abajo).
 
 Los dos arneses suponen que los objetos 0, 5 y 6 tienen ciertas propiedades. En
 juegos donde no es así (NIVEL7, "1") fallan dos comprobaciones **en los dos**.
@@ -109,12 +137,19 @@ formato de fichero (`.pru`):
 ```powershell
 python probar_juego.py 'Games\Operacion Tifon Negro\Operacion Tifon Negro.yaml' `
                        'Games\Operacion Tifon Negro\tifon.pru'
+python probar_cpc.py   'Games\Operacion Tifon Negro\Operacion Tifon Negro.yaml' `
+                       'Games\Operacion Tifon Negro\tifon.pru'      # --modo 2, --464, --png carpeta
 python bateria_next.py 'Games\Operacion Tifon Negro\Operacion Tifon Negro.yaml' `
                        'Games\Operacion Tifon Negro\tifon.pru' --jnext 'C:\...\jnext.exe'
 ```
 
 - `probar_juego.py` juega dentro del simulador Z80 de Python y lee la pantalla
-  de los píxeles. No hace falta instalar nada.
+  de los píxeles. No hace falta instalar nada. `probar_48.py`, `probar_128.py`
+  y `probar_pc.py` hacen lo mismo en su máquina.
+- `probar_cpc.py` juega el `.dsk` tal cual: interpreta el cargador BASIC,
+  imita el firmware en Python (texto con ventanas, teclado, CAS IN, tintas) y
+  pagina la RAM de 128K por `&7Fxx`. Al describir cada sala compara las 64
+  líneas de arriba con la imagen convertida. `--464` quita la RAM extra.
 - `bateria_next.py` ejecuta el `.nex` en **jnext** (`--headless`), un emulador
   de Next de verdad: prueba además el cargador NEX, la ROM, la MMU, Layer 2 y el
   Z80N. Se baja de <https://github.com/jorgegv/jnext/releases>; la ruta va en
@@ -200,6 +235,76 @@ los másteres de `img/Original`, en cambio, se escalan sin protestar. Margen del
 
 ---
 
+## MSX2 (`msx2_nativo.py`)
+
+El quinto destino del motor nativo: un cartucho **MegaROM ASCII16** (`.rom`)
+que arranca solo en cualquier MSX2 (y en openMSX, WebMSX, blueMSX o un
+cartucho flash). Misma base de datos y mismo `ENGINE_ASM`; la capa de
+plataforma es `next_nativo.PLAT_ASM` con las rutinas de máquina cambiadas por
+`_cambia_rutina()` (de etiqueta a etiqueta: si `PLAT_ASM` cambia de forma,
+falla a voces en vez de ensamblar otra cosa).
+
+- **Mapa.** Página 0 = BIOS (interrupción, `CHSNS`/`CHGET`, `KILBUF`). Página
+  1 (`&4000-&7FFF`) = el cartucho, que tras arrancar es la **ventana de
+  paginación pura**, como `&C000` en 128K/Next (registro ASCII16 en `&6000`;
+  los ids de `msgbnk` son números de banco, nunca 0). Páginas 2-3 = RAM: el
+  motor y la DB plana en `&8000`, la pila `PILA_MIN` bytes por encima, y todo
+  por debajo de `HIMEM`. El motor lleva sus variables entre el código, así que
+  **no puede correr desde ROM**: el cargador del banco 0 pone en la página 2 la
+  RAM del slot de la página 3, copia a RAM un trocito que copia la imagen
+  desde sus bancos, y salta. Si `HIMEM` no llega (disquetera inicializada
+  antes), lo dice por la BIOS; en un MSX1, también.
+- **Pantalla.** SCREEN 5 programado a mano en el VDP (sin `CHGMOD`, que va a la
+  SUB-ROM). 42×24 con la fuente de 6 px: cada glifo son 3 bytes por línea,
+  alineados. Scroll y borrado por comandos del VDP (`YMMM`/`HMMV`). Paleta: 0-7
+  = colores del Spectrum (fijos, los de `INK`/`PAPER`/`BORDER`); 8-15 = los de
+  cada imagen. Las imágenes de sala se cuantizan a esos 8 + negro y blanco (los
+  demás fijos, al difuminar, salen como motas). La portada usa los 16.
+- **Imágenes.** `img/MSX/<id>` manda (sin autocontraste); si no,
+  `img/Original/<id>` (con autocontraste, como las demás). Sala = 256×64 en
+  crudo (8 KB, dos por banco). Portada = 256×192 centrada en las 212 líneas.
+  `SCR`: 4:1 es tira de 8 filas; lo demás, pantalla entera (16K + 8K).
+- **Sonido.** PSG por `&A0/&A1`. `SNDREG` fuerza en el registro 7 el bit 7 a 1
+  y el 6 a 0: son la dirección de los puertos de E/S del PSG (joysticks).
+- **No hay:** `BRIGHT`/`FLASH` (sin efecto) ni muestras (`SMPPLAY` es `RET`).
+- **Firma `ASCII16X` en el byte 16 del fichero.** WebMSX no adivina el mapper
+  de una ROM que no conoce: coge ASCII8, que va antes en su lista, la imagen
+  RAM se copia mal y la máquina se reinicia al BASIC. Con la firma escoge
+  ASCII16-X, que con bancos de 8 bits es ASCII16. openMSX sigue detectándola
+  bien, y en hardware real la firma son 8 bytes de datos que nadie ejecuta.
+
+### Batería en openMSX
+
+```powershell
+python bateria_msx2.py 'Games\Operacion Tifon Negro\Operacion Tifon Negro.yaml' `
+                       'Games\Operacion Tifon Negro\tifon.pru' --openmsx 'C:\...\openmsx.exe'
+```
+
+Mismo `.pru` y mismo juez que `bateria_next.py`. El cartucho de pruebas lleva
+el guion en sus últimos bancos (leído por la ventana de `&4000`), la traza sale
+por el *debugdevice* de openMSX (`&2E/&2F`) y un `OUT (&2D)` al acabar cierra el
+emulador (watchpoint en el script Tcl). Máquina por defecto `C-BIOS_MSX2_EU`
+(libre, viene con openMSX). Las pruebas `=== [48 next] ...` se saltan si no
+llevan `msx`/`msx2`. `--png fichero` vuelca la VRAM al final.
+
+Dos diferencias con `bateria_next.py`, las dos a propósito:
+- `(ENTER)` es ENTER sin nada, como en `probar_juego.py` (en la del Next se
+  teclea la palabra «enter»).
+- Tras un **FIN DEL JUEGO** la partida se queda parada hasta la prueba
+  siguiente, y las órdenes que queden se juzgan contra la última respuesta. En
+  la del Next, `KMW` no gasta guion, la partida se reinicia sola y la foto de
+  la última orden sale ya con `PUNTOS = 0`.
+
+### Trampa: `z80asm` no distingue mayúsculas en las etiquetas
+
+`nxcol` (la columna del cursor) y `NXCOL` (la tabla de colores) son **la misma
+etiqueta** y gana la última: en `PLAT_ASM` el cursor escribe su columna encima
+del primer byte de la tabla, o sea que `INK 0`/`PAPER 0`/`BORDER 0` salen del
+color de la columna en que estuviera el cursor. En MSX2 la tabla se llama
+`NXCOLT`; **en Spectrum y Next sigue así**. Lo mismo mordió a `msxpal`/`MSXPAL`.
+
+---
+
 ## Trampas que ya han mordido
 
 - **`run_condacts` recibe la longitud del cuerpo en DE.** `run_response` la
@@ -248,6 +353,13 @@ los másteres de `img/Original`, en cambio, se escalan sin protestar. Margen del
   cabe en el byte de `OBJLOC` — un objeto contenido guarda `CONTAINED` ahí y el
   contenedor en `OBJIN` — y por eso lleva opcode propio (`ISIN`). Si vuelve a
   caer en `ctx.loc()`, el juego se queda sin poder sacar nada de una caja.
+
+- **`z80asm` no distingue mayúsculas en las etiquetas.** `nxcol` (la columna
+  del cursor) y `NXCOL` (la tabla de colores) eran la misma: ganaba la última
+  y el cursor escribía su columna encima del color 0, así que `INK 0`,
+  `PAPER 0` y `BORDER 0` salían de otro color en 48K, 128K y Next. La tabla
+  se llama ahora `NXCOLT`, y desde entonces `z80asm` **corta con un error**
+  si una etiqueta o un `equ` se define dos veces.
 
 - **Los glifos `_` y `q` de `print42_es.bas` / `print42_pt.bas` están mal**: el
   subrayado apunta al índice de la `á`, y la cola de la `q` invade un píxel del
@@ -315,8 +427,8 @@ de `EmbeddedMmuSwitchAssembleError` para upstream sigue en
 El motor nativo del Next tiene imágenes (Layer 2, un banco por sala), pantalla
 de título, música del AY, efectos FX y muestras digitalizadas. Desde la 2.7, en
 128K y Next el texto, la música y los FX van en bancos (ver «El mapa de 128K y
-Next»); el CPC sigue plano y va al límite (`imgbuf` por encima de `&8B00` es el
-arreglo pendiente).
+Next»). Desde la 3.0, en el CPC el texto que no cabe va a los bancos del
+6128 y las imágenes van en ZX0 y en Modo 1 (ver «El mapa del CPC»).
 
 Lo que queda: los glifos `_` y `q` siguen mal en los `.tap` de 128K y Next
 (`genera_font42.py` solo corrige la tabla del motor nativo), el DMA y el Copper

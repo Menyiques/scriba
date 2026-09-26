@@ -340,15 +340,25 @@ def pantallas_asm_48(pant):
     return chr(10).join(partes) + chr(10) + tabla_scr_asm(entradas)
 
 
-def _engine_48():
+# La portada del 48K no va en el binario: la carga el BASIC, lo primero de la
+# cinta (LOAD "" SCREEN$), para que se vea mientras carga el resto. El motor
+# solo la deja puesta hasta que pulsen una tecla: es la entrada desde el BASIC
+# (RANDOMIZE USR, en ORIGIN), antes de 'start', asi que al empezar otra
+# partida (jp start) no se espera. Son 3 bytes: en el 48K cuentan.
+S48TIT_CALL = '        call  KMW           ; la portada que cargo el BASIC, hasta una tecla\n'
+
+
+def _engine_48(portada=False):
     """ENGINE_ASM adaptado. Se parte del parche que ya hace el Next sin imagenes
     ni portada (detect128 -> NXINIT, show_title -> ret, show_loc_image -> ventana
     a pantalla completa, wrap_print -> char_lento) y solo se le anade la pila:
     en el CPC la pone el firmware y en el Next la cabecera del .nex, pero aqui
-    entramos desde un RANDOMIZE USR con la pila de BASIC, que es de juguete."""
+    entramos desde un RANDOMIZE USR con la pila de BASIC, que es de juguete.
+    Con `portada`, antes de nada (NXINIT borra la pantalla) se espera una tecla
+    sobre la que ha cargado el BASIC (ver S48TIT_CALL)."""
     src = nx._engine_next(False, False)
     i = src.index('start:  call  init')
-    return (src[:i] +
+    return (src[:i] + (S48TIT_CALL if portada else '') +
             'start:  ld    sp,S48SP      ; la pila de BASIC no da para el motor\n'
             '        call  init' +
             src[i + len('start:  call  init'):])
@@ -363,7 +373,7 @@ def prefijo(org, db_base, borde=7, sp=SP48, ntxt=0, nscr=0, nloc=256):
 
 
 def ensambla(org=ORG, db_base=None, idioma='es', borde=7, guion=None,
-             pantallas=None, nloc=256):
+             pantallas=None, nloc=256, portada=False):
     """Ensambla motor + capa de plataforma 48K. Devuelve (bytes, simbolos).
     Con `guion`, sale en MODO PRUEBA: el binario lleva dentro la partida, se
     teclea solo y copia lo que imprime a un puerto (ver bateria_next).
@@ -380,7 +390,7 @@ def ensambla(org=ORG, db_base=None, idioma='es', borde=7, guion=None,
         extra = ('SCRUN:' + DZX0_ASM + chr(10) +
                  pantallas_asm_48(pantallas) + chr(10))
     fuente = (prefijo(org, db_base, borde, nscr=len(pantallas or ()), nloc=nloc) +
-              _engine_48() +
+              _engine_48(portada and guion is None) +
               plat + chr(10) +
               Z80N_ASM + chr(10) +
               nx.IMG_ASM_VACIO + chr(10) +
@@ -474,6 +484,8 @@ def compila(game, ancho=COLS, org=ORG, guion=None, game_dir=None):
     ficha = scriba_info.ficha(game, 'spectrum48', scriba_info.ahora())
     spec, _ = nc.compile_game(c, sysm[:ge.NSYS], width=ancho, filas=0,
                               ficha=ficha, imagen_intro=False)
+    # la portada la carga el BASIC de la cinta; el motor solo espera la tecla
+    portada = bool(game_dir) and pantalla(game_dir) is not None
     idioma = str((game.get('metadata') or {}).get('language', '') or 'es')
     borde = nx.borde_inicial(game)
     import presupuesto
@@ -497,10 +509,10 @@ def compila(game, ancho=COLS, org=ORG, guion=None, game_dir=None):
 
     # dos pasadas: la 1a da la longitud del motor, para saber donde cae la DB
     nloc = len(spec['locations'])
-    code, _sym = ensambla(org=org, db_base=org, idioma=idioma, borde=borde,
+    code, _sym = ensambla(portada=portada, org=org, db_base=org, idioma=idioma, borde=borde,
                           guion=guion, pantallas=pant, nloc=nloc)
     dbaddr = org + len(code)
-    code, sym = ensambla(org=org, db_base=dbaddr, idioma=idioma, borde=borde,
+    code, sym = ensambla(portada=portada, org=org, db_base=dbaddr, idioma=idioma, borde=borde,
                          guion=guion, pantallas=pant, nloc=nloc)
     assert org + len(code) == dbaddr, 'el motor cambio de tamano entre pasadas'
     # Los efectos FX del AY son lo primero que se sacrifica en el 48K: el 48K
@@ -569,10 +581,10 @@ def compila(game, ancho=COLS, org=ORG, guion=None, game_dir=None):
         for i in _orden:
             scr_fuera.append(pant[i][0])
             pant[i] = (pant[i][0], 0, [])
-            code, _sym = ensambla(org=org, db_base=org, idioma=idioma, borde=borde,
+            code, _sym = ensambla(portada=portada, org=org, db_base=org, idioma=idioma, borde=borde,
                                   guion=guion, pantallas=pant, nloc=nloc)
             dbaddr = org + len(code)
-            code, sym = ensambla(org=org, db_base=dbaddr, idioma=idioma, borde=borde,
+            code, sym = ensambla(portada=portada, org=org, db_base=dbaddr, idioma=idioma, borde=borde,
                                  guion=guion, pantallas=pant, nloc=nloc)
             db = _db(dbaddr)
             if _cabe(len(db)):
@@ -586,9 +598,9 @@ def compila(game, ancho=COLS, org=ORG, guion=None, game_dir=None):
             n = pant[i][0]
             prueba = list(pant)
             prueba[i] = (n,) + _guarda[n]
-            c1, _s = ensambla(org=org, db_base=org, idioma=idioma, borde=borde,
+            c1, _s = ensambla(portada=portada, org=org, db_base=org, idioma=idioma, borde=borde,
                               guion=guion, pantallas=prueba, nloc=nloc)
-            c2, s2 = ensambla(org=org, db_base=org + len(c1), idioma=idioma,
+            c2, s2 = ensambla(portada=portada, org=org, db_base=org + len(c1), idioma=idioma,
                               borde=borde, guion=guion, pantallas=prueba, nloc=nloc)
             d2 = _db(org + len(c1))
             if org + len(c2) + len(d2) <= TOPE48:
@@ -646,16 +658,38 @@ def _linea(nl, cuerpo):
             cuerpo + b'\r')
 
 
-def tap(blob, org=ORG, nombre='juego'):
-    """Cinta de dos bloques: cargador BASIC + codigo. Sin pantalla de carga.
+def pantalla(game_dir):
+    """La portada de la cinta (6912 bytes) o None: la misma que el 128K."""
+    import spectrum_export as sx
+    return sx.pantalla_de_carga(os.path.join(game_dir, 'img', 'Spectrum'))[0]
+
+
+def tap(blob, org=ORG, nombre='juego', portada=None, borde=7):
+    """Cinta: cargador BASIC + codigo. Con `portada` (6912 bytes), primero la
+    pantalla de carga (LOAD "" SCREEN$): se ve mientras carga el codigo, y el
+    motor la deja puesta hasta que pulsen una tecla. POKE 23739,111 quita los
+    "Bytes: ..." que la ROM escribiria encima.
     (Las rutinas venian del viejo empaqueta48.py, copiadas porque aquel modulo corria
     su main() al importarlo.)"""
-    cuerpo = (b'\xFD' + _num(org - 1) +                 # CLEAR org-1
-              b':\xEF\x22\x22\xAF' +                   # : LOAD "" CODE
-              b':\xF9\xC0' + _num(org))                 # : RANDOMIZE USR org
+    if portada is None:
+        cuerpo = (b'\xFD' + _num(org - 1) +                 # CLEAR org-1
+                  b':\xEF\x22\x22\xAF' +                   # : LOAD "" CODE
+                  b':\xF9\xC0' + _num(org))                 # : RANDOMIZE USR org
+    else:
+        cuerpo = (b'\xE7' + _num(borde) +                    # BORDER b
+                  b':\xFD' + _num(org - 1) +                 # : CLEAR org-1
+                  b':\xF4' + _num(23739) + b',' + _num(111) +   # : POKE 23739,111
+                  b':\xEF\x22\x22\xAA' +                   # : LOAD "" SCREEN$
+                  b':\xEF\x22\x22\xAF' +                   # : LOAD "" CODE
+                  b':\xF4' + _num(23739) + b',' + _num(244) +   # : POKE 23739,244
+                  b':\xF9\xC0' + _num(org))                 # : RANDOMIZE USR org
     bas = _linea(10, cuerpo)
-    return (_cab(0, nombre, len(bas), 10, len(bas)) + _bloque(bas, 255) +
-            _cab(3, nombre, len(blob), org) + _bloque(blob, 255))
+    out = _cab(0, nombre, len(bas), 10, len(bas)) + _bloque(bas, 255)
+    if portada is not None:
+        if len(portada) != 6912:
+            raise ValueError('la portada debe medir 6912 bytes (mide %d)' % len(portada))
+        out += _cab(3, nombre, 6912, 16384) + _bloque(bytes(portada), 255)
+    return out + _cab(3, nombre, len(blob), org) + _bloque(blob, 255)
 
 
 def export_tap(game, tap_path, ancho=COLS, org=ORG, game_dir=None):
@@ -664,9 +698,11 @@ def export_tap(game, tap_path, ancho=COLS, org=ORG, game_dir=None):
     code, db, sym, spec, dbaddr = compila(game, ancho=ancho, org=org,
                                           game_dir=game_dir)
     blob = code + db
+    portada = pantalla(game_dir) if game_dir else None
     with open(tap_path, 'wb') as f:
         f.write(tap(blob, org=org,
-                    nombre=str((game.get('metadata') or {}).get('title', 'juego'))[:10]))
+                    nombre=str((game.get('metadata') or {}).get('title', 'juego'))[:10],
+                    portada=portada, borde=nx.borde_inicial(game)))
     return {'codigo': len(code), 'datos': len(db), 'total': len(blob),
             'org': org, 'db': dbaddr, 'fin': org + len(blob),
             'libre': TOPE48 - (org + len(blob)),

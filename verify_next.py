@@ -287,6 +287,18 @@ def verificar(game):
     ejecutar(cpu, mem, sym['txtwin'])
     ejecutar(cpu, mem, sym['nxcls'])
 
+    # ---- 3b-ter. la columna del cursor no pisa la tabla de colores ----
+    # z80asm no distingue mayusculas: cuando la tabla se llamaba NXCOL era la
+    # misma etiqueta que nxcol, y cada movimiento del cursor escribia su
+    # columna encima del color 0 (INK/PAPER/BORDER 0 salian de otro color).
+    import re as _re
+    _m = _re.search(r'\nNXCOLT:\s*defb\s*([0-9,\s]+)', nn.PLAT_ASM)
+    _tabla = [int(x) for x in _m.group(1).replace('\n', ',').split(',')
+              if x.strip()] if _m else []
+    chk('la tabla de colores no comparte direccion con el cursor',
+        bool(_tabla) and sym['nxcol'] != sym['nxcolt']
+        and bytes(mem[sym['nxcolt']:sym['nxcolt'] + len(_tabla)]) == bytes(_tabla))
+
     # ---- 3c. pausa de pagina: una tecla por cada ventana de texto ----
     # Se pone la ventana en 8..23 (16 filas, la que queda cuando hay imagen), se
     # tiran 50 lineas y se anota en cual se ha parado. Deben salir pausas cada

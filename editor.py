@@ -530,8 +530,12 @@ class ScribaEditor:
                        command=lambda: self._export_spectrum_nativo('128'))
         fm.add_command(label="Exportar ZX Spectrum Next (.nex)…",
                        command=self._export_next_nativo)
-        fm.add_command(label="Exportar Amstrad CPC (.dsk)…",
+        fm.add_command(label="Exportar Amstrad CPC, Modo 1: 40 columnas, color (.dsk)…",
+                       command=lambda: self._export_cpc_nativo(1))
+        fm.add_command(label="Exportar Amstrad CPC, Modo 2: 80 columnas, blanco y negro (.dsk)…",
                        command=lambda: self._export_cpc_nativo(2))
+        fm.add_command(label="Exportar MSX2 (cartucho .rom)…",
+                       command=self._export_msx2_nativo)
         fm.add_command(label="Exportar para Windows (.exe)…",
                        command=self._export_windows)
         fm.add_separator()
@@ -6175,10 +6179,10 @@ class ScribaEditor:
         win.bind('<Escape>', lambda _e: win.destroy())
         return win
 
-    def _export_cpc_nativo(self, modo=2):
+    def _export_cpc_nativo(self, modo=1):
         """Exporta al MOTOR NATIVO Z80 (modelo PAW/DAAD) en un .dsk arrancable.
-        modo: 1 (40 col, Modo 1) o 2 (80 col, Modo 2). Mucho mas pequeno y rapido
-        que el export BASIC, y no da 'Memory full'."""
+        modo: 1 (40 columnas, imagenes de 4 colores; la de siempre desde la
+        v3.0) o 2 (80 columnas, imagenes en blanco y negro)."""
         self._commit_active_code_view()
         if not self.game.get('locations'):
             messagebox.showinfo('Exportar', 'Abre o crea un juego primero.')
@@ -6192,7 +6196,8 @@ class ScribaEditor:
             messagebox.showinfo('Exportar', 'Guarda el juego (.yaml) primero.')
             return
         name = os.path.splitext(os.path.basename(self.filepath))[0]
-        path = os.path.join(distdir, self._dist_name(name, 'cpc', 'dsk'))
+        path = os.path.join(distdir, self._dist_name(
+            name, 'cpc' if modo == 1 else 'cpc_m2', 'dsk'))
         try:
             here = os.path.dirname(os.path.abspath(__file__))
             if here not in sys.path:
@@ -6200,8 +6205,8 @@ class ScribaEditor:
             import importlib
             import cpc_nativo
             if not getattr(sys, 'frozen', False):
-                for m in ('z80asm', 'txtpack', 'game_engine', 'nativecc',
-                          'dsk', 'cpc_nativo'):
+                for m in ('z80asm', 'txtpack', 'mensajes', 'game_engine',
+                          'nativecc', 'png2cpc', 'dsk', 'cpc_nativo'):
                     try:
                         importlib.reload(importlib.import_module(m))
                     except Exception:
@@ -6254,6 +6259,9 @@ class ScribaEditor:
                        + ('Con pantalla de título (TITLE.SCR).\n'
                           if info.get('title')
                           else 'Sin pantalla de título (no encontré img/.../screen.*).\n')
+                       + ('Necesita un CPC 6128 (parte del texto va en su RAM '
+                          'extra; en un 464 el cargador lo avisa).\n'
+                          if info.get('solo_6128') else '')
                        + '\nMonta el .dsk en un emulador y arranca con  RUN"DISC"')
                 adv = self._aviso_caps(game, 'cpc')
                 if adv:
@@ -6592,6 +6600,112 @@ class ScribaEditor:
                 win.destroy()
                 self.sv_status.set('Exportado a Next nativo (.nex): ' + path)
                 self._ventana_resultado('Exportar ZX Spectrum Next', msg, path,
+                                        info.get('presupuesto', ''))
+            self.root.after(0, _fin)
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def _export_msx2_nativo(self):
+        """Exporta al MOTOR NATIVO Z80 en un cartucho MSX2 (MegaROM ASCII16).
+
+        Todo en Python puro, como las demas maquinas: el mismo motor y la misma
+        base de datos, con la capa de plataforma de msx2_nativo (SCREEN 5, 42
+        columnas, teclado por la BIOS, PSG). Las imagenes salen de img/MSX o,
+        si no, de los masteres de img/Original."""
+        self._commit_active_code_view()
+        if not self.game.get('locations'):
+            messagebox.showinfo('Exportar', 'Abre o crea un juego primero.')
+            return
+        if not self.filepath:
+            messagebox.showinfo('Exportar', 'Guarda el juego (.yaml) primero.')
+            return
+        distdir = self._dir_juego('dist')
+        if not distdir:
+            messagebox.showinfo('Exportar', 'Guarda el juego (.yaml) primero.')
+            return
+        name = os.path.splitext(os.path.basename(self.filepath))[0]
+        path = os.path.join(distdir, self._dist_name(name, 'msx2', 'rom'))
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+            if here not in sys.path:
+                sys.path.insert(0, here)
+            import importlib
+            import msx2_nativo
+            if not getattr(sys, 'frozen', False):
+                for m in ('z80asm', 'txtpack', 'game_engine', 'nativecc',
+                          'font42', 'next_nativo', 'spectrum48_nativo',
+                          'msx2_nativo'):
+                    try:
+                        importlib.reload(importlib.import_module(m))
+                    except Exception:
+                        pass
+                import msx2_nativo
+        except Exception as e:
+            messagebox.showerror('Error al exportar', str(e))
+            return
+        game = copy.deepcopy(self.game)
+        game.pop('_editor', None)
+        game_dir = self._game_root() or os.path.dirname(os.path.abspath(self.filepath))
+
+        import threading
+        win = tk.Toplevel(self.root)
+        win.title('Exportando a MSX2')
+        win.transient(self.root)
+        win.grab_set()
+        win.resizable(False, False)
+        win.protocol('WM_DELETE_WINDOW', lambda: None)
+        sv_msg = tk.StringVar(value='Convirtiendo imágenes y compilando…')
+        ttk.Label(win, textvariable=sv_msg, width=46,
+                  anchor=tk.W).pack(padx=16, pady=(14, 6))
+        bar = ttk.Progressbar(win, length=320, mode='indeterminate')
+        bar.pack(padx=16, pady=(0, 14))
+        bar.start(12)
+        win.update_idletasks()
+        px = self.root.winfo_rootx() + \
+            (self.root.winfo_width() - win.winfo_reqwidth()) // 2
+        py = self.root.winfo_rooty() + \
+            (self.root.winfo_height() - win.winfo_reqheight()) // 2
+        win.geometry(f'+{max(0, px)}+{max(0, py)}')
+
+        def trabajo():
+            try:
+                info = msx2_nativo.export_rom(game, path, game_dir=game_dir)
+                msg = ('Exportado al MOTOR NATIVO Z80 para MSX2 (%d columnas, '
+                       'SCREEN 5).\n'
+                       'Cartucho MegaROM ASCII16 de %d KB.\n'
+                       'Motor + base de datos (sin el texto): %d bytes '
+                       '(&%04X–&%04X); libres hasta HIMEM: %d.\n'
+                       '%d localizaciones · %d objetos · %d imágenes'
+                       % (msx2_nativo.COLS, info['rom'] // 1024,
+                          info['codigo'] + info['datos'], info['org'],
+                          info['fin'] - 1, info['libre'],
+                          info['localizaciones'], info['objetos'],
+                          len(info['imagenes'])))
+                msg += '\nPortada: %s · Música: %s' % (
+                    'sí' if info['portada'] else 'no (falta img/Original/screen.*)',
+                    'sí' if info['musica'] else 'no')
+                if info.get('pantallas'):
+                    msg += '\nPantallas SCR: ' + ', '.join(info['pantallas'])
+                for av in info.get('avisos') or []:
+                    msg += '\nAviso: %s' % av
+                msg += ('\n\nEn openMSX / WebMSX / blueMSX, o en un cartucho '
+                        'flash (MegaFlashROM, Carnivore...), con el tipo de '
+                        'mapper ASCII16.')
+                adv = self._aviso_caps(game, 'msx2')
+                if adv:
+                    msg = adv + '\n\n' + msg
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                self.root.after(0, lambda e=e: (
+                    win.destroy(),
+                    messagebox.showerror('Error al exportar MSX2', str(e))))
+                return
+
+            def _fin():
+                win.destroy()
+                self.sv_status.set('Exportado a MSX2 (.rom): ' + path)
+                self._ventana_resultado('Exportar MSX2', msg, path,
                                         info.get('presupuesto', ''))
             self.root.after(0, _fin)
 

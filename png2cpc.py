@@ -245,6 +245,112 @@ def convert_menu(path, contrast=True, sat=1.6):
     return bytes(buf), inks
 
 
+# ─── Modo 1 (320 px, 4 tintas) para las imagenes de sala del motor nativo ───
+# La pantalla es partida: la imagen arriba y el texto debajo, en el mismo
+# modo, asi que las tintas 0 y 1 son las del texto (papel y pluma) y valen
+# para todas las imagenes; cada imagen elige las otras dos (la 2 y la 3) entre
+# los 27 colores del CPC, las que menos se alejan de ella. Tramado ordenado
+# (Bayer 4x4): se ve menos fino que Floyd-Steinberg, pero repite patron y el
+# ZX0 lo comprime bastante mejor.
+W1 = 320
+_BAYER4 = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]]
+_PESO = (3, 4, 2)          # verde > rojo > azul, como los ve el ojo
+
+
+def _dist(a, b):
+    return (_PESO[0] * (a[0] - b[0]) ** 2 + _PESO[1] * (a[1] - b[1]) ** 2
+            + _PESO[2] * (a[2] - b[2]) ** 2)
+
+
+def elige_tintas_m1(im, fijas=(0, 26)):
+    """Las dos tintas libres (colores firmware) que mejor casan con la imagen,
+    dadas las dos fijas del texto. Se prueba cada pareja sobre una miniatura."""
+    try:
+        px = list(im.resize((80, 16), Image.BOX).get_flattened_data())
+    except AttributeError:
+        px = list(im.resize((80, 16), Image.BOX).getdata())
+    base = [CPC_FW[f] for f in fijas]
+    # lo que ya da cada pixel con las fijas, y con cada color suelto
+    d_fijas = [min(_dist(p, c) for c in base) for p in px]
+    d_col = [[_dist(p, CPC_FW[k]) for p in px] for k in range(27)]
+    libres = [k for k in range(27) if k not in fijas]
+    mejor = None
+    for i, a in enumerate(libres):
+        da = [min(x, y) for x, y in zip(d_fijas, d_col[a])]
+        for b in libres[i + 1:]:
+            e = sum(min(x, y) for x, y in zip(da, d_col[b]))
+            if mejor is None or e < mejor[0]:
+                mejor = (e, a, b)
+    return (mejor[1], mejor[2]) if mejor else (libres[0], libres[1])
+
+
+def convert_m1(path, img_lines=64, fijas=(0, 26), contrast=True, sat=1.2,
+               spread=72, gamma=1.4):
+    """Imagen -> Modo 1 LINEAL: img_lines lineas de 80 bytes seguidas (sin el
+    salto de &800 de la pantalla; el motor las reparte al copiarlas).
+    Devuelve (bytes, (tinta2, tinta3)). fijas = (papel, pluma) del texto.
+    El auto-contraste sin mas deja las escenas de noche como de dia (la paleta
+    solo tiene tres niveles por canal y el blanco de la pluma esta siempre);
+    la gamma vuelve a bajar los medios tonos y el blanco queda para las luces."""
+    from PIL import ImageEnhance
+    im = Image.open(path).convert('RGB').resize((W1, img_lines), Image.LANCZOS)
+    if contrast:
+        im = ImageOps.autocontrast(im, cutoff=2)
+    if gamma and gamma != 1.0:
+        im = im.point([int(255 * (i / 255.0) ** gamma + 0.5) for i in range(256)] * 3)
+    if sat and sat != 1.0:
+        im = ImageEnhance.Color(im).enhance(sat)
+    t2, t3 = elige_tintas_m1(im, fijas)
+    pal = [CPC_FW[fijas[0]], CPC_FW[fijas[1]], CPC_FW[t2], CPC_FW[t3]]
+    px = im.load()
+    raw = bytearray()
+    for y in range(img_lines):
+        fila = _BAYER4[y % 4]
+        for xb in range(W1 // 4):
+            v = 0
+            for p in range(4):
+                x = xb * 4 + p
+                r, g, b = px[x, y]
+                o = spread * ((fila[x % 4] + 0.5) / 16 - 0.5)
+                r += o; g += o; b += o
+                best, bi = None, 0
+                for i, (cr, cg, cb) in enumerate(pal):
+                    d = (_PESO[0] * (r - cr) ** 2 + _PESO[1] * (g - cg) ** 2
+                         + _PESO[2] * (b - cb) ** 2)
+                    if best is None or d < best:
+                        best, bi = d, i
+                # Modo 1: bit 0 del color en el nibble alto, bit 1 en el bajo
+                v |= ((bi & 1) << (7 - p)) | (((bi >> 1) & 1) << (3 - p))
+            raw.append(v)
+    return bytes(raw), (t2, t3)
+
+
+def convert_m2_lineal(path, img_lines=64, contrast=True, dither='bayer'):
+    """Como convert_m2, pero las lineas seguidas (80 bytes cada una)."""
+    return lineal(convert_m2(path, img_lines, contrast, dither), img_lines)
+
+
+def lineal(screen, img_lines=64):
+    """Las primeras img_lines lineas de una pantalla de 16K, seguidas."""
+    return b''.join(bytes(screen[(y % 8) * 0x800 + (y // 8) * 0x50:
+                                 (y % 8) * 0x800 + (y // 8) * 0x50 + 80])
+                    for y in range(img_lines))
+
+
+def preview_m1(raw, tintas, img_lines=64):
+    """PNG de comprobacion de una imagen Modo 1 lineal (4 tintas firmware)."""
+    pal = [CPC_FW[t] for t in tintas]
+    im = Image.new('RGB', (W1, img_lines))
+    p = im.load()
+    for y in range(img_lines):
+        for xb in range(80):
+            v = raw[y * 80 + xb]
+            for k in range(4):
+                c = ((v >> (7 - k)) & 1) | (((v >> (3 - k)) & 1) << 1)
+                p[xb * 4 + k, y] = pal[c]
+    return im
+
+
 if __name__ == '__main__':
     import sys
     src = sys.argv[1] if len(sys.argv) > 1 else 'img/Next/acantilado.png'

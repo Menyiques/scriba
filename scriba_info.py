@@ -10,7 +10,7 @@ saca de aqui SCRIBA_VERSION para nombrar el ejecutable, asi que la linea
 
 import datetime
 
-SCRIBA_VERSION = '2.16'
+SCRIBA_VERSION = '3.0'
 
 PLATAFORMA = {
     'pc':      'PC (interprete)',
@@ -19,6 +19,7 @@ PLATAFORMA = {
     'tap':     'ZX Spectrum Next',
     'next':    'ZX Spectrum Next',
     'cpc':     'Amstrad CPC',
+    'msx2':    'MSX2',
     'windows': 'PC (Windows)',
 }
 

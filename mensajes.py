@@ -25,6 +25,7 @@ CATALOGO = [
     # ── parser / acciones generales ──
     ('no_entiendo',     "No entiendo eso.",                         {}, "Orden no reconocida por el parser"),
     ('linea_vacia',     "",                                         {}, "ENTER sin nada (vacio = No entiendo)"),
+    ('necesita_6128',   "Este juego necesita un Amstrad CPC 6128.", {}, "CPC: el texto va en la RAM extra y el ordenador no la tiene"),
     ('no_hacer',        "No puedes hacer eso.",                     {}, "Accion no permitida"),
     ('no_direccion',    "No puedes ir en esa direccion.",           {}, "Salida inexistente"),
     ('pulsa_tecla',     "Pulsa una tecla...",                       {}, "Espera de tecla (mas/paginado)"),

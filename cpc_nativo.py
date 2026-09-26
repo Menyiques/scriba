@@ -85,10 +85,298 @@ ENGINE_ORG = 0x1200          # direccion de carga del motor + DB
 # plano solo espera la tecla. Activada.
 MUSICA_TITULO = True
 
+# Mapa de la RAM base del CPC para el motor nativo:
+#   &1200 (o algo    motor (codigo, variables y TBUF: todo bajo &4000, porque
+#   mas: BASIC_BUFFER)
+#                    es lo que se ejecuta mientras un banco tapa &4000-&7FFF)
+#   detras           la DB
+#   detras (>=&4000) hdrbuf, el buffer de 2K de CAS IN (y la rutina de la
+#                    musica del titulo: el firmware la quiere en los 32K
+#                    centrales), y MTABLE, las matrices de los acentos
+#   &8B00-&A67B      imgbuf: la musica del titulo mientras suena, y luego el
+#                    buffer de las imagenes (cargar, descomprimir)
+#   &C000            la pantalla
+# En un 6128 lo que no quepa del texto va a los bancos 4-7 (TEXTn.BIN, los
+# carga el BASIC) y lo que dejen libre, a la cache de imagenes.
+IMGBUF = 0x8B00
+IMGTOP = 0xA67C              # HIMEM con AMSDOS
+HDRBUF_TAM = 2048
+MTABLE_TAM = 256             # TXT SET M TABLE desde el 224: 32 caracteres x 8
+IMG_LINEAS = 64              # la imagen: las 8 filas de arriba
+IMG_RAW = 80 * IMG_LINEAS    # lineal, 80 bytes por linea en los dos modos
+BANCOS = (0xC4, 0xC5, 0xC6, 0xC7)
+ZX0_VENTANA = 640            # 8 lineas hacia atras: casi lo mismo que sin
+                             # limite y cuatro veces mas rapido de comprimir
+MAX_RANURAS = 64             # el mapa de bits 'populated' del motor
 
-def export_native(game, dsk_path, modo=2, img_dir=None):
+_ZX2CPC = (0, 2, 6, 8, 18, 20, 24, 26)   # como nativecc: color ZX -> firmware
+
+# El cargador BASIC y la memoria que le queda. El programa empieza en &0170 y,
+# para LOAD, BASIC aparta 4K de buffer de disco justo debajo de HIMEM; con
+# MEMORY &11FF (el motor en &1200) quedan unos 4,1K para programa, variables
+# y buffer. El cargador de una linea de siempre cabe con 52 bytes de sobra; el
+# del 6128 (comprueba la RAM extra y carga los TEXTn) no, y daba "Memory full
+# in 20". Por eso, con el texto en bancos, el motor sube lo que haga falta.
+BASIC_PROG = 0x0170
+BASIC_BUFFER = 4096
+_BAS_KW = ('MEMORY', 'LOAD', 'MODE', 'FOR', 'TO', 'INK', 'NEXT', 'OUT', 'POKE',
+           'IF', 'THEN', 'ELSE', 'PRINT', 'END', 'CALL', 'RUN')
+_BAS_FN = ('PEEK',)
+
+
+def tamano_basic(prog):
+    """(bytes, variables) de un programa BASIC en ASCII una vez tokenizado por
+    Locomotive BASIC: palabras clave de 1 byte (funciones, 2), numeros de 1 a
+    3, &hex de 3, variables con 3 bytes de cabecera + el nombre, 5 por linea y
+    2 del final. Es una cuenta por arriba, que es lo que hace falta."""
+    import re
+    total, variables = 2, set()
+    if isinstance(prog, bytes):
+        prog = prog.decode('ascii')
+    for linea in prog.replace('\r', '').split('\n'):
+        m = re.match(r'\s*\d+\s*(.*)', linea)
+        if not m:
+            continue
+        s, i, n = m.group(1), 0, 5
+        while i < len(s):
+            if s[i] == '"':
+                j = s.find('"', i + 1)
+                j = len(s) - 1 if j < 0 else j
+                n += j - i + 1
+                i = j + 1
+                continue
+            m = re.match(r'&[0-9A-Fa-f]+|\d+|[A-Za-z]+|<>', s[i:])
+            if not m:
+                n += 1
+                i += 1
+                continue
+            w = m.group(0)
+            if w[0] == '&':
+                n += 3
+            elif w.isdigit():
+                n += 1 if int(w) < 10 else (2 if int(w) < 256 else 3)
+            elif w == '<>':
+                n += 1
+            elif w.upper() in _BAS_KW:
+                n += 1
+            elif w.upper() in _BAS_FN:
+                n += 2
+            else:
+                n += 3 + len(w)
+                variables.add(w.upper())
+            i += len(w)
+        total += n
+    return total, len(variables)
+
+
+def libre_basic(prog, org):
+    """Lo que le queda a BASIC debajo de HIMEM (org - 1) para el buffer de LOAD."""
+    n, nv = tamano_basic(prog)
+    return org - (BASIC_PROG + n + 7 * nv)
+
+
+def _cargador(org, nbancos, modo, titulo, musica, aviso, tintas_titulo=None):
+    """DISC.BAS: carga portada, musica, texto (en los bancos) y juego, y lo
+    arranca. Con texto en bancos, antes mira que haya RAM extra. La portada va
+    LO PRIMERO y con su paleta ya puesta: se ve dibujarse y se queda a la
+    vista mientras carga el resto (el motor, al arrancar, pone la misma paleta
+    y la musica y espera una tecla)."""
+    lineas = []
+    if nbancos:
+        # sin RAM extra no hay juego: se dice antes de cargar nada
+        lineas.append('MEMORY &%04X:OUT &7F00,&C4:POKE &4000,170:OUT &7F00,&C5:'
+                      'POKE &4000,85:OUT &7F00,&C4:a=PEEK(&4000):OUT &7F00,&C0:'
+                      'IF a<>170 THEN PRINT"%s":END' % (org - 1, aviso))
+        parts = []
+    else:
+        parts = ['MEMORY &%04X' % (org - 1)]
+    if titulo:
+        parts.append('MODE 0')            # titulo en Modo 0; el motor vuelve al suyo
+        if tintas_titulo:
+            # su paleta ANTES de cargarla (un .scr nativo sin paleta se queda
+            # con la del firmware), y el borde del color del fondo
+            t = list(tintas_titulo)[:16]
+            parts.append('BORDER %d' % (t[0] & 31))
+            parts.append(':'.join('INK %d,%d' % (k, c & 31) for k, c in enumerate(t)))
+        parts.append('LOAD"TITLE.SCR"')
+    else:
+        parts.append('MODE %d' % modo)
+    if musica:
+        parts.append('LOAD"MUSIC.BIN"')
+    for k in range(nbancos):
+        parts.append('OUT &7F00,&%02X:LOAD"TEXT%d.BIN"' % (BANCOS[k], k))
+    if nbancos:
+        parts.append('OUT &7F00,&C0')
+    parts.append('LOAD"GAME.BIN"')
+    parts.append('CALL &%04X' % org)
+    lineas.append(':'.join(parts))
+    return ''.join('%d %s\r\n' % (10 * (k + 1), l)
+                   for k, l in enumerate(lineas)).encode('ascii')
+
+
+def _tintas_texto(game, modo):
+    """(papel, pluma) del texto, colores del firmware. En Modo 1 son tambien
+    dos de los cuatro colores de cada imagen, asi que se miran las primeras
+    PAPER/INK sueltas del on_start (las que se ponen siempre al empezar)."""
+    if modo != 1:
+        return (1, 24)
+    papel, pluma = 0, 26
+    import re
+    code = (game.get('code') or {}).get('on_start') or ''
+    for ln in str(code).split('\n'):
+        up = ln.strip().upper()
+        if up.startswith(('IF ', 'ELSE', 'ENDIF', 'WHILE', 'DO')):
+            break                      # lo condicional ya no es "siempre"
+        m = re.match(r'(PAPER|INK)\s+(\d+)\s*$', up)
+        if m:
+            c = _ZX2CPC[int(m.group(2)) & 7]
+            if m.group(1) == 'PAPER':
+                papel = c
+            else:
+                pluma = c
+    return (papel, pluma)
+
+
+def _zx0_decode(comp):
+    """Descompresor ZX0 v2 (el de dzx0_standard). Devuelve (datos, holgura):
+    holgura = lo mas que la escritura llega a ir por delante de la lectura,
+    para comprobar que se puede descomprimir en el sitio."""
+    comp = bytes(comp)
+    out = bytearray()
+    st = {'i': 0, 'mask': 0, 'val': 0, 'back': False, 'hol': 0}
+
+    def rbyte():
+        b = comp[st['i']]
+        st['i'] += 1
+        return b
+
+    def rbit():
+        if st['back']:
+            st['back'] = False
+            return comp[st['i'] - 1] & 1
+        st['mask'] >>= 1
+        if not st['mask']:
+            st['mask'] = 128
+            st['val'] = rbyte()
+        return 1 if st['val'] & st['mask'] else 0
+
+    def gamma(inv=False):
+        v = 1
+        while not rbit():
+            v = (v << 1) | (rbit() ^ (1 if inv else 0))
+        return v
+
+    def pon(b):
+        st['hol'] = max(st['hol'], len(out) - st['i'] + 1)
+        out.append(b)
+
+    last = 1
+    estado = 'lit'
+    while True:
+        if estado == 'lit':
+            for _ in range(gamma()):
+                b = rbyte()
+                pon(b)
+            estado = 'nuevo' if rbit() else 'ultimo'
+        elif estado == 'ultimo':
+            for _ in range(gamma()):
+                pon(out[-last])
+            estado = 'nuevo' if rbit() else 'lit'
+        else:
+            msb = gamma(True)
+            if msb == 256:
+                return bytes(out), st['hol']
+            last = msb * 128 - (rbyte() >> 1)
+            st['back'] = True
+            for _ in range(gamma() + 1):
+                pon(out[-last])
+            estado = 'nuevo' if rbit() else 'lit'
+
+
+def _zx0(raw, cache_dir=None):
+    """ZX0 de una imagen, con cache en disco: comprimir en Python cuesta un
+    par de segundos por imagen, y el juego se exporta muchas veces."""
+    import hashlib
+    import os
+    import spectrum_export as sx
+    f = None
+    if cache_dir:
+        clave = hashlib.sha1(b'zx0-%d:' % ZX0_VENTANA + bytes(raw)).hexdigest()
+        f = os.path.join(cache_dir, clave + '.zx0')
+        if os.path.isfile(f):
+            try:
+                comp = open(f, 'rb').read()
+                if _zx0_decode(comp)[0] == bytes(raw):
+                    return comp
+            except Exception:
+                pass
+    comp = sx.zx0_comprime(raw, offset_limit=ZX0_VENTANA)
+    if f:
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            with open(f, 'wb') as fh:
+                fh.write(comp)
+        except OSError:
+            pass
+    return comp
+
+
+def _pic(raw, tintas, cache_dir=None):
+    """Fichero de imagen: [tinta 2][tinta 3][ZX0 de las lineas seguidas], o
+    None si no se pudiera descomprimir en su sitio (no pasa con 5120 bytes en
+    un buffer de 7036, pero se comprueba)."""
+    comp = _zx0(raw, cache_dir)
+    datos, hol = _zx0_decode(comp)
+    assert datos == bytes(raw)
+    fichero = bytes([tintas[0] & 31, tintas[1] & 31]) + comp
+    # cargado pegado a IMGTOP (y 2 bytes de longitud delante, para la cache);
+    # la salida, desde IMGBUF, no puede alcanzar lo que queda por leer
+    if len(fichero) + 2 > IMGTOP - IMGBUF or hol > (IMGTOP - IMGBUF) - len(comp):
+        return None
+    return fichero
+
+
+def _aviso_6128(meta):
+    """El aviso de maquina sin RAM extra, en ASCII (lo escribe el BASIC)."""
+    import unicodedata
+    try:
+        import mensajes
+        defs = mensajes.defaults()
+    except Exception:
+        defs = {}
+    ov = (meta or {}).get('mensajes') or {}
+    t = str(ov.get('necesita_6128') or defs.get('necesita_6128')
+            or 'Este juego necesita un Amstrad CPC 6128.')
+    t = unicodedata.normalize('NFD', t)
+    t = ''.join(ch for ch in t if unicodedata.category(ch) != 'Mn')
+    return ''.join(ch for ch in t if 32 <= ord(ch) < 127 and ch != '"')
+
+
+def _reparte_ranuras(loc_pics, libres):
+    """Coloca las imagenes de sala en los huecos de los bancos, a medida
+    (longitud + 2 bytes), por orden de sala. libres = [(config, desde, hasta)].
+    Devuelve ({sala0: ranura}, [(config, direccion)])."""
+    huecos = [list(h) for h in libres]
+    donde, slots = {}, []
+    for lid0, fich in loc_pics:
+        if len(slots) >= MAX_RANURAS:
+            break
+        n = len(fich) + 2
+        for h in huecos:
+            if h[2] - h[1] >= n:
+                donde[lid0] = len(slots)
+                slots.append((h[0], h[1]))
+                h[1] += n
+                break
+    return donde, slots
+
+
+def export_native(game, dsk_path, modo=1, img_dir=None):
     """Compila el juego y escribe un .dsk arrancable. Devuelve un dict de info.
-    modo: 1 (40 col, Modo 1) o 2 (80 col, Modo 2)."""
+    modo: 1 (40 columnas, imagenes de 4 colores) o 2 (80 columnas, 2 colores).
+    Si el juego no cabe en la RAM base, el texto que sobra va a los bancos
+    del 6128 (y el disco ya no arranca en un 464: lo dice el cargador)."""
+    import os
     import spectrum_export as sx
     import nativecc as nc
     import game_engine as ge
@@ -104,7 +392,13 @@ def export_native(game, dsk_path, modo=2, img_dir=None):
     width = 79 if modo == 2 else 39
     # Mensajes de sistema y nombres de salida localizados (metadata['mensajes']).
     sys_msgs, exit_names = _sys_msgs_y_salidas(game.get('metadata'))
-    spec, info = nc.compile_game(c, sys_msgs, width=width)
+    # la ficha de VERSION, como en las demas maquinas; y la imagen de la sala
+    # de salida antes de la presentacion (asi la presentacion sale debajo)
+    import scriba_info
+    ficha = scriba_info.ficha(game, 'cpc', scriba_info.ahora())
+    spec, info = nc.compile_game(c, sys_msgs, width=width, ficha=ficha,
+                                 imagen_intro=True)
+    tintas = _tintas_texto(game, modo)
 
     # Efectos de sonido FX (AY): se embeben SOLO los referenciados por PLAY. El
     # reloj del AY del CPC es 1,0 MHz (los AYFX, hechos a 1,77 MHz del Spectrum,
@@ -123,7 +417,7 @@ def export_native(game, dsk_path, modo=2, img_dir=None):
     org = ENGINE_ORG
     # Pantalla de titulo (Modo 0, 16 colores). Se convierte ANTES de la base de
     # datos porque su paleta de 16 tintas va DENTRO de la DB (el motor la pone al
-    # cambiar a Modo 0). Al pulsar tecla, el motor vuelve a Modo 2 para el juego.
+    # cambiar a Modo 0). Al pulsar tecla, el motor vuelve al modo del juego.
     info['title'] = False
     title = None
     title_pal = b''
@@ -141,30 +435,34 @@ def export_native(game, dsk_path, modo=2, img_dir=None):
     info['music'] = False
     musbin = None
     if img_dir and MUSICA_TITULO:
-        import os as _os
-        music_dir = _os.path.join(_os.path.dirname(img_dir), 'music')   # <raiz>/music
+        music_dir = os.path.join(os.path.dirname(img_dir), 'music')   # <raiz>/music
         musbin = _music_bin(music_dir)
         if musbin:
             info['music'] = True
 
     # Imagenes de localizacion (PIC<n>.SCR, n = indice 0-based de la localizacion).
-    # Se cargan del disco al entrar en cada sitio, se descomprimen al tercio
-    # superior y el texto va en una ventana debajo (pantalla partida Modo 2).
-    import os as _os
+    # Se cargan del disco al entrar en cada sitio (o de la cache de los bancos),
+    # se descomprimen al tercio superior y el texto va en una ventana debajo.
+    cache_dir = (os.path.join(os.path.dirname(img_dir), 'temp', 'CPC')
+                 if img_dir else None)
     loc_pics = []
     info['nimg'] = 0
+    info['img_fuera'] = []
     if img_dir:
-        import png2cpc
-        cpcdir = _os.path.join(img_dir, 'AmstradCPC')
-        origdir = _os.path.join(img_dir, 'Original')
+        cpcdir = os.path.join(img_dir, 'AmstradCPC')
+        origdir = os.path.join(img_dir, 'Original')
         for name, lid in c.locidx.items():
-            pic = _loc_image(cpcdir, origdir, name)
-            if pic is not None:
-                loc_pics.append((lid - 1, png2cpc.rle_pack(pic)))
+            res = _loc_image(cpcdir, origdir, name, modo, tintas)
+            if res is not None:
+                fich = _pic(res[0], res[1], cache_dir)
+                if fich is None:
+                    info['img_fuera'].append(name)
+                else:
+                    loc_pics.append((lid - 1, fich))
         info['nimg'] = len(loc_pics)
 
     # Pantallas sueltas del condact SCR (SCRnn.SCR, nn = su indice): las de 8
-    # filas se convierten como las de sala (Modo 2, 64 lineas, RLE a imgbuf);
+    # filas se convierten como las de sala (mismo modo, 64 lineas, ZX0 a imgbuf);
     # las de 24, como la portada (Modo 0 de 16K con sus 16 tintas). Un .scr
     # nativo en img/AmstradCPC cuenta como de 8 filas, igual que en las salas;
     # las 24 solo salen de un png/jpg en proporcion 4:3.
@@ -172,161 +470,214 @@ def export_native(game, dsk_path, modo=2, img_dir=None):
     pant_tabla = []           # (filas, tintas) por pantalla, en orden
     if img_dir:
         import png2cpc
-        import spectrum_export as _sx
-        cpcdir = _os.path.join(img_dir, 'AmstradCPC')
-        origdir = _os.path.join(img_dir, 'Original')
+        cpcdir = os.path.join(img_dir, 'AmstradCPC')
+        origdir = os.path.join(img_dir, 'Original')
     for i, nombre in enumerate(spec.get('pantallas') or []):
-        filas, tintas, datos, dire = 0, [], b'', 0
+        filas, tintas_scr, datos, dire = 0, [], b'', 0
         if img_dir:
-            # con y sin la arroba, como las de sala (busca_img prueba las dos)
-            p8 = _sx.busca_img(cpcdir, nombre, ('.scr',)) if _os.path.isdir(cpcdir) else None
-            pp = (_sx.busca_img(cpcdir, nombre, ('.png', '.jpg', '.jpeg'))
-                  if _os.path.isdir(cpcdir) else None) or \
-                 (_sx.busca_img(origdir, nombre, ('.png', '.jpg', '.jpeg'))
-                  if _os.path.isdir(origdir) else None)
+            # con y sin la arroba, como las de sala: busca_img prueba las dos
+            # si el nombre la lleva, y aqui se prueba tambien a ponersela (los
+            # masteres de img/Original suelen llevarla: @morfina.jpg)
+            def _busca(carpeta, exts):
+                if not os.path.isdir(carpeta):
+                    return None
+                return (sx.busca_img(carpeta, nombre, exts) or
+                        sx.busca_img(carpeta, '@' + nombre.lstrip('@'), exts))
+            p8 = _busca(cpcdir, ('.scr',))
+            pp = (_busca(cpcdir, ('.png', '.jpg', '.jpeg')) or
+                  _busca(origdir, ('.png', '.jpg', '.jpeg')))
             try:
-                if p8:
-                    datos = png2cpc.rle_pack((open(p8, 'rb').read() + bytes(16384))[:16384])
-                    filas = 8
-                elif pp and _sx._clase_pantalla(pp) == 8:
-                    pic = png2cpc.convert_m2(pp, 64, contrast=True, dither='bayer')
-                    datos, filas = png2cpc.rle_pack((bytes(pic) + bytes(16384))[:16384]), 8
+                if p8 or (pp and sx._clase_pantalla(pp) == 8):
+                    res = _convierte_8(p8, pp, modo, tintas)
+                    datos = _pic(res[0], res[1], cache_dir) or b''
+                    filas = 8 if datos else 0
                 elif pp:
                     scr, inks = png2cpc.convert_menu(pp, contrast=True)
-                    datos, filas, tintas = bytes(scr), 24, list(inks or [])
+                    datos, filas, tintas_scr = bytes(scr), 24, list(inks or [])
                     dire = 0xC000
             except Exception as e:
                 info.setdefault('notas_scr', []).append('SCR %s: %s' % (nombre, e))
-        pant_tabla.append((filas, tintas))
+        pant_tabla.append((filas, tintas_scr))
         if filas:
             pant_files.append(('SCR%02d' % i, datos, dire))
     info['pantallas'] = len([1 for f, _t in pant_tabla if f])
 
-    # Plan de cache en RAM de 128K (CPC 6128). Asigna slots a las imagenes que
-    # quepan, por orden de localizacion. loc_slot[lid0] = slot (0..NSLOT-1) o 255.
-    # SLOT_SIZE/SPB/NSLOT deben coincidir con las constantes del motor (slottab).
-    SLOT_SIZE = 5120          # &1400; 3 por banco (3*5120=15360 <= 16384)
-    NSLOT = 12                # 4 bancos extra x 3 slots
-    nloc_total = len(spec['locations'])
-    loc_slot = bytearray([255] * nloc_total)
-    _nxt = 0
-    for lid0, comp in loc_pics:
-        if _nxt < NSLOT and len(comp) <= SLOT_SIZE and 0 <= lid0 < nloc_total:
-            loc_slot[lid0] = _nxt
-            _nxt += 1
-    info['ncache'] = _nxt
+    # El motor: su tamano no depende de nada de lo que falta por decidir (la
+    # tabla de ranuras va siempre con una entrada por imagen de sala), asi que
+    # se ensambla una vez para saber donde empieza la DB.
+    nranuras = max(1, len(loc_pics))
+    aviso = _aviso_6128(game.get('metadata'))
 
-    # dos pasadas: la 1a da la longitud del motor para colocar la DB justo detras
-    code0, _ = ge.assemble_engine(org=org, db_base=org, nloc=len(spec['locations']),
-                                  pantallas=pant_tabla)
-    dbaddr = org + len(code0)
-    code, _ = ge.assemble_engine(org=org, db_base=dbaddr, nloc=len(spec['locations']),
-                                 pantallas=pant_tabla)
+    def _motor(dbaddr, slots, tbufn, mtable):
+        slots = list(slots) + [(0xC0, 0x4000)] * (nranuras - len(slots))
+        return ge.assemble_engine(org=org, db_base=dbaddr, nloc=len(spec['locations']),
+                                  pantallas=pant_tabla, modo=modo, tintas=tintas,
+                                  slots=slots, tbufn=tbufn, mtable=mtable,
+                                  imgtop=IMGTOP, aviso128=aviso)
 
-    def _mkdb(hb, ib):
+    def _mkdb(dbaddr, hb=0, texto=None, loc_slot=b''):
         return ge.build_game_db(
             spec['messages'], spec['locations'], spec['vocab'], spec['objects'],
             spec['responses'], spec['startloc'], spec['sysverbs'], spec['width'],
             load=dbaddr, proc_before=spec['proc_before'],
             proc_after=spec['proc_after'], proc_onstart=spec['proc_onstart'],
             title_pal=title_pal, has_music=info['music'],
-            has_title=(title is not None), hdrbuf=hb, imgbuf=ib,
-            loc_slot=bytes(loc_slot), vall=spec.get('vall', 0),
+            has_title=(title is not None), hdrbuf=hb, imgbuf=IMGBUF,
+            loc_slot=loc_slot or bytes([255] * len(spec['locations'])),
+            vall=spec.get('vall', 0),
             font_acc=spec.get('font_acc', b''),
             timers=spec.get('timers', ()),
             llevarmax=spec.get('llevarmax', 255), fx=fx_blob,
-            exit_names=exit_names)[0]
-    # 1a pasada: longitud de la DB; el buffer de cabecera CAS IN va detras de la DB.
-    # imgbuf se fija en &8B00 (zona de la musica, libre durante el juego) porque
-    # esta FUERA de la ventana de banca &4000-&7FFF: asi sirve de buffer de
-    # transferencia con los bancos extra sin que se pagine.
-    # Los FX, hasta donde haya hueco. El CPC es la maquina mas apretada -- su
-    # RAM util acaba en &8B00, donde empieza el buffer de imagen -- y un juego
-    # con muchos efectos se pasaba. En vez de no exportar, entran los que
-    # quepan EN EL ORDEN en que el autor los declaro, asi que la prioridad la
-    # marca el orden de la pestana FX. Los que se quedan fuera no rompen la
-    # numeracion: pack_ay_fx les deja la ranura a cero y c_play no hace nada
-    # con ellas, o sea que el PLAY sigue compilando y sale mudo.
-    # Descripciones de objeto (EXAMINAR, desde v2.11): si con ellas no cabe ni
-    # aun sin FX, se quedan fuera con aviso y EXAMINAR imprime solo el nombre.
-    _fx_guard, fx_blob = fx_blob, b''
-    if (org + len(code) + len(_mkdb(0, 0)) > 0x8B00
-            and any(o.get('desc') for o in spec['objects'])):
-        _con = len(_mkdb(0, 0))
-        spec, _info2 = nc.compile_game(c, sys_msgs, width=width, obj_desc=False)
-        presupuesto.apunta(
-            'CPC: las descripciones de los objetos no caben (%s bytes) y se quedan '
-            'fuera: EXAMINAR imprime solo el nombre.'
-            % presupuesto._miles(_con - len(_mkdb(0, 0))))
-    fx_blob = _fx_guard
+            exit_names=exit_names, texto=texto)
+
+    # El cargador BASIC (con la paleta de la portada) decide donde empieza el
+    # motor: a BASIC le tienen que quedar 4K debajo de HIMEM (BASIC_BUFFER)
+    tintas_tit = list(title_pal) if title_pal else None
+
+    def _org_para(nbancos, margen):
+        car = _cargador(ENGINE_ORG, nbancos, modo, title is not None,
+                        bool(musbin), aviso, tintas_tit)
+        n, nv = tamano_basic(car)
+        return max(ENGINE_ORG, (BASIC_PROG + n + 7 * nv + BASIC_BUFFER + margen
+                                + 0xFF) & ~0xFF)
+    org = _org_para(0, 64)
+    _db, _inf = _mkdb(org)
+    msg_tam = _inf['msg_tam']
+    tbufn = max(msg_tam)
+    code0, _ = _motor(org, [], tbufn, 0x8000)
+    dbaddr = org + len(code0)
+
+    def _tope(db_len):
+        """Donde acaba la DB, el hdrbuf y MTABLE detras; y si cabe."""
+        fin = dbaddr + db_len
+        hb = max(0x4000, (fin + 0xFF) & ~0xFF)
+        mt = hb + HDRBUF_TAM
+        return hb, mt, mt + MTABLE_TAM <= IMGBUF
+
+    def _banca(plano):
+        return dict(ventana=0x4000, tam=16384, ids=list(BANCOS),
+                    plano=plano, fx_plano=True)
+
+    # 1) todo plano, como siempre: si cabe, el disco vale tambien para un 464
+    # 2) si no, el texto que sobra a los bancos del 6128: se quedan planos los
+    #    primeros mensajes (los del sistema, los nombres...) hasta llenar la RAM
+    # 3) si ni con todo el texto en bancos, fuera FX y descripciones de objeto
+    texto = None
+    db, dbi = _mkdb(dbaddr)
+    hb, mt, cabe = _tope(len(db))
     fx_fuera = []
-    if fx_blob:
-        _sinfx, _guardado = fx_blob, fx_blob
-        fx_blob = b''
-        _db_sin = _mkdb(0, 0)
-        hueco = (0x8B00 - org) - len(code0) - len(_db_sin)
-        if len(_guardado) > hueco:
-            import capabilities
-            import fx_engine as _fe
-            _usados = sorted(capabilities.used_fx(game))
-            dentro, mejor = set(), b''
-            for i in _usados:
-                cand = _fe.pack_ay_fx(game.get('fx', []) or [], dentro | {i},
-                                      clock=1000000)
-                if len(cand) <= hueco:
-                    dentro.add(i)
-                    mejor = cand
-            fx_blob = mejor
-            fx_fuera = [i for i in _usados if i not in dentro]
-        else:
-            fx_blob = _guardado
+    if not cabe:
+        # el cargador del 6128 es mas largo: el motor sube lo que haga falta
+        # para que a BASIC le quede su buffer (con 256 bytes de margen)
+        org = _org_para(len(BANCOS), 256)
+        code0, _ = _motor(org, [], tbufn, 0x8000)
+        dbaddr = org + len(code0)
+        todo_banco, _i = _mkdb(dbaddr, texto=_banca(()))
+        if not _tope(len(todo_banco))[2]:
+            # ni asi: los recortes de antes, sobre la DB con el texto en bancos
+            if any(o.get('desc') for o in spec['objects']):
+                _con = len(todo_banco)
+                spec, _info2 = nc.compile_game(c, sys_msgs, width=width, ficha=ficha,
+                                               imagen_intro=True, obj_desc=False)
+                todo_banco, _i = _mkdb(dbaddr, texto=_banca(()))
+                presupuesto.apunta(
+                    'CPC: las descripciones de los objetos no caben (%s bytes) y se '
+                    'quedan fuera: EXAMINAR imprime solo el nombre.'
+                    % presupuesto._miles(_con - len(todo_banco)))
+            if fx_blob and not _tope(len(todo_banco))[2]:
+                import capabilities
+                import fx_engine as _fe
+                _usados = sorted(capabilities.used_fx(game))
+                fx_blob = b''
+                sin = len(_mkdb(dbaddr, texto=_banca(()))[0])
+                hueco = IMGBUF - MTABLE_TAM - HDRBUF_TAM - 0xFF - (dbaddr + sin)
+                dentro, mejor = set(), b''
+                for i in _usados:
+                    cand = _fe.pack_ay_fx(game.get('fx', []) or [], dentro | {i},
+                                          clock=1000000)
+                    if len(cand) <= hueco:
+                        dentro.add(i)
+                        mejor = cand
+                fx_blob = mejor
+                fx_fuera = [i for i in _usados if i not in dentro]
+                todo_banco, _i = _mkdb(dbaddr, texto=_banca(()))
+        # cuanto texto cabe plano: lo que queda libre con todo en bancos (si
+        # se ha vuelto a compilar sin descripciones, los mensajes son otros)
+        msg_tam = _i['msg_tam']
+        libre = IMGBUF - MTABLE_TAM - HDRBUF_TAM - 0xFF - (dbaddr + len(todo_banco))
+        plano, usado = [], 0
+        for i, t in enumerate(msg_tam):
+            if usado + t > libre:
+                break
+            plano.append(i)
+            usado += t
+        texto = _banca(plano)
+        db, dbi = _mkdb(dbaddr, texto=texto)
+        hb, mt, cabe = _tope(len(db))
+        while not cabe and plano:          # por si el redondeo de hdrbuf
+            plano.pop()
+            texto = _banca(plano)
+            db, dbi = _mkdb(dbaddr, texto=texto)
+            hb, mt, cabe = _tope(len(db))
     info['fx_fuera'] = fx_fuera
+    bancos_texto = dbi['bancos_texto'] if texto else []
+    info['bancos_texto'] = [len(b) for b in bancos_texto]
+    info['solo_6128'] = bool(bancos_texto)
 
-    db0 = _mkdb(0, 0)
-    db_end = dbaddr + len(db0)
-    hdrbuf = (db_end + 0xFF) & ~0xFF       # buffer de cabecera CAS IN (2 KB)
-    imgbuf = 0x8B00                        # buffer de imagen (base RAM, fuera de banca)
-    db = _mkdb(hdrbuf, imgbuf)
+    # La cache de imagenes: lo que el texto deja libre en los cuatro bancos
+    nbt = len(bancos_texto)
+    libres = []
+    if nbt:
+        libres.append((BANCOS[nbt - 1], 0x4000 + len(bancos_texto[-1]), 0x8000))
+    libres += [(b, 0x4000, 0x8000) for b in BANCOS[nbt:]]
+    donde, slots = _reparte_ranuras(loc_pics, libres)
+    loc_slot = bytearray([255] * len(spec['locations']))
+    for lid0, k in donde.items():
+        if 0 <= lid0 < len(loc_slot):
+            loc_slot[lid0] = k
+    info['ncache'] = len(donde)
+
+    db, dbi = _mkdb(dbaddr, hb, texto=texto, loc_slot=bytes(loc_slot))
+    code, sym = _motor(dbaddr, slots, tbufn, mt)
+    if len(code) != len(code0):
+        raise RuntimeError('CPC: el motor ha cambiado de tamano entre pasadas')
+    if org + len(code) > 0x4000:
+        raise RuntimeError('CPC: el motor pasa de &4000 (&%04X)' % (org + len(code)))
     blob = code + db
-    info['imgbuf'] = imgbuf
+    info['imgbuf'] = IMGBUF
 
-    # El cargador BASIC carga TODO (musica, titulo, juego). El motor no toca el
-    # disco: solo pone paleta/musica/modo. Asi se evita corromper la base de datos.
-    mode_cmd = 'MODE 2' if modo == 2 else 'MODE 1'
-    parts = ['MEMORY &11FF']
-    if info['music']:
-        parts.append('LOAD"MUSIC.BIN"')
-    if title is not None:
-        parts.append('MODE 0')            # titulo en Modo 0; el motor vuelve a 2
-        # Pantalla en negro durante la carga: las 16 tintas a 0 para no mostrar la
-        # portada con la paleta por defecto (erronea) mientras carga GAME.BIN. El
-        # motor pone la paleta real (set_title_pal) al arrancar y la portada aparece.
-        parts.append('FOR p=0 TO 15:INK p,0:NEXT')
-        parts.append('LOAD"TITLE.SCR"')
-    else:
-        parts.append(mode_cmd)
-    parts.append('LOAD"GAME.BIN"')
-    parts.append('CALL &%04X' % org)
-    loader = ('10 ' + ':'.join(parts) + '\r\n').encode('ascii')
+    # El cargador BASIC carga TODO (musica, titulo, texto, juego). El motor no
+    # toca el disco al arrancar: solo pone paleta/musica/modo.
+    loader = _cargador(org, len(bancos_texto), modo, title is not None,
+                       bool(musbin), aviso, tintas_tit)
+    if libre_basic(loader, org) < BASIC_BUFFER:
+        raise RuntimeError('CPC: al cargador BASIC no le queda sitio para el '
+                           'buffer de disco (%d bytes de %d)'
+                           % (libre_basic(loader, org), BASIC_BUFFER))
     files = [('DISC', 'BAS', loader),
              ('GAME', 'BIN', dsk.bin_file('GAME', 'BIN', blob, org))]
+    for k, b in enumerate(bancos_texto):
+        files.append(('TEXT%d' % k, 'BIN',
+                      dsk.bin_file('TEXT%d' % k, 'BIN', bytes(b), 0x4000)))
     if title is not None:
         files.append(('TITLE', 'SCR',
                       dsk.bin_file('TITLE', 'SCR', title, 0xC000)))
     if musbin:
         files.append(('MUSIC', 'BIN',
-                      dsk.bin_file('MUSIC', 'BIN', musbin, 0x8B00)))
+                      dsk.bin_file('MUSIC', 'BIN', musbin, IMGBUF)))
     for n, comp in loc_pics:
         nm = 'PIC%02d' % n
-        files.append((nm, 'SCR', dsk.bin_file(nm, 'SCR', comp, imgbuf)))
+        files.append((nm, 'SCR', dsk.bin_file(nm, 'SCR', comp, IMGTOP - len(comp))))
     # Las pantallas del SCR entran hasta donde haya disco: si no caben todas,
     # se quedan fuera las ultimas (el condact existe igual y no pinta) y se
     # avisa. Sin esto, un juego que llenara el disco no exportaria.
+    def _scr_files():
+        return [(nm, 'SCR', dsk.bin_file(nm, 'SCR', datos, dire or (IMGTOP - len(datos))))
+                for nm, datos, dire in pant_files]
     scr_fuera = []
     base_files = list(files)
     while True:
-        files = base_files + [(nm, 'SCR', dsk.bin_file(nm, 'SCR', datos, dire or imgbuf))
-                              for nm, datos, dire in pant_files]
+        files = base_files + _scr_files()
         nb, ne = dsk.bloques(files)
         if (nb <= dsk.BLOQUES_DATOS and ne <= dsk.ENTRADAS_DIR) or not pant_files:
             break
@@ -336,63 +687,70 @@ def export_native(game, dsk_path, modo=2, img_dir=None):
         pant_tabla[k] = (0, [])
     if scr_fuera:
         # el motor lleva SCRT dentro: hay que volver a ensamblar sin ellas
-        code, _ = ge.assemble_engine(org=org, db_base=dbaddr, nloc=len(spec['locations']),
-                                     pantallas=pant_tabla)
+        code, sym = _motor(dbaddr, slots, tbufn, mt)
         blob = code + db
         base_files[1] = ('GAME', 'BIN', dsk.bin_file('GAME', 'BIN', blob, org))
-        files = base_files + [(nm, 'SCR', dsk.bin_file(nm, 'SCR', datos, dire or imgbuf))
-                              for nm, datos, dire in pant_files]
+        files = base_files + _scr_files()
     info['pantallas'] = len(pant_files)
+    nb, ne = dsk.bloques(files)
+    if nb > dsk.BLOQUES_DATOS or ne > dsk.ENTRADAS_DIR:
+        raise ValueError(
+            'CPC: el disco no da para tanto: %d bloques de 1K de %d (y %d '
+            'ficheros de %d). Quita imagenes de sala o acorta texto.'
+            % (nb, dsk.BLOQUES_DATOS, ne, dsk.ENTRADAS_DIR))
 
-    # La cache de 12 ranuras es una OPTIMIZACION, no un requisito: una sala sin
-    # ranura se lee del disco cada vez que entras (sli_disc en el motor), y la
-    # imagen sale igual. En un 464 sin expansion no hay cache en absoluto y el
-    # juego funciona. Asi que esto NO es un aviso, es informacion: dice cuantas
-    # salas van a tardar un instante al entrar.
-    _sobran = [n for n, c in loc_pics if len(c) > SLOT_SIZE]
+    # La cache es una OPTIMIZACION, no un requisito: una sala sin ranura se lee
+    # del disco cada vez que entras (sli_disc en el motor), y la imagen sale
+    # igual. Asi que esto NO es un aviso, es informacion.
     info['sin_cache'] = max(0, len(loc_pics) - info['ncache'])
     info['avisos'] = []
     if fx_fuera:
         _nom = [(game.get('fx') or [])[i - 1].get('name', str(i))
                 for i in fx_fuera if i - 1 < len(game.get('fx') or [])]
         info['avisos'].append(
-            'CPC: %d efecto(s) FX no caben y quedan mudos: %s. La RAM util del '
-            'CPC acaba en &8B00; los demas entran por orden de la pestana FX.'
-            % (len(fx_fuera), ', '.join(_nom)))
+            'CPC: %d efecto(s) FX no caben y quedan mudos: %s. Los demas entran '
+            'por orden de la pestana FX.' % (len(fx_fuera), ', '.join(_nom)))
     if scr_fuera:
         info['avisos'].append(
             'CPC: %d pantalla(s) del SCR no caben en el disco y no se pintan: %s. '
             'El .dsk son 178 bloques de 1K; las demas entran por orden de uso.'
             % (len(scr_fuera), ', '.join(scr_fuera)))
+    if info['img_fuera']:
+        info['avisos'].append('CPC: imagen(es) que no se pueden descomprimir en '
+                              'el buffer: %s.' % ', '.join(info['img_fuera']))
     info['notas'] = []
+    if bancos_texto:
+        info['notas'].append(
+            'CPC: el texto no cabe entero en la RAM base y %s bytes van a los '
+            'bancos del 6128 (TEXT0..%d.BIN): este disco no arranca en un 464 '
+            'sin ampliar (el cargador lo dice).'
+            % (presupuesto._miles(sum(info['bancos_texto'])), len(bancos_texto) - 1))
     if info['sin_cache']:
         info['notas'].append(
-            'CPC: %d de %d imagenes se leeran del disco cada vez (solo caben %d '
-            'en la cache de RAM del 6128). Se ven igual; solo tardan un instante '
-            'al entrar en la sala%s.'
-            % (info['sin_cache'], len(loc_pics), NSLOT,
-               ', y %d no cabrian en una ranura ni habiendo sitio (pasan de %d '
-               'bytes comprimidas)' % (len(_sobran), SLOT_SIZE) if _sobran else ''))
+            'CPC: %d de %d imagenes se leeran del disco cada vez (no caben en '
+            'lo que el texto deja libre en los bancos). Se ven igual; solo '
+            'tardan un instante al entrar en la sala.'
+            % (info['sin_cache'], len(loc_pics)))
+    partidas = [('motor + plataforma', len(code)),
+                ('base de datos (con los FX)', len(db)),
+                ('buffer de disco y acentos', HDRBUF_TAM + MTABLE_TAM)]
+    if hb > dbaddr + len(db):
+        partidas.append(('hueco hasta el buffer', hb - (dbaddr + len(db))))
     presupuesto.comprueba(
-        'Amstrad CPC',
-        [('motor + plataforma', len(code)),
-         ('base de datos (con los FX)', len(db))],
-        0x8B00 - org, 'la RAM libre bajo el buffer de imagen, &%04X-&8B00' % org,
+        'Amstrad CPC', partidas,
+        IMGBUF - org, 'la RAM libre bajo el buffer de imagen, &%04X-&%04X' % (org, IMGBUF),
         presupuesto.RECORTA_PLANO)
     img = dsk.make_dsk(files)
-    # La cache de imagenes y el disco no son topes que rompan nada, pero son la
-    # otra mitad de la cuenta: cuantas salas se ven al instante, y cuanto ocupa
-    # el disquete.
     _extra = []
+    if bancos_texto:
+        _extra.append('   texto en los bancos del 6128: %s bytes en %d banco(s)'
+                      % (presupuesto._miles(sum(info['bancos_texto'])), len(bancos_texto)))
     if loc_pics:
         _extra.append(
             '   cache de imagenes: %d de %d salas en los bancos del 6128'
             % (info['ncache'], len(loc_pics)))
-        _extra.append(
-            '   (%d ranuras de %s bytes); las demas, del disco cada vez'
-            % (NSLOT, presupuesto._miles(SLOT_SIZE)))
-    _extra.append('   disco: %s bytes en %d ficheros del .dsk'
-                  % (presupuesto._miles(len(img)), len(files)))
+    _extra.append('   disco: %d de %d bloques de 1K, %d ficheros'
+                  % (nb, dsk.BLOQUES_DATOS, len(files)))
     presupuesto.apunta(chr(10).join(_extra))
     with open(dsk_path, 'wb') as f:
         f.write(img)
@@ -402,8 +760,12 @@ def export_native(game, dsk_path, modo=2, img_dir=None):
     info['db_addr'] = dbaddr
     info['blob_size'] = len(blob)
     info['end_addr'] = org + len(blob)
+    info['hdrbuf'] = hb
+    info['mtable'] = mt
     info['dsk_size'] = len(img)
+    info['dsk_bloques'] = nb
     info['modo'] = modo
+    info['simbolos'] = sym
     info['presupuesto'] = presupuesto.informe()
     return info
 
@@ -439,22 +801,46 @@ def _music_bin(music_dir):
     return None
 
 
-def _loc_image(cpcdir, origdir, name):
-    """Imagen de una localizacion -> pantalla Modo 2 (tercio superior, 16 KB).
-    Prioridad: img/AmstradCPC/<id>.scr (nativo, tal cual) -> <id>.png|jpg
-    en AmstradCPC u Original (convertida a Modo 2, 64 lineas arriba)."""
+def _loc_image(cpcdir, origdir, name, modo=1, tintas=(0, 26)):
+    """Imagen de una localizacion -> (64 lineas seguidas de 80 bytes, (tinta 2,
+    tinta 3)), o None. Prioridad: img/AmstradCPC/<id>.scr (una pantalla nativa
+    del modo del juego: se toman sus 64 lineas de arriba) -> <id>.png|jpg en
+    AmstradCPC u Original, convertida al modo del juego."""
     import os
-    p = os.path.join(cpcdir, name + '.scr')
-    if os.path.isfile(p):
-        return (open(p, 'rb').read() + bytes(16384))[:16384]
-    for base in (cpcdir, origdir):
-        for ext in ('.png', '.jpg', '.jpeg'):
-            pp = os.path.join(base, name + ext)
-            if os.path.isfile(pp):
-                import png2cpc
-                scr = png2cpc.convert_m2(pp, 64, contrast=True, dither='bayer')
-                return (bytes(scr) + bytes(16384))[:16384]
-    return None
+    # con y sin la arroba: los masteres de img/Original la llevan (@playa.png)
+    # y los ids de una traduccion pueden no llevarla (playa)
+    nombres = [name] + [n for n in (name.lstrip('@'), '@' + name.lstrip('@'))
+                        if n != name]
+
+    def busca(base, exts):
+        for n in nombres:
+            for ext in exts:
+                c = os.path.join(base, n + ext)
+                if os.path.isfile(c):
+                    return c
+        return None
+    p8 = busca(cpcdir, ('.scr',))
+    pp = None
+    if not p8:
+        pp = busca(cpcdir, ('.png', '.jpg', '.jpeg')) or \
+            busca(origdir, ('.png', '.jpg', '.jpeg'))
+    if not p8 and not pp:
+        return None
+    return _convierte_8(p8, pp, modo, tintas)
+
+
+def _convierte_8(p8, pp, modo, tintas):
+    """Una imagen de 8 filas (sala o SCR) en el formato del motor: las lineas
+    seguidas y las dos tintas propias (en Modo 2 no hay: van a 0). Un .scr
+    nativo en Modo 1 no trae paleta: se le ponen las tintas 2 y 3 que tiene
+    el firmware al arrancar."""
+    import png2cpc
+    if p8:
+        scr = (open(p8, 'rb').read() + bytes(16384))[:16384]
+        return png2cpc.lineal(scr, IMG_LINEAS), ((20, 6) if modo == 1 else (0, 0))
+    if modo == 1:
+        return png2cpc.convert_m1(pp, IMG_LINEAS, fijas=tintas)
+    return png2cpc.convert_m2_lineal(pp, IMG_LINEAS), (0, 0)
 
 
 def _title_screen(img_dir):

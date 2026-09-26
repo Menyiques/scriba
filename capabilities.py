@@ -69,6 +69,7 @@ TARGET_LABEL = {
     'spectrum48': 'ZX Spectrum 48K (motor nativo)',
     'spectrum128': 'ZX Spectrum 128K (motor nativo)',
     'next': 'ZX Spectrum Next', 'cpc': 'Amstrad CPC',
+    'msx2': 'MSX2',
 }
 
 # ─── Contrato: qué soporta cada target ───────────────────────────────────────
@@ -118,6 +119,13 @@ CAPS['cpc']['condacts'] = CAPS['cpc']['condacts'] - {'SAMPLE'}
 # Hasta la v2.53 esta linea decia CAPS['next'] = CAPS['spectrum'], o sea que
 # daba via libre a un BEEP que en el .nex no suena.
 CAPS['next'] = CAPS_NATIVO
+# MSX2 (msx2_nativo): el mismo motor. En SCREEN 5 los colores del texto son
+# los 8 del Spectrum, sin brillo, y no hay parpadeo: BRIGHT y FLASH existen
+# y no hacen nada; INVERSE si funciona. Las muestras digitalizadas aun no
+# estan portadas al PSG del MSX (SMPPLAY es un RET).
+CAPS['msx2'] = dict(CAPS_NATIVO,
+                    condacts=CAPS_NATIVO['condacts'] - {'BRIGHT', 'FLASH',
+                                                        'SAMPLE'})
 
 
 # ─── Escaneo del juego ───────────────────────────────────────────────────────
@@ -319,7 +327,7 @@ if __name__ == '__main__':
     print('Usados -> condacts:', ', '.join(sorted(used['condacts'])) or '(ninguno)')
     print('         predicados:', ', '.join(sorted(used['predicates'])) or '(ninguno)')
     print('         funciones:', ', '.join(sorted(used['features'])) or '(ninguna)')
-    for t in ('spectrum', 'spectrum48', 'spectrum128', 'next', 'cpc'):
+    for t in ('spectrum', 'spectrum48', 'spectrum128', 'next', 'cpc', 'msx2'):
         r = report(g, t)
         print('\n=== %s ===' % TARGET_LABEL[t])
         print(r if r else '  OK: todo soportado.')

@@ -18,6 +18,66 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
 
 ---
 
+## 3.0 — 2026-09-27 — El CPC en Modo 1 y con el texto en los bancos del 6128, portadas lo primero y MSX2
+
+### Novedades
+- **MSX2**: exportación a cartucho MegaROM ASCII16 (`.rom`), con el mismo
+  motor y la misma base de datos que las demás máquinas (`msx2_nativo.py`).
+  SCREEN 5, 42 columnas, sonido por el PSG; las imágenes salen de `img/MSX`
+  o, si no, de `img/Original`. `bateria_msx2.py` pasa la batería `.pru`
+  sobre el cartucho en openMSX.
+- **CPC en Modo 1**: 40 columnas e imágenes de 4 colores. Dos son las del
+  texto (papel y pluma: las del `on_start`, si las pone, o negro y blanco) y
+  las otras dos las elige cada imagen entre los 27 colores del CPC. Tramado
+  ordenado y una gamma que conserva la noche de las escenas oscuras. Es lo que
+  hace ahora *Exportar Amstrad CPC*; el Modo 2 (80 columnas, blanco y negro)
+  sigue en el menú, en su propia entrada.
+- **El texto que no cabe va a los bancos del 6128.** Si el juego no entra en
+  la RAM base, se quedan planos los primeros mensajes (los del sistema, los
+  nombres...) hasta llenarla y el resto va a `TEXTn.BIN`, que el cargador
+  BASIC deja en los bancos 4-7. El motor copia cada mensaje por debajo de
+  `&4000` antes de expandirlo. Un juego que cabe entero sigue arrancando en un
+  464. Si el texto va en bancos y el ordenador no tiene RAM extra, el cargador
+  lo dice con el mensaje de sistema `necesita_6128` (traducible). El motor ya
+  no empieza siempre en `&1200`: sube lo que haga falta para que a BASIC le
+  queden 4 KB libres debajo de `HIMEM` para el buffer de `LOAD` (si no,
+  «Memory full»); Tifón Negro va en `&1500`.
+- **Imágenes en ZX0** en vez de RLE: bastante menos disco. Tifón Negro entra
+  con sus 23 salas, las 3 pantallas del SCR y el texto en 163 de los 178
+  bloques. Comprimir en Python es lento, así que el resultado se guarda en
+  `temp/CPC` del juego y la segunda exportación tarda segundos.
+- **Caché de imágenes a medida**: cada imagen ocupa lo suyo en lo que deja
+  libre el texto en los bancos, en vez de 12 ranuras fijas de 5 KB.
+- **La portada, lo primero que se carga** en 48K, 128K y CPC, para que se vea
+  mientras carga el resto. En las cintas de 48K y 128K es un `LOAD "" SCREEN$`
+  antes que nada (sin los «Bytes:» encima); en el 48K, que hasta ahora no
+  tenía portada, el juego la deja puesta hasta que pulsas una tecla. En el
+  CPC el cargador pone la paleta de la portada y la carga antes que la
+  música, el texto y el juego, así que se ve dibujarse en sus colores (antes
+  cargaba en negro). El cargador del CPC es más largo por las 16 tintas y el
+  motor empieza donde haga falta para que BASIC tenga su buffer de 4 KB.
+- **VERSION en el CPC** (la ficha, como en las otras máquinas) y la imagen de
+  la sala de salida puesta antes de la presentación, que sale debajo.
+- **`probar_cpc.py`**: la batería `.pru` sobre el `.dsk` real, en el
+  simulador: interpreta el cargador BASIC, imita el firmware (texto, teclado,
+  disco, tintas) y pagina la RAM de 128K. Cada vez que se describe una sala
+  compara la imagen de la pantalla con la convertida. Tifón: 64 de 64 en Modo
+  1 y en Modo 2. `verify_scr.py` prueba ya el SCR del CPC en el simulador.
+- Las imágenes de sala de las traducciones (ids sin arroba, como `playa`)
+  encuentran los másteres `@playa.png` de `img/Original`; también las del SCR
+  (`@morfina.jpg`).
+
+### Correcciones
+- **CPC: la tabla de los acentos pisaba la base de datos en los juegos
+  grandes.** Estaba fija en `&8000` (256 bytes) y el buffer de disco de 2 KB
+  iba justo detrás de la DB aunque se metiera en el de imagen; el presupuesto
+  no contaba ninguno de los dos. Apolo 11 acababa en `&8996`. Ahora van detrás
+  de la DB, en los 32 KB centrales, y cuentan.
+- CPC: al buscar la RAM extra se escribía en los bancos 4 y 5 sin devolver lo
+  que había.
+
+---
+
 ## 2.16 — 2026-09-26 — ENTER sin nada tiene su propio mensaje
 
 ### Novedades

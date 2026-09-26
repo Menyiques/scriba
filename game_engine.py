@@ -74,14 +74,18 @@ def empaqueta_en_bancos(trozos, tam=16384, bancos=None):
 def build_game_db(messages, locations, vocab, objects, responses, startloc, sysverbs, width=40, load=DB, proc_before=b'', proc_after=b'', proc_onstart=b'', title_pal=b'', has_music=False, has_title=False, hdrbuf=0, imgbuf=0, loc_slot=b'', vall=0, font_acc=b'', timers=(), llevarmax=0, fx=b'', exit_names=None, texto=None):
     """La base de datos del juego, como la lee el motor.
 
-    `texto`: None (48K, CPC) deja los mensajes dentro, en el mapa plano. En el
-    128K y el Next se pasa dict(ventana=&C000, tam=16384, ids=[...]) y los
-    mensajes -y el blob de FX- se van a BANCOS: la DB guarda por mensaje su
-    direccion dentro de la ventana y el banco que hay que paginar (la tabla
-    msgbnk, con los `ids` tal como los espera TXTPAGE en esa maquina). Lo que
-    hay que meter en cada banco vuelve en info['bancos_texto'], sin rellenar.
-    El diccionario BPE y el indice se quedan en la DB plana: son pequeños y
-    el motor los necesita al mismo tiempo que el mensaje.
+    `texto`: None (48K, y el CPC cuando le cabe todo) deja los mensajes dentro,
+    en el mapa plano. En el 128K y el Next se pasa dict(ventana=&C000,
+    tam=16384, ids=[...]) y los mensajes -y el blob de FX- se van a BANCOS: la
+    DB guarda por mensaje su direccion dentro de la ventana y el banco que hay
+    que paginar (la tabla msgbnk, con los `ids` tal como los espera TXTPAGE en
+    esa maquina). Lo que hay que meter en cada banco vuelve en
+    info['bancos_texto'], sin rellenar. El diccionario BPE y el indice se
+    quedan en la DB plana: son pequeños y el motor los necesita al mismo
+    tiempo que el mensaje.
+    El CPC 6128 pasa ademas `plano` (los numeros de mensaje que se quedan en
+    la DB plana, con banco 0: los que caben en la RAM base; el resto va a los
+    bancos) y `fx_plano` (los FX, en la DB: se tocan fuera de TXTPAGE).
     """
     # Las matrices de estado del motor (FLAGS, OBJLOC, OBJLIT, OBJOPEN, OBJLOCK,
     # OBJIN) son 'defs 64' fijos, asi que pasarse no da error: escribe encima de
@@ -128,15 +132,24 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     else:
         # a bancos: cada mensaje entero en uno, y detras de ellos los FX
         ventana=texto['ventana']; ids=list(texto['ids'])
-        trozos=[bytes(t)+b'\x00' for t in toks]+([bytes(fx)] if fx else [])
+        plano=set(texto.get('plano') or ())
+        fx_banco=bool(fx) and not texto.get('fx_plano')
+        banc=[i for i in range(nmsg) if i not in plano]
+        trozos=[bytes(toks[i])+b'\x00' for i in banc]+([bytes(fx)] if fx_banco else [])
         bancos_texto,donde=empaqueta_en_bancos(trozos, texto.get('tam',16384))
         if len(bancos_texto)>len(ids):
             raise ValueError('el texto ocupa %d bancos y la maquina solo da %d'
                              % (len(bancos_texto), len(ids)))
-        mptr=[ventana+off for _,off in donde[:nmsg]]
-        mbnk=[ids[j] for j,_ in donde[:nmsg]]
-        if fx: fx_en_banco=(ids[donde[nmsg][0]], ventana+donde[nmsg][1])
-        md=b''
+        mptr=[0]*nmsg; mbnk=[0]*nmsg
+        for k,i in enumerate(banc):
+            mptr[i]=ventana+donde[k][1]; mbnk[i]=ids[donde[k][0]]
+        if fx_banco: fx_en_banco=(ids[donde[len(banc)][0]], ventana+donde[len(banc)][1])
+        # los que se quedan en la DB (banco 0), detras del indice
+        mdat=p; md=bytearray()
+        for i in range(nmsg):
+            if i in plano:
+                mptr[i]=mdat+len(md); md+=bytes(toks[i])+b'\x00'
+        p=mdat+len(md)
         msgbnk=p; p+=nmsg
     locidx=p; p+=nloc*2
     ldat=p; lptr=[]; lb=bytearray()
@@ -327,7 +340,8 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
             out.append(_d&0xFF); out.append((_d>>8)&0xFF)
     if not fx_en_banco: out+=bytes(fx)
     return bytes(out), dict(load=load,ntok=ntok,nmsg=nmsg,nloc=nloc,nvocab=nvocab,nobj=nobj,ntimers=nt,size=len(out),
-                            bancos_texto=bancos_texto)
+                            bancos_texto=bancos_texto,
+                            msg_tam=[len(t)+1 for t in toks])
 
 ENGINE_ASM = r'''
         org   ORIGIN
@@ -1057,7 +1071,7 @@ setup_acc:
         or    l
         ret   z                ; sin font -> nada
         ld    de,224           ; primer caracter redefinible
-        ld    hl,MTABLE        ; tabla de matrices (RAM central, &8000)
+        ld    hl,MTABLE        ; tabla de matrices (en los 32K centrales)
         call  TXTMTABLE        ; TXT SET M TABLE (DE=primer char, HL=tabla)
         ld    hl,(faccp)       ; 16 glifos de acento (8 bytes c/u)
         ld    (accptr),hl
@@ -3569,17 +3583,45 @@ CPC_PLAT_ASM = r'''
 ; es una etiqueta de la capa de plataforma (next_nativo.PLAT_ASM).
 SCRATTR: ret
 SMPPLAY: ret
-; El texto del CPC es plano (sus bancos extra son la cache de imagenes, y el
-; 464 no tiene): TXTPAGE no tiene nada que paginar.
-TXTPAGE: ret
+; TXTPAGE: A = banco del mensaje (0 = esta en la DB plana) y HL = donde esta
+; dentro de la ventana &4000-&7FFF. El banco tapa esa parte de la RAM base
+; -- donde viven la DB y el buffer de cabecera --, asi que el mensaje no se
+; expande desde ahi: se copia (tokens, hasta el 0) a TBUF, bajo &4000, se
+; devuelve la RAM normal y HL queda apuntando a la copia. Con las
+; interrupciones cortadas y sin salir de la RAM baja: codigo, TBUF y pila.
+; Un juego que cabe entero en la RAM base no pasa nunca por aqui (msgbnk = 0).
+TXTPAGE:
+        or    a
+        ret   z
+        di
+        push  bc
+        push  de
+        ld    b,&7F
+        ld    c,a
+        defb  &ED,&49         ; out (c),c  -> el banco del texto en &4000
+        ld    de,TBUF
+tp_l:   ld    a,(hl)
+        ld    (de),a
+        inc   hl
+        inc   de
+        or    a
+        jr    nz,tp_l
+        ld    bc,&7FC0
+        defb  &ED,&49         ; out (c),c  -> RAM normal
+        ei
+        pop   de
+        pop   bc
+        ld    hl,TBUF
+        ret
 
 ; ---------------------------------------------------------------------------
 ; Pantallas sueltas (SCR n) en el CPC: del disco, como las de sala.
 ; SCRT lleva un byte por pantalla, las filas (0 = no esta en este disco, 8 o
 ; 24), y SCRINKS 16 tintas por pantalla (solo cuentan en las de 24). El fichero
-; es SCRnn.SCR: las de 8 filas van empaquetadas como las PICnn (RLE, a imgbuf y
-; de ahi a pantalla); las de 24 son una pantalla de Modo 0 de 16K que va
-; derecha a &C000, como TITLE.SCR, con su paleta. Entra con A = indice y C = 1
+; es SCRnn.SCR: las de 8 filas van como las PICnn (sus 2 tintas y el ZX0, al
+; final de imgbuf y de ahi a pantalla, por pinta_pic); las de 24 son una
+; pantalla de Modo 0 de 16K que va derecha a &C000, como TITLE.SCR, con su
+; paleta. Entra con A = indice y C = 1
 ; si hay que borrar el texto antes.
 ; ---------------------------------------------------------------------------
 SHOWSCR:
@@ -3614,7 +3656,7 @@ ss_dd:  push  af
         jr    z,ss_pinta
         ld    h,0
         ld    l,0
-        ld    d,79
+        ld    d,COLS1
         ld    e,24
         call  TXTWIN
         ld    a,12
@@ -3623,10 +3665,10 @@ ss_pinta:
         ld    a,(ss_filas)
         cp    24
         jr    z,ss_ent
-        ld    hl,(imgbufp)
-        call  ss_carga         ; disco -> imgbuf
+        ld    a,1
+        call  ss_carga         ; disco -> final de imgbuf
         jp    nc,ss_no
-        call  depack           ; imgbuf -> tercio superior
+        call  pinta_pic        ; -> tercio superior
         ; la ventana de texto pasa a empezar debajo de la imagen, sin mover el
         ; cursor si ya estaba ahi (TXT GET WINDOW: L = fila de arriba)
         call  &BB69
@@ -3635,7 +3677,7 @@ ss_pinta:
         jr    z,ss_8
         ld    h,0
         ld    l,8
-        ld    d,79
+        ld    d,COLS1
         ld    e,24
         call  TXTWIN
         xor   a
@@ -3644,7 +3686,7 @@ ss_8:   xor   a
         ret                    ; A = 0: 8 filas
 ss_ent: xor   a
         call  SCRMODE          ; Modo 0: 16 colores, como la portada
-        ld    hl,&C000
+        xor   a
         call  ss_carga         ; la pantalla entera, derecha a la RAM de video
         jr    nc,ss_ent0
         ld    a,(ss_idx)
@@ -3670,15 +3712,21 @@ ss_ent0:
         ret
 ss_no:  ld    a,255
         ret
-; ss_carga: SCRnn.SCR -> HL, por CAS IN. CF=1 ok, CF=0 no existe.
+; ss_carga: SCRnn.SCR por CAS IN. Con A = 0 va derecha a la pantalla (&C000,
+; las de 24 filas); si no, al final de imgbuf, como las imagenes de sala.
+; CF=1 ok, CF=0 no existe.
 ss_carga:
-        push  hl
+        push  af
         ld    b,9
         ld    hl,fscr
         ld    de,(hdrbufp)
         call  CASOPEN
-        pop   hl
+        pop   de               ; D = la A de entrada (los flags, los de CASOPEN)
         ret   nc
+        ld    hl,&C000
+        ld    a,d
+        or    a
+        call  nz,pic_dest      ; BC = longitud -> HL, picsrc, piclen
         call  CASDIR
         call  CASCLOSE
         scf
@@ -3691,15 +3739,390 @@ fscr:   defb "SCR00.SCR"
 ss_borra: defw 0
 ss_filas: defb 0
 ss_idx:   defb 0
+
+; ---------------------------------------------------------------------------
+; Imagenes (salas y SCR de 8 filas). Fichero = [tinta 2][tinta 3][ZX0 de las
+; 64 lineas de 80 bytes, seguidas]. Se carga pegado al final de imgbuf
+; (IMGTOP) y se descomprime al principio: la salida va siempre por detras de
+; lo que queda por leer (el export lo comprueba al comprimir).
+; ---------------------------------------------------------------------------
+; pic_dest: tras CAS IN OPEN (BC = longitud del fichero), HL = donde cargarlo.
+pic_dest:
+        ld    (piclen),bc
+        ld    hl,IMGTOP
+        or    a
+        sbc   hl,bc
+        ld    (picsrc),hl
+        ret
+; pinta_pic: la imagen de picsrc al tercio de arriba de la pantalla. Se
+; descomprime entera en imgbuf y se copia linea a linea: en la pantalla del
+; CPC cada linea de pixel de una fila de caracteres esta &800 mas alla.
+pinta_pic:
+        ld    hl,(picsrc)
+        ld    de,pictin
+        ldi
+        ldi                    ; sus dos tintas, a salvo
+        ld    de,(imgbufp)
+        call  dzx0st
+        call  PICNEGRO         ; Modo 1: tintas 2 y 3 a negro mientras se copia
+        ld    hl,(imgbufp)
+        ld    de,&C000
+        ld    b,8              ; 8 filas de caracteres...
+pp_f:   push  bc
+        push  de
+        ld    b,8              ; ...de 8 lineas de pixel
+pp_l:   push  bc
+        push  de
+        ld    bc,80
+        ldir
+        pop   de
+        ld    a,d
+        add   a,8
+        ld    d,a              ; la linea de pixel siguiente
+        pop   bc
+        djnz  pp_l
+        pop   de
+        ex    de,hl
+        ld    bc,80
+        add   hl,bc            ; la fila de caracteres siguiente
+        ex    de,hl
+        pop   bc
+        djnz  pp_f
+        jp    PICTINTA
+'''
+
+# Modo 1: las tintas 0 y 1 son las del texto (papel y pluma) y las 2 y 3 las
+# pone cada imagen. Mientras se copia una imagen nueva, las 2 y 3 van a negro:
+# asi no se ve un instante con los colores de la anterior.
+CPC_TINTAS_M1 = r'''
+PICNEGRO:
+        ld    a,2
+        ld    bc,0
+        call  SCRINK
+        ld    a,3
+        ld    bc,0
+        call  SCRINK
+        jp    MCWAIT
+PICTINTA:
+        ld    a,(pictin)
+        ld    b,a
+        ld    c,a
+        ld    a,2
+        call  SCRINK
+        ld    a,(pictin+1)
+        ld    b,a
+        ld    c,a
+        ld    a,3
+        jp    SCRINK
+'''
+# Modo 2: dos colores, los del texto; la imagen no trae tintas.
+CPC_TINTAS_M2 = r'''
+PICNEGRO:
+PICTINTA:
+        ret
+'''
+
+# dzx0_standard (Einar Saukas & Urusergi): el mismo que spectrum48_nativo.DZX0_ASM.
+# HL = flujo comprimido, DE = destino.
+CPC_DZX0 = r'''
+dzx0st: ld    bc,&FFFF
+        push  bc
+        inc   bc
+        ld    a,&80
+dzx0li: call  dzx0el
+        ldir
+        add   a,a
+        jr    c,dzx0no
+        call  dzx0el
+dzx0cp: ex    (sp),hl
+        push  hl
+        add   hl,de
+        ldir
+        pop   hl
+        ex    (sp),hl
+        add   a,a
+        jr    nc,dzx0li
+dzx0no: pop   bc
+        ld    c,&FE
+        call  dzx0lo
+        inc   c
+        ret   z
+        ld    b,c
+        ld    c,(hl)
+        inc   hl
+        rr    b
+        rr    c
+        push  bc
+        ld    bc,1
+        call  nc,dzx0bt
+        inc   bc
+        jr    dzx0cp
+dzx0el: inc   c
+dzx0lo: add   a,a
+        jr    nz,dzx0sk
+        ld    a,(hl)
+        inc   hl
+        rla
+dzx0sk: ret   c
+dzx0bt: add   a,a
+        rl    c
+        rl    b
+        jr    dzx0lo
 '''
 
 
-def assemble_engine(org=ORG, db_base=DB, nloc=256, pantallas=None):
-    """pantallas: [(filas, 16 tintas)] de las pantallas sueltas del SCR en el
-    CPC (filas 0 = no esta en el disco), en el orden de spec['pantallas']."""
+# ---------------------------------------------------------------------------
+#  El motor del CPC: ENGINE_ASM con lo que solo tiene el CPC puesto al dia.
+#  Se hace aqui, sobre el texto, para que el 48K, el 128K y el Next (que
+#  parten del mismo ENGINE_ASM) sigan saliendo byte a byte igual.
+# ---------------------------------------------------------------------------
+def _entre(src, desde, hasta):
+    i = src.index(desde)
+    j = src.index(hasta, i)
+    return i, j
+
+
+def _engine_cpc(slots):
+    src = ENGINE_ASM
+
+    def cambia(viejo, nuevo):
+        nonlocal src
+        if src.count(viejo) != 1:
+            raise RuntimeError('_engine_cpc: no encuentro %r' % viejo[:60])
+        src = src.replace(viejo, nuevo)
+
+    # expand_msg: el puntero, ANTES de paginar -- el indice esta en la RAM
+    # base, en la misma ventana que tapa el banco del texto.
+    i, j = _entre(src, '\nexpand_msg:\n', '        ld    de,BUF\n')
+    src = src[:i] + '''
+expand_msg:
+        ld    h,d
+        ld    l,e
+        add   hl,hl
+        ld    bc,(msgidx)
+        add   hl,bc
+        ld    a,(hl)
+        inc   hl
+        ld    h,(hl)
+        ld    l,a             ; HL = el mensaje (en la ventana, si va en banco)
+        ld    bc,(msgbnk)
+        ld    a,b
+        or    c
+        jr    z,em_pl
+        ex    de,hl           ; HL = numero de mensaje, DE = puntero
+        add   hl,bc
+        ld    a,(hl)          ; A = banco de este mensaje (0 = plano)
+        ex    de,hl
+        call  TXTPAGE         ; lo copia a TBUF y deja HL ahi
+em_pl:  ld    de,BUF
+''' + src[j + len('        ld    de,BUF\n'):]
+
+    # show_loc_image: la imagen por pinta_pic y la ventana a las columnas del modo
+    i, j = _entre(src, '\nshow_loc_image:\n', '\n; sli_loadfile:')
+    blk = src[i:j]
+    if blk.count('call  depack') != 1 or blk.count('ld    d,79') != 2:
+        raise RuntimeError('_engine_cpc: show_loc_image ha cambiado')
+    blk = blk.replace('call  depack', 'call  pinta_pic').replace('ld    d,79', 'ld    d,COLS1')
+    src = src[:i] + blk + src[j:]
+
+    cambia('''        ld    hl,(imgbufp)
+        call  CASDIR
+''', '''        call  pic_dest        ; BC = longitud -> HL = sitio al final de imgbuf
+        call  CASDIR
+''')
+
+    # bank2buf / buf2bank: ranuras a medida, con la longitud delante
+    i, j = _entre(src, '; ---- cache de imagenes en bancos extra', '; slotinfo:')
+    src = src[:i] + '''; ---- cache de imagenes en bancos extra (CPC 6128) ----
+; Cada ranura guarda [longitud][fichero PIC tal cual]; el export las coloca a
+; medida en lo que dejan libre los bancos del texto, sin cruzar el final de la
+; ventana. Las copias van con las interrupciones cortadas: mientras el banco
+; esta en &4000-&7FFF, la RAM base de ahi no se ve.
+; bank2buf: ranura (curslot) -> final de imgbuf; deja picsrc y piclen.
+bank2buf:
+        ld    a,(curslot)
+        call  slotinfo        ; A=config banco, HL=direccion en la ventana
+        di
+        ld    b,&7F
+        ld    c,a
+        defb  &ED,&49         ; out (c),c  -> pagina el banco extra
+        ld    e,(hl)
+        inc   hl
+        ld    d,(hl)          ; DE = longitud
+        inc   hl
+        ld    (piclen),de
+        push  hl
+        ld    hl,IMGTOP
+        or    a
+        sbc   hl,de
+        ld    (picsrc),hl
+        ex    de,hl           ; DE = destino, HL = longitud
+        ld    b,h
+        ld    c,l
+        pop   hl
+        ldir
+        ld    bc,&7FC0
+        defb  &ED,&49         ; out (c),c  -> RAM normal
+        ei
+        ret
+; buf2bank: la imagen recien cargada (picsrc, piclen) -> su ranura (curslot).
+buf2bank:
+        ld    a,(curslot)
+        call  slotinfo
+        ex    de,hl           ; DE = destino (ventana)
+        ld    hl,(picsrc)
+        dec   hl
+        dec   hl              ; la longitud, delante: 2 bytes libres de imgbuf
+        ld    bc,(piclen)
+        ld    (hl),c
+        inc   hl
+        ld    (hl),b
+        dec   hl
+        inc   bc
+        inc   bc
+        di
+        push  bc
+        ld    b,&7F
+        ld    c,a
+        defb  &ED,&49         ; out (c),c
+        pop   bc
+        ldir
+        ld    bc,&7FC0
+        defb  &ED,&49
+        ei
+        ret
+''' + src[j:]
+
+    # la tabla de ranuras, la que salga del reparto de los bancos
+    i, j = _entre(src, '\nslottab:\n', '\n; is_pop:')
+    tab = ''.join('        defb  &%02X\n        defw  &%04X\n' % (c, d) for c, d in slots)
+    src = src[:i] + '\nslottab:\n' + tab.rstrip('\n') + src[j:]
+    cambia('populated: defw 0', 'populated: defs 8')
+
+    # detect128 sin romper nada: el cargador BASIC ya ha dejado el texto ahi
+    i, j = _entre(src, '; detect128:', '; preload_cache:')
+    src = src[:i] + '''; detect128: has128=1 si hay RAM extra (CPC 6128, o 464 ampliado). Escribe
+; en &4000 de los bancos 4 y 5 y lo deja todo como estaba, porque el cargador
+; BASIC ya ha puesto ahi el texto del juego. Sin RAM extra y con el texto en
+; bancos no hay juego: lo dice y se queda ahi (el cargador BASIC ya lo avisa
+; antes; esto es por si alguien carga GAME.BIN a mano).
+detect128:
+        di
+        ld    a,(&4000)
+        ld    (d128b),a       ; el byte de la RAM base
+        ld    bc,&7FC4
+        defb  &ED,&49
+        ld    a,(&4000)
+        ld    (d128b+1),a     ; el del banco 4 (en un 464, el mismo)
+        ld    bc,&7FC5
+        defb  &ED,&49
+        ld    a,(&4000)
+        ld    (d128b+2),a     ; el del banco 5
+        ld    a,&55
+        ld    (&4000),a
+        ld    bc,&7FC4
+        defb  &ED,&49
+        ld    a,&AA
+        ld    (&4000),a
+        ld    bc,&7FC5
+        defb  &ED,&49
+        ld    a,(&4000)
+        ld    e,a             ; &55 si el banco 5 no es el 4
+        ld    a,(d128b+2)
+        ld    (&4000),a
+        ld    bc,&7FC4
+        defb  &ED,&49
+        ld    a,(d128b+1)
+        ld    (&4000),a
+        ld    bc,&7FC0
+        defb  &ED,&49
+        ld    a,(d128b)
+        ld    (&4000),a
+        ei
+        ld    a,e
+        cp    &55
+        ld    a,1
+        jr    z,d128_si
+        ld    hl,(msgbnk)
+        ld    a,h
+        or    l
+        jr    z,d128_si       ; A = 0: sin cache de imagenes, texto plano
+        ld    hl,AVISO128
+d128_av: ld   a,(hl)
+        inc   hl
+        or    a
+d128_x: jr    z,d128_x
+        call  TXTO
+        jr    d128_av
+d128_si:
+        ld    (has128),a
+        ret
+
+''' + src[j:]
+    # la precarga de todas las imagenes al arrancar ya no se usaba
+    i, j = _entre(src, '; preload_cache:', '; ---- precarga predictiva')
+    src = src[:i] + src[j:]
+    # el RLE de antes
+    i, j = _entre(src, '\ndepack: ', '\n; ---- list_here')
+    src = src[:i] + src[j:]
+
+    # fin de la portada: el modo del juego, sus tintas y el borde del papel
+    cambia('''st_done:
+        ld    a,2
+        call  SCRMODE
+        ld    a,0
+        ld    b,1
+        ld    c,1
+        call  SCRINK
+        ld    a,1
+        ld    b,24
+        ld    c,24
+        call  SCRINK
+''', '''st_done:
+        ld    a,MODO
+        call  SCRMODE
+        ld    a,0
+        ld    b,TINTA0
+        ld    c,TINTA0
+        call  SCRINK
+        ld    a,1
+        ld    b,TINTA1
+        ld    c,TINTA1
+        call  SCRINK
+        ld    b,TINTA0
+        ld    c,TINTA0
+        call  SCRBORDER
+''')
+    return src
+
+
+# Las 12 ranuras de 5120 bytes de antes: lo que sale si no se pasa reparto.
+SLOTS_CPC = [(0xC4 + b, 0x4000 + k * 0x1400) for b in range(4) for k in range(3)]
+
+
+def assemble_engine(org=ORG, db_base=DB, nloc=256, pantallas=None, modo=2,
+                    tintas=None, slots=None, tbufn=256, mtable=0x8000,
+                    imgtop=0xA67C, aviso128='Necesita un CPC 6128.'):
+    """El motor del CPC. pantallas: [(filas, 16 tintas)] de las pantallas
+    sueltas del SCR (filas 0 = no esta en el disco), en el orden de
+    spec['pantallas']. modo: 1 (40 columnas, 4 colores) o 2 (80, 2).
+    tintas: (papel, pluma) del texto, colores del firmware; por defecto los de
+    siempre de cada modo. slots: [(config del banco, direccion)] de las
+    ranuras de la cache de imagenes. tbufn: lo que ocupa el mensaje mas largo
+    (tokens + 0), que es lo que TXTPAGE copia fuera del banco. mtable: la
+    tabla de matrices de los acentos (en los 32K centrales). aviso128: lo que
+    se escribe si el texto va en bancos y la maquina no tiene RAM extra."""
     import z80asm
+    if tintas is None:
+        tintas = (0, 26) if modo == 1 else (1, 24)
     L=[]
     L.append('ORIGIN equ &%04X'%org)
+    L.append('MODO equ %d'%modo)
+    L.append('COLS1 equ %d'%(39 if modo == 1 else 79))
+    L.append('TINTA0 equ %d'%(tintas[0] & 31))
+    L.append('TINTA1 equ %d'%(tintas[1] & 31))
+    L.append('IMGTOP equ &%04X'%imgtop)
+    L.append('TBUFN equ %d'%max(1, tbufn))
     L.append('LOCSCRN equ %d'%max(1, nloc))
     L.append('NSCR equ %d'%len(pantallas or ()))
     L.append('TXTO equ &%04X'%TXT)
@@ -3716,7 +4139,7 @@ def assemble_engine(org=ORG, db_base=DB, nloc=256, pantallas=None):
     L.append('TXTMATRIX equ &BBA8')   # TXT SET MATRIX (A=char, HL=matriz)
     L.append('TXTGETMATRIX equ &BBA5') # TXT GET MATRIX (A=char -> HL=matriz ROM)
     L.append('TXTMTABLE equ &BBAB')   # TXT SET M TABLE (DE=1er char, HL=tabla)
-    L.append('MTABLE equ &8000')      # tabla de matrices de usuario (RAM central)
+    L.append('MTABLE equ &%04X'%mtable)  # tabla de matrices de usuario (RAM central)
     L.append('ROMCOPY equ &8200')     # rutina de lectura de ROM reubicada (RAM alta)
     L.append('MCWAIT equ &BD19')
     L.append('SNDQUEUE equ &BCAA')   # SOUND QUEUE (firmware): reproduce FX vía AY
@@ -3728,9 +4151,6 @@ def assemble_engine(org=ORG, db_base=DB, nloc=256, pantallas=None):
     L.append('MUSINIT equ &8B00')     # reproductor: init
     L.append('MUSPLAY equ &8B03')     # reproductor: tocar 1 frame
     L.append('MUSSTOP equ &8B06')     # reproductor: parar
-    L.append('CASOPEN equ &BC77')
-    L.append('CASDIR equ &BC83')
-    L.append('CASCLOSE equ &BC7A')
     L.append('TXTWIN equ &BB66')
     L.append('SCANTGO equ %d'%SCANTGO)
     L.append('SEXITS equ %d'%SEXITS)
@@ -3764,4 +4184,14 @@ def assemble_engine(org=ORG, db_base=DB, nloc=256, pantallas=None):
     tablas.append('SCRINKS:')
     for _f,tintas in (pantallas or ()):
         tablas.append('        defb '+','.join(str(t&0xFF) for t in (list(tintas)+[0]*16)[:16]))
-    return z80asm.assemble(prefix+ENGINE_ASM+CPC_PLAT_ASM+chr(10).join(tablas)+chr(10), org=org)
+    aviso = ''.join(ch for ch in str(aviso128) if 32 <= ord(ch) < 127 and ch != '"')
+    vars_cpc = ('picsrc:   defw 0\n'
+                'piclen:   defw 0\n'
+                'pictin:   defs 2\n'
+                'd128b:    defs 3\n'
+                'AVISO128: defb "%s",13,10,0\n'
+                'TBUF:     defs TBUFN\n' % aviso)
+    fuente = (prefix + _engine_cpc(SLOTS_CPC if slots is None else slots) +
+              CPC_PLAT_ASM + (CPC_TINTAS_M1 if modo == 1 else CPC_TINTAS_M2) +
+              CPC_DZX0 + vars_cpc + chr(10).join(tablas) + chr(10))
+    return z80asm.assemble(fuente, org=org)

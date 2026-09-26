@@ -1792,25 +1792,16 @@ def _carga_scr(path):
         return raw[0:2048], raw[2048:2304]
     raise ValueError('tamano no admitido (%d bytes; usar 6912 o 2304)' % len(raw))
 
-def imagenes_128k(img_dir, locids, locidx, texto_len, progreso=None):
-    """Comprime las imagenes y construye el bloque extra del payload.
-    Devuelve (extra_blob, tabla {indice_runtime_l: (offB, offA)}, informe)."""
+def pantalla_de_carga(img_dir):
+    """La portada del Spectrum, 6912 bytes (bitmap y atributos), y las notas
+    para el informe: img/Spectrum/screen.scr tal cual; si no, screen.png/jpg/
+    bmp de img/Spectrum, o el master de img/Original, con dithering. La usan
+    el 128K (en sus bancos, para pintarla al arrancar) y los cargadores de
+    cinta del 48K y el 128K (LOAD "" SCREEN$, lo primero de la cinta).
+    Devuelve (None, notas) si no hay."""
     import os
     lineas = []
     origdir = os.path.join(os.path.dirname(img_dir), 'Original')
-    encontradas = []
-    for lid in locids:
-        scrp = busca_img(img_dir, lid, ('.scr',))
-        if scrp:
-            encontradas.append((locidx[lid], lid, scrp, 'scr'))
-            continue
-        pp = busca_img(img_dir, lid, IMG_ZX_EXT)   # arte ya preparado en Spectrum/
-        if pp:
-            encontradas.append((locidx[lid], lid, pp, 'zx'))
-            continue
-        pp = busca_img(origdir, lid, ('.png', '.jpg', '.jpeg'))   # master
-        if pp:
-            encontradas.append((locidx[lid], lid, pp, 'png'))
     scr_path = os.path.join(img_dir, 'screen.scr')
     scr_raw = None
     if os.path.isfile(scr_path):
@@ -1837,6 +1828,30 @@ def imagenes_128k(img_dir, locids, locidx, texto_len, progreso=None):
                 break
             if scr_raw is not None:
                 break
+    return scr_raw, lineas
+
+
+def imagenes_128k(img_dir, locids, locidx, texto_len, progreso=None):
+    """Comprime las imagenes y construye el bloque extra del payload.
+    Devuelve (extra_blob, tabla {indice_runtime_l: (offB, offA)}, informe)."""
+    import os
+    lineas = []
+    origdir = os.path.join(os.path.dirname(img_dir), 'Original')
+    encontradas = []
+    for lid in locids:
+        scrp = busca_img(img_dir, lid, ('.scr',))
+        if scrp:
+            encontradas.append((locidx[lid], lid, scrp, 'scr'))
+            continue
+        pp = busca_img(img_dir, lid, IMG_ZX_EXT)   # arte ya preparado en Spectrum/
+        if pp:
+            encontradas.append((locidx[lid], lid, pp, 'zx'))
+            continue
+        pp = busca_img(origdir, lid, ('.png', '.jpg', '.jpeg'))   # master
+        if pp:
+            encontradas.append((locidx[lid], lid, pp, 'png'))
+    scr_raw, _notas = pantalla_de_carga(img_dir)
+    lineas += _notas
     if not encontradas and scr_raw is None:
         return b'', {}, None, ['imagenes: ninguna (carpeta img/ sin '
                                '<loc_id>.scr ni screen.scr)']

@@ -974,12 +974,14 @@ nxcolor:
         ld    a,26             ; fuera de rango: blanco
 nxc_ok: ld    l,a
         ld    h,0
-        add   hl,NXCOL         ; Z80N
+        add   hl,NXCOLT        ; Z80N
         ld    a,(hl)
         pop   hl
         ret
 
-NXCOL:  defb 0,0,1,1,1,2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,5,5,5,6,6,6,7
+; La tabla NO puede llamarse NXCOL: z80asm no distingue mayusculas y
+; chocaria con nxcol (la columna del cursor).
+NXCOLT: defb 0,0,1,1,1,2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,5,5,5,6,6,6,7
 
 ; ---------------------------------------------------------------------------
 ; NXINIT: estado de pantalla al arrancar, igual que el export Next en BASIC
