@@ -181,8 +181,17 @@ class GameSession:
         hay, y si no la de la localizacion. Las dos se buscan por nombre en la
         misma carpeta (img/Original), igual que en las maquinas de 8 bits."""
         i = self.interp
-        return (getattr(i, 'pantalla', None)
-                or getattr(i, 'loc_pantalla', {}).get(self.location)
+        pantalla = getattr(i, 'pantalla', None)
+        if pantalla:
+            return pantalla
+        # A oscuras no se ve la sala, ni su imagen: como en el Next, el MSX2
+        # y el PCW, donde show_loc_image no pinta nada si is_dark.
+        try:
+            if i.location_is_dark():
+                return None
+        except Exception:
+            pass
+        return (getattr(i, 'loc_pantalla', {}).get(self.location)
                 or self.location)
 
     @property

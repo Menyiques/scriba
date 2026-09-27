@@ -4047,6 +4047,16 @@ em_pl:  ld    de,BUF
     if blk.count('call  depack') != 1 or blk.count('ld    d,79') != 2:
         raise RuntimeError('_engine_cpc: show_loc_image ha cambiado')
     blk = blk.replace('call  depack', 'call  pinta_pic').replace('ld    d,79', 'ld    d,COLS1')
+    # A oscuras no se ve la sala, ni su imagen: como en Spectrum, Next, MSX2 y
+    # PCW. La ventana pasa a pantalla completa y se borra (sli_noimg), asi que
+    # tampoco se queda la imagen de la sala anterior.
+    cab = '\nshow_loc_image:\n'
+    if not blk.startswith(cab):
+        raise RuntimeError('_engine_cpc: show_loc_image ha cambiado')
+    blk = (cab + '        call  is_dark\n'
+                 '        or    a\n'
+                 '        jp    nz,sli_noimg     ; a oscuras no se ve nada\n'
+           + blk[len(cab):])
     src = src[:i] + blk + src[j:]
 
     cambia('''        ld    hl,(imgbufp)

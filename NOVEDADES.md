@@ -24,6 +24,10 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
   no se toca.
 
 ### Correcciones
+- **Windows y CPC: a oscuras se veía la imagen de la sala.** El reproductor
+  del .exe y el motor del CPC la pintaban igual; ahora, como en Spectrum,
+  Next, MSX2 y PCW, una sala oscura sin luz no enseña su imagen, y aparece
+  en cuanto hay luz. Una pantalla suelta de `SCR` se sigue viendo.
 - **Next (y MSX2/PCW): tras EXIT, la partida siguiente salía sin imágenes.**
   El motor recordaba la última imagen pintada y no la volvía a pintar;
   reiniciar la partida la olvida.
