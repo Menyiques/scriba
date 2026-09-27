@@ -20,6 +20,7 @@ PLATAFORMA = {
     'next':    'ZX Spectrum Next',
     'cpc':     'Amstrad CPC',
     'msx2':    'MSX2',
+    'pcw':     'Amstrad PCW',
     'windows': 'PC (Windows)',
 }
 

@@ -3583,6 +3583,109 @@ CPC_PLAT_ASM = r'''
 ; es una etiqueta de la capa de plataforma (next_nativo.PLAT_ASM).
 SCRATTR: ret
 SMPPLAY: ret
+
+; ---------------------------------------------------------------------------
+; Paginacion. TXT OUTPUT del firmware desplaza la ventana sin esperar a nadie:
+; un texto mas largo que la ventana (la presentacion, una descripcion larga)
+; se iba por arriba sin dar tiempo a leerlo. TXTO cuenta los saltos de linea
+; desde lo ultimo que el jugador ha visto (la orden que ha tecleado, una tecla
+; pulsada o un borrado) y, si el salto va a tirar una linea por arriba y ya se
+; ha escrito una ventana entera, espera una tecla. Es lo mismo que hacen el
+; Spectrum, el Next y el MSX2 (nxmas), y como alli sin aviso: el texto se para.
+; ---------------------------------------------------------------------------
+TXTO:   cp    10
+        jr    z,cto_lf
+        cp    12
+        jp    nz,TXTFW
+        push  af
+        xor   a
+        ld    (pgcnt),a        ; ventana limpia: la cuenta, a cero
+        pop   af
+        jp    TXTFW
+cto_lf: push  bc
+        push  de
+        push  hl
+        ld    a,(pgcnt)
+        inc   a
+        jr    z,cto_c          ; se queda en 255
+        ld    (pgcnt),a
+cto_c:  call  TXTGETCUR        ; L = fila del cursor (1 = la de arriba)
+        push  hl
+        call  TXTGETWIN        ; L = fila de arriba, E = la de abajo
+        ld    a,e
+        sub   l
+        inc   a                ; A = alto de la ventana
+        pop   hl
+        cp    l
+        jr    nz,cto_no        ; el cursor no esta abajo: el salto no desplaza
+        ld    b,a
+        ld    a,(pgcnt)
+        cp    b
+        call  nc,pgwait        ; ya hay una ventana entera sin leer: a esperar
+cto_no: pop   hl
+        pop   de
+        pop   bc
+        ld    a,10
+        jp    TXTFW
+; pgwait: espera una tecla para seguir. Si es una letra (o cualquier cosa que
+; se pueda teclear que no sea el espacio), ademas se devuelve al teclado: quien
+; ve el texto parado sin prompt suele ponerse a escribir la orden, y asi la
+; primera letra no se pierde. ESPACIO, ENTER y demas solo hacen seguir.
+pgwait: call  KMWFW
+        cp    33
+        jr    c,pgw_x
+        cp    127
+        call  nz,KMRETURN      ; KM CHAR RETURN: la vuelve a leer read_line
+pgw_x:  xor   a
+        ld    (pgcnt),a
+        ret
+; KMW: espera una tecla (KM WAIT CHAR). Lo que hubiera en pantalla ya esta leido.
+KMW:    call  KMWFW
+        push  af
+        xor   a
+        ld    (pgcnt),a
+        pop   af
+        ret
+pgcnt:  defb  0
+
+; oculta_pal: HL = 16 tintas (o 0). El borde y las 16 tintas, del color de la
+; primera: lo que se cargue a la pantalla no se ve dibujarse linea a linea, y
+; aparece entero al poner su paleta.
+oculta_pal:
+        ld    a,h
+        or    l
+        ld    b,0
+        jr    z,op_c
+        ld    b,(hl)
+op_c:   ld    c,b
+        push  bc
+        call  SCRBORDER
+        pop   bc
+        xor   a
+op_l:   push  af
+        push  bc
+        call  SCRINK
+        pop   bc
+        pop   af
+        inc   a
+        cp    16
+        jr    c,op_l
+        ret
+
+; st_mus: MUSIC.BIN otra vez a su sitio (&8B00). Hace falta al empezar otra
+; partida: la musica esta en imgbuf, y las imagenes de las salas la han pisado.
+; CF=1 ok, CF=0 no esta en el disco.
+st_mus: ld    b,9
+        ld    hl,fmusic
+        ld    de,(hdrbufp)
+        call  CASOPEN
+        ret   nc
+        ld    hl,MUSINIT
+        call  CASDIR
+        call  CASCLOSE
+        scf
+        ret
+fmusic: defb  "MUSIC.BIN"
 ; TXTPAGE: A = banco del mensaje (0 = esta en la DB plana) y HL = donde esta
 ; dentro de la ventana &4000-&7FFF. El banco tapa esa parte de la RAM base
 ; -- donde viven la DB y el buffer de cabecera --, asi que el mensaje no se
@@ -3684,20 +3787,23 @@ ss_pinta:
         ld    (col),a
 ss_8:   xor   a
         ret                    ; A = 0: 8 filas
-ss_ent: xor   a
+ss_ent: ld    a,(ss_idx)
+        ld    l,a
+        ld    h,0
+        add   hl,hl
+        add   hl,hl
+        add   hl,hl
+        add   hl,hl            ; x16
+        ld    de,SCRINKS
+        add   hl,de            ; HL = sus 16 tintas
+        push  hl
+        call  oculta_pal       ; que no se vea cargar, ni con otra paleta
+        xor   a
         call  SCRMODE          ; Modo 0: 16 colores, como la portada
         xor   a
         call  ss_carga         ; la pantalla entera, derecha a la RAM de video
+        pop   hl
         jr    nc,ss_ent0
-        ld    a,(ss_idx)
-        add   a,a
-        add   a,a
-        add   a,a
-        add   a,a              ; x16
-        ld    e,a
-        ld    d,0
-        ld    hl,SCRINKS
-        add   hl,de
         ld    de,(titlepal)
         push  de               ; la paleta de la portada, a salvo: la usa el
         ld    (titlepal),hl    ; reinicio de partida
@@ -3891,6 +3997,24 @@ def _engine_cpc(slots):
             raise RuntimeError('_engine_cpc: no encuentro %r' % viejo[:60])
         src = src.replace(viejo, nuevo)
 
+    # Sin precarga de las salas contiguas. Leia de disco en los ratos sin
+    # teclear, con CAS IN, que bloquea: mientras gira el disco (arrancar el
+    # motor, el directorio, la imagen: un par de segundos en un 6128 de verdad)
+    # el firmware no lee el teclado, asi que lo que el jugador empezaba a
+    # escribir no salia en pantalla y ademas se perdian letras ("inventario"
+    # llegaba como "ivnario"). Ahora cada imagen se lee al entrar en su sala,
+    # que es cuando el jugador ya esta esperando, y se guarda en los bancos del
+    # 6128: al volver, sale al instante.
+    cambia("""        call  prefetch_init   ; prepara la precarga de salas contiguas
+""", "")
+    cambia("""        call  prefetch_one   ; sin tecla: precarga una sala contigua
+""", "")
+    cambia("""pf_i:     defb 0
+pf_n:     defb 0
+pf_exits: defw 0
+picloc:   defb 0
+""", "")
+
     # expand_msg: el puntero, ANTES de paginar -- el indice esta en la RAM
     # base, en la misma ventana que tapa el banco del texto.
     i, j = _entre(src, '\nexpand_msg:\n', '        ld    de,BUF\n')
@@ -4059,8 +4183,9 @@ d128_si:
         ret
 
 ''' + src[j:]
-    # la precarga de todas las imagenes al arrancar ya no se usaba
-    i, j = _entre(src, '; preload_cache:', '; ---- precarga predictiva')
+    # la precarga de todas las imagenes al arrancar ya no se usaba, y la de
+    # las salas contiguas tampoco (ver arriba)
+    i, j = _entre(src, '; preload_cache:', '; ---- setup_acc')
     src = src[:i] + src[j:]
     # el RLE de antes
     i, j = _entre(src, '\ndepack: ', '\n; ---- list_here')
@@ -4092,6 +4217,42 @@ d128_si:
         ld    b,TINTA0
         ld    c,TINTA0
         call  SCRBORDER
+''')
+
+    # Paginacion (TXTO, en CPC_PLAT_ASM): lo que hay por encima del prompt ya
+    # lo ha leido el jugador, asi que la cuenta vuelve a empezar desde ahi.
+    cambia('''        call  read_line
+        call  parse
+''', '''        call  read_line
+        xor   a
+        ld    (pgcnt),a       ; lo de arriba del prompt ya esta leido
+        call  parse
+''')
+
+    # Otra partida: la portada se vuelve a cargar del disco, pero oculta (sus
+    # tintas, todas del color del fondo) -- si no, se veia dibujarse con la
+    # paleta del juego --, y la musica tambien: vive en imgbuf y las imagenes
+    # de las salas la han pisado. Sin ella, MUSINIT saltaba a basura y el CPC
+    # se reiniciaba.
+    cambia('''        xor   a
+        call  SCRMODE         ; Modo 0: la portada son 16 colores
+        call  st_load
+        jr    nc,st_done      ; sin disco: Modo 2, pantalla limpia y a jugar
+st_puesta:
+''', '''        ld    hl,(titlepal)
+        call  oculta_pal      ; que no se vea cargar
+        xor   a
+        call  SCRMODE         ; Modo 0: la portada son 16 colores
+        call  st_load
+        jr    nc,st_done      ; sin disco: el modo del juego y a jugar
+        ld    a,(hasmusic)
+        or    a
+        jr    z,st_puesta
+        call  st_mus          ; la musica, otra vez a imgbuf
+        jr    c,st_puesta
+        xor   a
+        ld    (hasmusic),a    ; no esta: sin musica, mejor que colgarse
+st_puesta:
 ''')
     return src
 
@@ -4125,8 +4286,13 @@ def assemble_engine(org=ORG, db_base=DB, nloc=256, pantallas=None, modo=2,
     L.append('TBUFN equ %d'%max(1, tbufn))
     L.append('LOCSCRN equ %d'%max(1, nloc))
     L.append('NSCR equ %d'%len(pantallas or ()))
-    L.append('TXTO equ &%04X'%TXT)
-    L.append('KMW equ &%04X'%KMWAIT)
+    # TXTO y KMW son rutinas de CPC_PLAT_ASM (la paginacion del texto): las
+    # del firmware quedan como TXTFW y KMWFW.
+    L.append('TXTFW equ &%04X'%TXT)
+    L.append('KMWFW equ &%04X'%KMWAIT)
+    L.append('TXTGETCUR equ &BB78')   # TXT GET CURSOR (L = fila logica, 1 arriba)
+    L.append('TXTGETWIN equ &BB69')   # TXT GET WINDOW (L = arriba, E = abajo)
+    L.append('KMRETURN equ &BB0C')    # KM CHAR RETURN (A = la tecla, otra vez)
     L.append('DBB equ &%04X'%db_base)
     L.append('CASOPEN equ &BC77')
     L.append('CASDIR equ &BC83')

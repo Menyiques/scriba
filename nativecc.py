@@ -588,13 +588,26 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj
     vall=0
     for w in ('TODO','TODOS','TODAS','TODA','ALL'):
         if w in c.nounalias: vall=c.nounalias[w]; break
-    start_name=loc_by_id[0][0]
+    # La localizacion de salida es metadata.start_location, como en el
+    # interprete de PC. Hasta la v3.0 el motor nativo empezaba siempre en la
+    # primera del YAML, y un juego con la salida en otra sala arrancaba en el
+    # sitio equivocado. El id vale con arroba y sin ella.
+    _st=str((getattr(c,'meta',{}) or {}).get('start_location') or '').strip()
+    startloc=0
+    for _cand in (_st, '@'+_st.lstrip('@'), _st.lstrip('@')):
+        if _st and _cand in c.locidx:
+            startloc=c.locidx[_cand]-1
+            break
+    else:
+        if _st:
+            ctx.warnings.append('start_location %s no es ninguna localizacion: '
+                                'se empieza en la primera' % _st)
     info=dict(nmsg=len(messages),nloc=len(locations),nobj=len(objects),
               nvocab=len(vocab),nresp=len(responses),
               before=len(before),after=len(after),onstart=len(onstart),
               warnings=ctx.warnings)
     return dict(messages=messages,locations=locations,vocab=vocab,objects=objects,
-                responses=responses,startloc=0,sysverbs=sysverbs,width=width,
+                responses=responses,startloc=startloc,sysverbs=sysverbs,width=width,
                 proc_before=before,proc_after=after,proc_onstart=onstart,vall=vall,
                 font_acc=_font_block(),timers=timers,
                 llevarmax=ctx.vars.get('LLEVARMAX',255),

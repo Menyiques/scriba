@@ -175,6 +175,10 @@ def libre_basic(prog, org):
     return org - (BASIC_PROG + n + 7 * nv)
 
 
+# largo maximo de una linea del cargador sin el numero (el limite es 255)
+LINEA_MAX = 240
+
+
 def _cargador(org, nbancos, modo, titulo, musica, aviso, tintas_titulo=None):
     """DISC.BAS: carga portada, musica, texto (en los bancos) y juego, y lo
     arranca. Con texto en bancos, antes mira que haya RAM extra. La portada va
@@ -192,13 +196,16 @@ def _cargador(org, nbancos, modo, titulo, musica, aviso, tintas_titulo=None):
         parts = ['MEMORY &%04X' % (org - 1)]
     if titulo:
         parts.append('MODE 0')            # titulo en Modo 0; el motor vuelve al suyo
-        if tintas_titulo:
-            # su paleta ANTES de cargarla (un .scr nativo sin paleta se queda
-            # con la del firmware), y el borde del color del fondo
-            t = list(tintas_titulo)[:16]
+        t = list(tintas_titulo or ())[:16]
+        if t:
+            # Se carga oculta: el borde y las 16 tintas, del color del fondo.
+            # Cargando derecha a la pantalla se veia dibujarse a trozos durante
+            # segundos; asi aparece entera al poner su paleta, justo despues.
             parts.append('BORDER %d' % (t[0] & 31))
-            parts.append(':'.join('INK %d,%d' % (k, c & 31) for k, c in enumerate(t)))
+            parts.append(':'.join('INK %d,%d' % (k, t[0] & 31) for k in range(16)))
         parts.append('LOAD"TITLE.SCR"')
+        if t:
+            parts.append(':'.join('INK %d,%d' % (k, c & 31) for k, c in enumerate(t)))
     else:
         parts.append('MODE %d' % modo)
     if musica:
@@ -209,9 +216,25 @@ def _cargador(org, nbancos, modo, titulo, musica, aviso, tintas_titulo=None):
         parts.append('OUT &7F00,&C0')
     parts.append('LOAD"GAME.BIN"')
     parts.append('CALL &%04X' % org)
-    lineas.append(':'.join(parts))
-    return ''.join('%d %s\r\n' % (10 * (k + 1), l)
-                   for k, l in enumerate(lineas)).encode('ascii')
+    # El BASIC del CPC no admite lineas de mas de 255 caracteres: al cargar
+    # DISC.BAS en ASCII da «Line too long». Las 16 tintas de la portada ya
+    # pasaban de ahi, asi que las ordenes se reparten en varias lineas.
+    act = ''
+    for p in parts:
+        if act and len(act) + 1 + len(p) > LINEA_MAX:
+            lineas.append(act)
+            act = p
+        else:
+            act = act + ':' + p if act else p
+    if act:
+        lineas.append(act)
+    texto = ['%d %s' % (10 * (k + 1), l) for k, l in enumerate(lineas)]
+    largas = [l for l in texto if len(l) > 255]
+    if largas:
+        raise RuntimeError('cpc: linea del cargador de %d caracteres (el BASIC '
+                           'del CPC admite 255): %s...' % (len(largas[0]),
+                                                            largas[0][:40]))
+    return ''.join(l + '\r\n' for l in texto).encode('ascii')
 
 
 def _tintas_texto(game, modo):

@@ -69,7 +69,7 @@ TARGET_LABEL = {
     'spectrum48': 'ZX Spectrum 48K (motor nativo)',
     'spectrum128': 'ZX Spectrum 128K (motor nativo)',
     'next': 'ZX Spectrum Next', 'cpc': 'Amstrad CPC',
-    'msx2': 'MSX2',
+    'msx2': 'MSX2', 'pcw': 'Amstrad PCW',
 }
 
 # ─── Contrato: qué soporta cada target ───────────────────────────────────────
@@ -123,6 +123,13 @@ CAPS['next'] = CAPS_NATIVO
 # los 8 del Spectrum, sin brillo, y no hay parpadeo: BRIGHT y FLASH existen
 # y no hacen nada; INVERSE si funciona. Las muestras digitalizadas aun no
 # estan portadas al PSG del MSX (SMPPLAY es un RET).
+# Amstrad PCW (pcw_nativo): monocromo y sin AY. INK/PAPER solo deciden si
+# la pantalla va en inverso; BORDER, BRIGHT y FLASH no hacen nada, y PLAY
+# y SAMPLE guardan su tiempo pero no suenan (como en el 48K).
+CAPS['pcw'] = dict(CAPS_NATIVO,
+                   condacts=CAPS_NATIVO['condacts'] - {'BORDER', 'BRIGHT',
+                                                       'FLASH', 'PLAY',
+                                                       'SAMPLE'})
 CAPS['msx2'] = dict(CAPS_NATIVO,
                     condacts=CAPS_NATIVO['condacts'] - {'BRIGHT', 'FLASH',
                                                         'SAMPLE'})
@@ -327,7 +334,7 @@ if __name__ == '__main__':
     print('Usados -> condacts:', ', '.join(sorted(used['condacts'])) or '(ninguno)')
     print('         predicados:', ', '.join(sorted(used['predicates'])) or '(ninguno)')
     print('         funciones:', ', '.join(sorted(used['features'])) or '(ninguna)')
-    for t in ('spectrum', 'spectrum48', 'spectrum128', 'next', 'cpc', 'msx2'):
+    for t in ('spectrum', 'spectrum48', 'spectrum128', 'next', 'cpc', 'msx2', 'pcw'):
         r = report(g, t)
         print('\n=== %s ===' % TARGET_LABEL[t])
         print(r if r else '  OK: todo soportado.')

@@ -536,6 +536,10 @@ class ScribaEditor:
                        command=lambda: self._export_cpc_nativo(2))
         fm.add_command(label="Exportar MSX2 (cartucho .rom)…",
                        command=self._export_msx2_nativo)
+        fm.add_command(label="Exportar Amstrad PCW (disco autoarrancable .dsk)…",
+                       command=self._export_pcw_nativo)
+        fm.add_command(label="Exportar Amstrad PCW 8512 (arranque + disco B de 720K)…",
+                       command=lambda: self._export_pcw_nativo('8512'))
         fm.add_command(label="Exportar para Windows (.exe)…",
                        command=self._export_windows)
         fm.add_separator()
@@ -1060,8 +1064,11 @@ class ScribaEditor:
 
         cols = ("ID", "Nombre", "Ubicación", "Peso")
         self.obj_tree = ttk.Treeview(top, columns=cols, show="headings", height=7)
+        self._obj_cols = cols
+        self._obj_orden = None          # (columna, descendente) o None = orden del juego
         for c, w in zip(cols, (90, 130, 90, 50)):
-            self.obj_tree.heading(c, text=c)
+            self.obj_tree.heading(c, text=c,
+                                  command=lambda c=c: self._obj_ordena(c))
             self.obj_tree.column(c, width=w)
         vsb = ttk.Scrollbar(top, orient=tk.VERTICAL, command=self.obj_tree.yview)
         self.obj_tree.configure(yscrollcommand=vsb.set)
@@ -3878,9 +3885,59 @@ class ScribaEditor:
 
     def _refresh_obj_tree(self):
         self.obj_tree.delete(*self.obj_tree.get_children())
-        for oid, obj in self.game.get("objects", {}).items():
-            self.obj_tree.insert("", tk.END, iid=oid, values=(
-                oid, obj.get("name",""), obj.get("location",""), obj.get("weight",0)))
+        filas = [(oid, (oid, obj.get("name",""), obj.get("location",""),
+                        obj.get("weight",0)))
+                 for oid, obj in self.game.get("objects", {}).items()]
+        # Ordenar es solo cosa de la vista: el orden de los objetos en el juego
+        # (el del YAML) es su numero en el motor nativo y no se toca.
+        orden = getattr(self, '_obj_orden', None)
+        if orden:
+            col, desc = orden
+            k = self._obj_cols.index(col)
+            filas.sort(key=lambda f: self._obj_clave(f[1][k]), reverse=desc)
+        for oid, vals in filas:
+            self.obj_tree.insert("", tk.END, iid=oid, values=vals)
+        self._obj_cabeceras()
+
+    @staticmethod
+    def _obj_clave(v):
+        """Clave de orden: los numeros como numeros (el peso 10 detras del 9),
+        el texto sin mayusculas ni acentos, y los vacios al final."""
+        import unicodedata
+        if v is None or v == '':
+            return (2, 0, '')
+        try:
+            return (0, float(v), '')
+        except (TypeError, ValueError):
+            s = unicodedata.normalize('NFD', str(v).lower())
+            return (1, 0, ''.join(ch for ch in s
+                                  if unicodedata.category(ch) != 'Mn'))
+
+    def _obj_cabeceras(self):
+        """Una flecha en la cabecera de la columna por la que se ordena."""
+        orden = getattr(self, '_obj_orden', None)
+        for c in self._obj_cols:
+            txt = c
+            if orden and orden[0] == c:
+                txt = c + (' \u25bc' if orden[1] else ' \u25b2')
+            self.obj_tree.heading(c, text=txt)
+
+    def _obj_ordena(self, col):
+        """Clic en una cabecera: ascendente, descendente y, al tercer clic,
+        de vuelta al orden del juego. La seleccion se conserva."""
+        orden = getattr(self, '_obj_orden', None)
+        if not orden or orden[0] != col:
+            self._obj_orden = (col, False)
+        elif not orden[1]:
+            self._obj_orden = (col, True)
+        else:
+            self._obj_orden = None
+        sel = self.obj_tree.selection()
+        self._refresh_obj_tree()
+        sel = [i for i in sel if self.obj_tree.exists(i)]
+        if sel:
+            self.obj_tree.selection_set(sel)
+            self.obj_tree.see(sel[0])
 
     def _obj_selected(self, event):
         sel = self.obj_tree.selection()
@@ -5877,6 +5934,8 @@ class ScribaEditor:
         top = ttk.Frame(fr); top.pack(fill=tk.X, pady=3)
         ttk.Button(top, text='\u21bb Recargar',
                    command=self._reference_reload).pack(side=tk.LEFT, padx=6)
+        ttk.Button(top, text='\U0001f50d Buscar (Ctrl+F)',
+                   command=lambda: self._ref_buscar()).pack(side=tk.LEFT, padx=2)
         ttk.Label(top, text='Referencia de sintaxis del lenguaje',
                   foreground='#667788').pack(side=tk.LEFT, padx=8)
         body = ttk.Frame(fr); body.pack(fill=tk.BOTH, expand=True)
@@ -5892,7 +5951,40 @@ class ScribaEditor:
         t.tag_configure('code', foreground='#7fd6a0', lmargin1=24, lmargin2=24)
         t.tag_configure('bold', font=(fam, 10, 'bold'), foreground='#66b3ff')
         self._ref_text = t
+        self._ref_tab = fr
+        # Busqueda con Ctrl+F, como en las demas cajas de texto. El texto esta
+        # en solo lectura (DISABLED) y Tk no le da el foco al pinchar: se le
+        # da a mano para que Ctrl+F le llegue. Y si el foco esta en otra parte
+        # (la pestaña misma, un boton), el atajo de la ventana abre la barra
+        # igual cuando la pestaña visible es esta.
+        self._ref_bar = SearchBar(fr, t)
+        t.bind('<Button-1>', lambda ev: t.focus_set(), add='+')
+        for w in (t, fr):
+            w.bind('<Control-f>', self._ref_buscar)
+            w.bind('<Control-F>', self._ref_buscar)
+        self.root.bind('<Control-f>', self._ref_buscar_si_visible, add='+')
+        self.root.bind('<Control-F>', self._ref_buscar_si_visible, add='+')
         self._reference_reload()
+
+    def _ref_buscar(self, event=None):
+        """Muestra la barra de busqueda encima del texto de la referencia."""
+        bar = getattr(self, '_ref_bar', None)
+        if bar is None:
+            return 'break'
+        body = self._ref_text.master
+        bar.pack(fill=tk.X, before=body)
+        bar._entry.focus_set()
+        bar._entry.select_range(0, tk.END)
+        bar._do_search()
+        return 'break'
+
+    def _ref_buscar_si_visible(self, event=None):
+        try:
+            if self.nb.select() == str(self._ref_tab):
+                return self._ref_buscar()
+        except Exception:
+            pass
+        return None
 
     def _reference_reload(self):
         t = getattr(self, '_ref_text', None)
@@ -5987,8 +6079,12 @@ class ScribaEditor:
         plano al lado del ejecutable, con todas las soluciones a la vista de
         quien abriera la carpeta.
 
-        No compila nada: ScribaPlayer.exe se construye UNA vez con
-        build_scribaplayer.bat y viaja junto a Scriba.exe."""
+        No compila nada ni necesita nada al lado: el reproductor es el propio
+        Scriba.exe. Arrancado a secas abre el editor; con un juego pegado detras
+        (lo que sale de aqui) arranca directamente el juego (ver el final de este
+        fichero). Asi el juego sale siempre con el interprete de ESTA version.
+        Si se ejecuta desde el codigo fuente, usa un Scriba.exe compilado (dist/)
+        o, si lo hay, un ScribaPlayer.exe de los de antes."""
         if not self.game.get('locations'):
             messagebox.showinfo('Exportar', 'Abre o crea un juego primero.')
             return
@@ -6003,21 +6099,27 @@ class ScribaEditor:
         import threading
         import zipfile
         import re as _re
-        # Localizar el reproductor portable (junto a Scriba.exe, su carpeta padre,
-        # o el código fuente / dist).
+        # El reproductor: el propio Scriba.exe que esta corriendo (hace de
+        # reproductor cuando lleva un juego pegado). Desde el codigo fuente no
+        # hay .exe que copiar: vale uno compilado en dist/ o un ScribaPlayer.exe.
         here = (os.path.dirname(sys.executable) if getattr(sys, 'frozen', False)
                 else os.path.dirname(os.path.abspath(__file__)))
-        cand = [os.path.join(here, 'ScribaPlayer.exe'),
-                os.path.join(os.path.dirname(here), 'ScribaPlayer.exe'),
-                os.path.join(here, 'dist', 'ScribaPlayer.exe')]
+        cand = []
+        if getattr(sys, 'frozen', False):
+            cand.append(sys.executable)
+        cand += [os.path.join(here, 'dist', 'Scriba.exe'),
+                 os.path.join(here, 'dist', 'Scriba_v_%s.exe'
+                              % SCRIBA_VERSION.replace('.', '_')),
+                 os.path.join(here, 'ScribaPlayer.exe'),
+                 os.path.join(os.path.dirname(here), 'ScribaPlayer.exe'),
+                 os.path.join(here, 'dist', 'ScribaPlayer.exe')]
         player_exe = next((c for c in cand if os.path.isfile(c)), None)
         if not player_exe:
             messagebox.showerror(
                 'Exportar para Windows',
-                'No encuentro ScribaPlayer.exe (el reproductor portable).\n\n'
-                'Se compila UNA sola vez con build_scribaplayer.bat y se deja '
-                'junto a Scriba.exe. Después, exportar a Windows no necesita '
-                'instalar nada (ni tú ni el jugador).')
+                'Desde el código fuente no hay ejecutable que copiar.\n\n'
+                'Compila Scriba.exe una vez con build_exe.bat (queda en dist/) '
+                'y vuelve a exportar; o exporta desde el propio Scriba.exe.')
             return
 
         yaml_path = self.filepath
@@ -6706,6 +6808,118 @@ class ScribaEditor:
                 win.destroy()
                 self.sv_status.set('Exportado a MSX2 (.rom): ' + path)
                 self._ventana_resultado('Exportar MSX2', msg, path,
+                                        info.get('presupuesto', ''))
+            self.root.after(0, _fin)
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def _export_pcw_nativo(self, modelo='8256'):
+        """Exporta al MOTOR NATIVO Z80 en un disco autoarrancable de Amstrad PCW
+        8256/8512 (.dsk, CF2 de 180K). Se mete en la unidad A y se enciende: sin
+        CP/M ni LocoScript. Imagenes de img/PCW o de img/Original, en monocromo."""
+        self._commit_active_code_view()
+        if not self.game.get('locations'):
+            messagebox.showinfo('Exportar', 'Abre o crea un juego primero.')
+            return
+        if not self.filepath:
+            messagebox.showinfo('Exportar', 'Guarda el juego (.yaml) primero.')
+            return
+        distdir = self._dir_juego('dist')
+        if not distdir:
+            messagebox.showinfo('Exportar', 'Guarda el juego (.yaml) primero.')
+            return
+        name = os.path.splitext(os.path.basename(self.filepath))[0]
+        path = os.path.join(distdir, self._dist_name(
+            name, 'pcw8512' if modelo == '8512' else 'pcw', 'dsk'))
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+            if here not in sys.path:
+                sys.path.insert(0, here)
+            import importlib
+            import pcw_nativo
+            if not getattr(sys, 'frozen', False):
+                for m in ('z80asm', 'txtpack', 'game_engine', 'nativecc',
+                          'font42', 'next_nativo', 'spectrum48_nativo',
+                          'msx2_nativo', 'pcw_nativo'):
+                    try:
+                        importlib.reload(importlib.import_module(m))
+                    except Exception:
+                        pass
+                import pcw_nativo
+        except Exception as e:
+            messagebox.showerror('Error al exportar', str(e))
+            return
+        game = copy.deepcopy(self.game)
+        game.pop('_editor', None)
+        game_dir = self._game_root() or os.path.dirname(os.path.abspath(self.filepath))
+
+        import threading
+        win = tk.Toplevel(self.root)
+        win.title('Exportando a Amstrad PCW')
+        win.transient(self.root)
+        win.grab_set()
+        win.resizable(False, False)
+        win.protocol('WM_DELETE_WINDOW', lambda: None)
+        sv_msg = tk.StringVar(value='Convirtiendo imágenes y compilando…')
+        ttk.Label(win, textvariable=sv_msg, width=46,
+                  anchor=tk.W).pack(padx=16, pady=(14, 6))
+        bar = ttk.Progressbar(win, length=320, mode='indeterminate')
+        bar.pack(padx=16, pady=(0, 14))
+        bar.start(12)
+        win.update_idletasks()
+        px = self.root.winfo_rootx() + \
+            (self.root.winfo_width() - win.winfo_reqwidth()) // 2
+        py = self.root.winfo_rooty() + \
+            (self.root.winfo_height() - win.winfo_reqheight()) // 2
+        win.geometry(f'+{max(0, px)}+{max(0, py)}')
+
+        def trabajo():
+            try:
+                info = pcw_nativo.export_dsk(game, path, game_dir=game_dir,
+                                             modelo=modelo)
+                msg = ('Exportado al MOTOR NATIVO Z80 para Amstrad PCW %s '
+                       '(%d columnas, %s).\n'
+                       'En el disco: %d de %d bytes (%d pistas).\n'
+                       'Motor + base de datos (sin el texto): %d bytes '
+                       '(&%04X–&%04X); libres bajo la pila: %d.\n'
+                       '%d localizaciones · %d objetos · %d imágenes'
+                       % ('8512' if modelo == '8512' else '8256/8512',
+                          pcw_nativo.COLS,
+                          'arranque en la A y datos en la B' if modelo == '8512'
+                          else 'disco autoarrancable',
+                          info['disco'], info['capacidad'], info['pistas'],
+                          info['codigo'] + info['datos'], info['org'],
+                          info['fin'] - 1, info['libre'],
+                          info['localizaciones'], info['objetos'],
+                          len(info['imagenes'])))
+                msg += '\nPortada: %s' % ('sí' if info['portada'] else 'no')
+                if info.get('pantallas'):
+                    msg += '\nPantallas SCR: ' + ', '.join(info['pantallas'])
+                for av in info.get('avisos') or []:
+                    msg += '\nAviso: %s' % av
+                if modelo == '8512':
+                    msg += ('\n\nDos discos: %s en la unidad A (arranca) y %s en '
+                            'la B, la de 720K. Se meten los dos y se enciende.'
+                            % (os.path.basename(path),
+                               os.path.basename(info['disco_b'])))
+                else:
+                    msg += ('\n\nSe mete en la unidad A y se enciende la máquina '
+                            '(en JOYCE: arrancar desde el disco).')
+                adv = self._aviso_caps(game, 'pcw')
+                if adv:
+                    msg = adv + '\n\n' + msg
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                self.root.after(0, lambda e=e: (
+                    win.destroy(),
+                    messagebox.showerror('Error al exportar PCW', str(e))))
+                return
+
+            def _fin():
+                win.destroy()
+                self.sv_status.set('Exportado a Amstrad PCW (.dsk): ' + path)
+                self._ventana_resultado('Exportar Amstrad PCW', msg, path,
                                         info.get('presupuesto', ''))
             self.root.after(0, _fin)
 
@@ -7542,7 +7756,30 @@ def _show_splash(root):
         return None
 
 
+def _juego_pegado():
+    """True si este ejecutable lleva un juego pegado detras (lo que produce
+    «Exportar para Windows»). Solo mira el pie: el reproductor ya lo descifra."""
+    if not getattr(sys, 'frozen', False):
+        return False
+    try:
+        import scriba_pack
+        with open(sys.executable, 'rb') as f:
+            f.seek(0, os.SEEK_END)
+            if f.tell() < 16:
+                return False
+            f.seek(-8, os.SEEK_END)
+            return f.read(8) == scriba_pack.SELLO
+    except Exception:
+        return False
+
+
 if __name__ == '__main__':
+    # Un juego exportado a Windows es una copia de Scriba.exe con el juego
+    # pegado al final: entonces no se abre el editor, se juega.
+    if _juego_pegado():
+        import player
+        player.main([sys.executable])
+        sys.exit(0)
     root = tk.Tk()
     initial = sys.argv[1] if len(sys.argv) > 1 else None
     app = ScribaEditor(root, initial_file=initial)

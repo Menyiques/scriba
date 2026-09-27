@@ -27,6 +27,7 @@ import time
 import yaml
 
 import cpc_nativo as cn
+import game_engine as ge
 import png2cpc
 import probar_juego as pj
 import spectrum_export as sx
@@ -37,6 +38,8 @@ FW_KM_WAIT = 0xBB06
 FW_KM_READ = 0xBB09
 FW_TXT_WIN = 0xBB66
 FW_TXT_GETWIN = 0xBB69
+FW_TXT_GETCUR = 0xBB78
+FW_KM_RETURN = 0xBB0C
 FW_CAS_OPEN = 0xBC77
 FW_CAS_CLOSE = 0xBC7A
 FW_CAS_DIRECT = 0xBC83
@@ -54,9 +57,12 @@ def lee_dsk(img):
     datos = bytearray()
     off = 256
     for _t in range(40):
-        off += 256
-        datos += img[off:off + 9 * 512]
-        off += 9 * 512
+        ids = [img[off + 24 + 8 * k + 2] for k in range(9)]   # orden fisico
+        pista = {sid: img[off + 256 + 512 * k:off + 256 + 512 * (k + 1)]
+                 for k, sid in enumerate(ids)}
+        for sid in range(0xC1, 0xCA):
+            datos += pista[sid]
+        off += 256 + 9 * 512
     bloque = lambda b: bytes(datos[b * 1024:(b + 1) * 1024])
     fich = {}
     for i in range(64):
@@ -296,11 +302,16 @@ class JuegoCPC(pj.Juego):
         elif pc == FW_KM_WAIT:
             cpu.a = 32
             cpu.f |= z80.FC
+        elif pc == FW_KM_RETURN:
+            self.cola.insert(0, chr(cpu.a))
         elif pc == FW_TXT_WIN:
             self.pant.ventana(cpu.h, cpu.d, cpu.l, cpu.e)
         elif pc == FW_TXT_GETWIN:
             iz, de, ar, ab = self.pant.w
             cpu.h, cpu.d, cpu.l, cpu.e = iz, de, ar, ab
+        elif pc == FW_TXT_GETCUR:          # logicas: 1,1 = arriba a la izquierda
+            iz, de, ar, ab = self.pant.w
+            cpu.h, cpu.l = self.pant.x - iz + 1, self.pant.y - ar + 1
         elif pc == FW_SCR_MODE:
             self.pant.modo(cpu.a)
             self.modo = cpu.a
@@ -386,7 +397,7 @@ class JuegoCPC(pj.Juego):
             cpu.hook_out[p] = lambda c, port, v: self.pagina(v)
         self.cpu = cpu
         self.fw = set((FW_TXT_OUTPUT, FW_KM_WAIT, FW_KM_READ, FW_TXT_WIN,
-                       FW_TXT_GETWIN, FW_CAS_OPEN, FW_CAS_CLOSE, FW_CAS_DIRECT,
+                       FW_TXT_GETWIN, FW_TXT_GETCUR, FW_KM_RETURN, FW_CAS_OPEN, FW_CAS_CLOSE, FW_CAS_DIRECT,
                        FW_SCR_MODE, FW_SCR_INK, FW_SCR_BORDER) + FW_NADA + MUSICA)
         self.fin = self.sym.get('gameover', 0xFFFE)
         self._acabado = False
@@ -405,7 +416,7 @@ class JuegoCPC(pj.Juego):
         cpu = self.cpu
         rl = self.sym['read_line']
         self.cola = list(texto) + ['\r']
-        self.ocioso = 6               # como si el jugador tardara en teclear
+        self.ocioso = 0
         self.esperando = False
         self.n_cargas = len(self.cargas)
 

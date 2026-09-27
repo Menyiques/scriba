@@ -11,10 +11,72 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
 ## [Sin publicar]
 
 ### Novedades
-- (añade aquí lo que vaya entrando para la próxima versión)
+- **Amstrad PCW**: exportación a disco autoarrancable (`pcw_nativo.py`), con el
+  mismo motor y la misma base de datos. 90×32 columnas en la pantalla de
+  720×256, imágenes tramadas (Bayer) y comprimidas en ZX0. Para el PCW8256,
+  un disco de 180K; para el 8512, «Exportar PCW 8512» saca dos discos: el A
+  arranca y el B (720K) lleva la portada y las imágenes. `probar_pcw.py`
+  pasa la batería `.pru` en un PCW simulado (`--8512`).
+- **Editor: Ctrl+F en la pestaña de Referencia** busca texto en la página.
+- **Editor: la tabla de objetos se ordena por cualquier columna** pinchando en
+  la cabecera (ascendente, descendente y vuelta al orden del juego). Solo
+  cambia la vista: el orden del YAML, que es el número del objeto en el motor,
+  no se toca.
 
 ### Correcciones
-- (…)
+- **Next (y MSX2/PCW): tras EXIT, la partida siguiente salía sin imágenes.**
+  El motor recordaba la última imagen pintada y no la volvía a pintar;
+  reiniciar la partida la olvida.
+- **Windows: «Exportar para Windows» ya no necesita nada al lado.** Pedía un
+  `ScribaPlayer.exe` que había que compilar aparte y dejar junto a Scriba.exe;
+  si no estaba, no exportaba. Ahora el reproductor es el propio Scriba.exe: la
+  exportación lo copia con el juego (texto e imágenes, cifrado) pegado detrás,
+  y ese ejecutable, al arrancar, ve que lleva un juego y lo abre en vez del
+  editor. Sale un único .exe con el juego dentro, siempre con el intérprete de
+  la misma versión que el editor.
+- **Windows: el juego exportado salía sin imágenes.** Dentro del .exe,
+  `ImageTk` necesita `PIL._tkinter_finder`, que PyInstaller no incluye solo
+  (su hook de Pillow excluye tkinter). `build_exe.bat` (y
+  `build_scribaplayer.bat`) lo añaden a mano.
+- **CPC: tras salir el prompt, lo que se tecleaba no aparecía y se perdían
+  letras.** En los ratos sin teclear el motor precargaba del disco las imágenes
+  de las salas contiguas. Mientras el disco lee, el CPC no atiende al teclado:
+  en un 6128 de verdad (y en MAME) eso eran un par de segundos por imagen en
+  los que lo escrito no salía, y además se comía letras («inventario» llegaba
+  como «ivnario»). Ya no se precarga nada: cada imagen se lee al entrar en su
+  sala, cuando el jugador ya está esperando, y se guarda en los bancos del 6128,
+  así que al volver sale al instante.
+- **CPC: los discos cargaban a la mitad de velocidad.** Los sectores de cada
+  pista iban seguidos (C1..C9); el formato DATA del CPC los entrelaza
+  (C1 C6 C2 C7 C3 C8 C4 C9 C5) porque AMSDOS no llega a leer dos sectores
+  consecutivos en la misma vuelta. Con ellos seguidos, cada sector costaba una
+  vuelta entera del disco. Ahora `dsk.make_dsk` los graba entrelazados: DAS
+  BOOT pasa de 45 a 22 segundos de carga (medido en MAME). Además, las
+  entradas libres del directorio van a &E5, como las deja FORMAT.
+- **CPC: la pausa de «texto lleno» se comía la primera letra de la orden.**
+  Si el jugador, al ver el texto parado, se pone a escribir, esa letra sigue
+  el texto y además se queda para la orden. ESPACIO o ENTER solo hacen seguir.
+- **CPC: el texto largo se iba por arriba sin dar tiempo a leerlo.** El CPC
+  escribía con TXT OUTPUT del firmware, que desplaza la ventana sin esperar:
+  la presentación de DAS BOOT pasaba entera en un par de segundos. Ahora hace
+  lo mismo que el Spectrum, el Next y el MSX2: cuenta las líneas desde la
+  última orden (o tecla, o borrado) y, cuando se ha escrito una ventana entera
+  y la siguiente línea tiraría una por arriba, espera una tecla.
+- **CPC: la portada se veía dibujarse a trozos, muy despacio.** Cargaba derecha
+  a la pantalla con su paleta puesta. Ahora el cargador pone las 16 tintas del
+  color del fondo, la carga oculta y luego pone su paleta: aparece entera.
+  Igual con las pantallas enteras del `SCR` (Modo 0).
+- **CPC: al acabar la partida (FIN/SALIR) y pedir otra, el ordenador se
+  reiniciaba.** La portada se recargaba con la paleta del juego (se veía con
+  otros colores) y la música del título ya no estaba: vive en el buffer de las
+  imágenes, que las salas habían pisado, y el reproductor saltaba a basura.
+  Ahora la portada se recarga oculta y MUSIC.BIN se vuelve a leer del disco.
+- **Las máquinas nativas no hacían caso a `start_location`**: el motor
+  empezaba siempre en la primera localización del YAML (`nativecc` pasaba
+  `startloc=0` a fuego). Ahora sale de `metadata.start_location`, como en el
+  intérprete de PC, con el id con arroba o sin ella; si no es ninguna
+  localización, se avisa y se empieza en la primera. Los juegos del
+  repositorio tienen la salida en la primera sala, así que no cambian.
 
 ---
 

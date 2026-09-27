@@ -609,12 +609,27 @@ mi_9:   ld    a,(&FFE8)        ; RG9SAV: se respeta 50/60 Hz (bit NT)
         call  vdpset
         ld    a,56             ; papel 7, tinta 0
         ld    (nxattr),a
+        call  msxini_comun
         call  msxclsall
         ld    a,&60            ; pantalla encendida, interrupcion de barrido
         ld    e,1
         call  vdpset
         ei
         jp    NXL2INIT
+
+; msxini_comun: lo que una partida nueva (tambien la de despues de un FIN)
+; tiene que encontrarse como al encender: ninguna imagen puesta -- la pantalla
+; se acaba de borrar, y si msxult siguiera diciendo que si, la sala inicial
+; saldria sin imagen -- y la ventana de texto a pantalla completa, o el primer
+; CLS de on_start no borraria la franja de arriba.
+msxini_comun:
+        ld    a,255
+        ld    (msxult),a
+        ld    h,0
+        ld    l,0
+        ld    d,41
+        ld    e,23
+        jp    TXTWIN
 
 ; vdpset: A = valor, E = registro. Apunta la copia que guarda la BIOS.
 vdpset:

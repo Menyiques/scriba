@@ -38,6 +38,7 @@ Backends:
 | `next_nativo.py` | ZX Spectrum Next, a `.nex` |
 | `cpc_nativo.py` | Amstrad CPC, a `.dsk` |
 | `msx2_nativo.py` | MSX2, a cartucho `.rom` (MegaROM ASCII16) |
+| `pcw_nativo.py` | Amstrad PCW 8256/8512, a disco autoarrancable `.dsk` |
 | `spectrum_export.py` | ya NO es un backend: queda como biblioteca (`recolecta`, acentos, PSG, dzx0, imágenes) de la que tiran todos los demás |
 
 **`compiler.py::check_predicates()`** detecta predicados no soportados por
@@ -52,7 +53,14 @@ parser, VM de condacts, evaluador de expresiones, tablas, temporizadores y
 word-wrap. Toda su dependencia de la máquina está en ~20 símbolos externos que
 cada plataforma resuelve a su manera:
 
-- CPC: al firmware (`&BBxx`/`&BCxx`), en el prefijo de `assemble_engine()`.
+- CPC: al firmware (`&BBxx`/`&BCxx`), en el prefijo de `assemble_engine()`,
+  salvo `TXTO` y `KMW`, que son rutinas de `CPC_PLAT_ASM`: paginan el texto
+  (esperan tecla antes de que una línea sin leer se vaya por arriba, como
+  `nxmas` en Next/MSX2) y llaman al firmware como `TXTFW`/`KMWFW`.
+  El CPC no precarga las salas contiguas: mientras AMSDOS lee, el teclado no
+  se atiende (se pierden letras), así que solo se lee de disco cuando el
+  jugador ya espera (al entrar en la sala). Las pruebas de tiempos de disco,
+  en MAME (`cpc6128`), que imita la rotación: Caprice32 no, lee al instante.
 - Next: a rutinas propias en `next_nativo.PLAT_ASM`, sin tocar `game_engine.py`.
 
 El backend del Next **no usa la ROM para nada** (fuente, teclado e impresión son
@@ -96,8 +104,9 @@ ventana). Todo lo propio del CPC se aplica sobre el texto de `ENGINE_ASM` en
 igual. Imágenes: `[tinta 2][tinta 3][ZX0 de 64 líneas de 80 bytes seguidas]`,
 cargadas pegadas a `IMGTOP` (`&A67C`) y descomprimidas en el sitio al
 principio de `imgbuf`; `pinta_pic` las copia a la pantalla línea a línea.
-La portada va lo primero del disco, con su paleta ya puesta por el cargador,
-para que se vea mientras carga lo demás (en 48K y 128K, igual: `LOAD ""
+La portada va lo primero del disco, cargada oculta (las 16 tintas del color
+del fondo) y con su paleta puesta justo después, para que se vea mientras
+carga lo demás (en 48K y 128K, igual: `LOAD ""
 SCREEN$` al principio de la cinta; el 48K espera una tecla antes de `start`). La
 caché de imágenes son ranuras a medida en lo que deja el texto en los bancos.
 
@@ -305,6 +314,66 @@ color de la columna en que estuviera el cursor. En MSX2 la tabla se llama
 
 ---
 
+## Amstrad PCW (`pcw_nativo.py`)
+
+El sexto destino: un **disco autoarrancable** de PCW 8256/8512 (`.dsk`, CF2 de
+180K, una cara). Se mete en la unidad A y se enciende la máquina: sin CP/M ni
+LocoScript. Mismo motor, misma DB; la capa es `PLAT_ASM` con las rutinas de
+máquina cambiadas por `_cambia_rutina()` (la de `msx2_nativo`).
+
+- **Arranque.** El PCW carga el sector 1 de la pista 0 en `&F000`, exige que
+  sus 512 bytes **sumen `&FF`** (el byte 15 lo cuadra; en el 9512 sería 1) y
+  salta a `&F010` con los bloques 0-3 en `&0000-&FFFF`. Nuestro sector se copia
+  a `&0200` (bloque 0), lee el resto pista a pista por el uPD765 (sondeo,
+  `READ DATA` hasta `EOT`, `INI` a mano con `defb &ED,&A2`: z80asm no la
+  conoce) a los bloques 4 en adelante, por la ventana de `&4000`, y copia el
+  motor —que va el último en el disco, pegado al último bloque de datos— a
+  `&8000`. Si una pista sale mal la repite (5 veces) y si no, pantalla en
+  inverso y quieto.
+- **Mapa.** Bloque 0 en `&0000` = pantalla S0 (filas 0-21) + roller-RAM en
+  `&3E00`. Bloque 1 = S1 (filas 22-31) + buffer de descompresión. `&4000` =
+  **ventana de paginación pura** (texto, FX, imágenes y, al pintar una fila de
+  S1, la propia S1). Bloques 2-3 = motor y DB en `&8000`; pila en `&FFF0`,
+  justo bajo el teclado, que el PCW mapea en `&3FF0` del bloque 3. Ids de
+  `TXTPAGE` = `&80 + bloque`.
+- **Sin interrupciones.** Todo con DI: en `&0038` y `&0066` hay pantalla.
+  `MCWAIT` cuenta ticks del reloj de 300 Hz en el puerto `&F4` (cuenta aunque
+  nadie atienda la interrupción); `char_lento` también pasa por ahí (el
+  `EI/HALT` de `PLAT_ASM` colgaría la máquina).
+- **Pantalla.** 720×256 mono; 90×32 con la fuente de 6 px centrada en celdas
+  de 8×8 (una celda son 8 bytes seguidos: el glifo se pinta con 8 `LD (DE),A`).
+  El scroll rota `ROWADR` y el roller-RAM, no mueve pantalla. INK/PAPER solo
+  deciden el vídeo inverso (papel más claro que la tinta). Imágenes de sala =
+  11 filas (720×88, 4:1 en píxeles del PCW, que son el doble de altos), Bayer
+  8×8 y ZX0 con `offset_limit=1024` (≈4 KB por tira; Floyd-Steinberg daba 7).
+  Caché en `temp/PCW`. `img/PCW/<id>` manda; si no, `img/Original`.
+- **Disco lleno.** 180K para todo: si no cabe, se cae primero la portada y
+  luego las últimas imágenes, con aviso. *Tifón Negro* entra con sus 23 salas y
+  sus 3 SCR, pero sin portada.
+- **Teclado.** Mapa de `&FFF2-&FFFA` contra la última lectura; vale la primera
+  tecla nueva. La tecla de `;` (la Ñ del teclado español) escribe `n`.
+- **Sonido:** no hay AY. `PLAY` y `SAMPLE` guardan su tiempo y no suenan.
+- **PCW 8512: dos discos** (`--8512`, «Exportar Amstrad PCW 8512…»). El PCW
+  solo arranca de la unidad A, que en el 8512 sigue siendo de 180K; la de 720K
+  es la B (CF2DD: 80 pistas, dos caras). Así que el disco A lleva solo el
+  sector de arranque, y el B (`<nombre>_B.dsk`) todo lo demás, desde su primer
+  sector: cabe la portada y no se recorta nada. El cargador es el mismo con
+  constantes: `UNIT` 1, `CARAS` 2, sin sector de arranque delante (`S0INI` 1)
+  y con `RECALIBRATE` de la B dos veces (el 765 da 77 pasos como mucho) tras
+  medio segundo de motor. Una "unidad" del cargador es una cara de pista; la
+  cara 1 se lee sin buscar. Con los 512K del 8512, bloques 4-31.
+  `probar_pcw.py --8512` juega esa versión.
+
+### Pruebas
+
+`probar_pcw.py juego.yaml bateria.pru` juega en el simulador Z80 con la
+memoria del PCW imitada (bloques por `&F0-&F3`, teclado en `&FFF0`, `&F4`) y
+lee la pantalla de su memoria por `ROWADR`. No prueba el sector de arranque:
+eso, en JOYCE (`xjoyce -a juego.dsk`), que arranca el disco igual que la
+máquina (pero **no comprueba la suma**; la del cargador la asegura un `assert`).
+
+---
+
 ## Trampas que ya han mordido
 
 - **`run_condacts` recibe la longitud del cuerpo en DE.** `run_response` la
@@ -379,10 +448,16 @@ color de la columna en que estuviera el cursor. En MSX2 la tabla se llama
   el mismo código fuente. Nos costó dos vueltas con los FX del Next en la v2.53.
   Para comparar binarios, mirar la fecha de `dist/Scriba.exe` antes que nada.
 
-- **`ScribaPlayer.exe` no está en el repositorio** (`*.exe` está en
-  `.gitignore`) y se pierde en cuanto se limpia `dist/`. Sin él, «Exportar para
-  Windows» falla. Se reconstruye con `build_scribaplayer.bat`, una vez, y se
-  deja junto a `Scriba.exe`.
+- **El reproductor de Windows es el propio `Scriba.exe`** (desde la 3.0; antes
+  era un `ScribaPlayer.exe` aparte que no estaba en el repositorio y, si
+  faltaba, «Exportar para Windows» fallaba). «Exportar para Windows» copia el
+  `Scriba.exe` que está corriendo y le pega el juego detrás; al arrancar,
+  `editor.py` mira el pie del ejecutable (`_juego_pegado`) y, si lleva juego,
+  abre `player.main` en vez del editor. Por eso `build_exe.bat` lleva
+  `--hidden-import player`, `PIL.ImageTk` y **`PIL._tkinter_finder`**: sin este
+  último, `ImageTk.PhotoImage` falla dentro del .exe («No module named
+  PIL._tkinter_finder», lo pide la extensión en C) y el juego sale sin
+  imágenes. Desde el código fuente, exportar usa `dist/Scriba.exe`.
 
 - **El bloque que se pega al final del `.exe` no puede contener el patrón de
   8 bytes de PyInstaller** (`MEI\x0c\x0b\x0a\x0b\x0e`). Su arranque busca su

@@ -110,6 +110,10 @@ nxl2on: ld    d,&69
         out   (c),a
         ret
 nxl2off:
+        ld    a,255            ; Layer 2 apagado = ninguna imagen puesta. Si
+        ld    (nxultimo),a     ; no, al volver a empezar la partida (EXIT, FIN)
+                               ; NXPIC veia la sala inicial como "ya puesta" y
+                               ; no encendia Layer 2: partida nueva sin imagenes
         ld    d,&69
         ld    e,0
         call  nxreg

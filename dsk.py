@@ -30,16 +30,25 @@ def bloques(files):
     return nb, ne
 
 
+# Orden fisico de los sectores en cada pista: el del formato DATA que graba el
+# propio CPC (entrelazado 2:1). AMSDOS lee un sector por orden y, mientras lo
+# procesa, el siguiente ya ha pasado bajo la cabeza: con C1..C9 seguidos habia
+# que esperar una vuelta entera del disco por sector (200 ms), y un fichero de
+# 16K tardaba unos 7 segundos en vez de 2 y pico. Los emuladores que imitan la
+# rotacion del disco (MAME, WinAPE...) lo reproducen tal cual.
+ORDEN_FISICO = (0xC1, 0xC6, 0xC2, 0xC7, 0xC3, 0xC8, 0xC4, 0xC9, 0xC5)
+
+
 def make_dsk(files):
     SECTORS=9; SECSIZE=512; TRACKS=40
-    SECIDS=[0xC1+i for i in range(SECTORS)]
+    SECIDS=list(ORDEN_FISICO)
     nblocks=TRACKS*SECTORS*SECSIZE//1024     # 180
     nb, ne = bloques(files)
     if nb > BLOQUES_DATOS or ne > ENTRADAS_DIR:
         raise ValueError('el disco no cabe: %d bloques de 1K de %d, %d entradas '
                          'de directorio de %d' % (nb, BLOQUES_DATOS, ne, ENTRADAS_DIR))
     blocks=[bytearray(1024) for _ in range(nblocks)]
-    directory=bytearray(2048)
+    directory=bytearray(b'\xe5'*2048)      # entradas libres: &E5, como las deja FORMAT
     next_block=2; entry_i=0
     for (name,ext,data) in files:
         nb=(len(data)+1023)//1024
@@ -82,7 +91,9 @@ def make_dsk(files):
             tib[o]=t; tib[o+2]=SECIDS[s]; tib[o+3]=2
         img+=tib
         base=t*SECTORS*SECSIZE
-        img+=flat[base:base+SECTORS*SECSIZE]
+        for sid in SECIDS:                   # los datos, en el orden fisico
+            o=base+(sid-0xC1)*SECSIZE
+            img+=flat[o:o+SECSIZE]
     return bytes(img)
 
 def read_dir(dsk):

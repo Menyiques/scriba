@@ -23,6 +23,7 @@ python -m PyInstaller --noconfirm --onefile --windowed --name ScribaPlayer ^
   --hidden-import PIL ^
   --hidden-import PIL.Image ^
   --hidden-import PIL.ImageTk ^
+  --hidden-import PIL._tkinter_finder ^
   player.py
 
 echo.
