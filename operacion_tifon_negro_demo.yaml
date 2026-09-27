@@ -1,0 +1,441 @@
+metadata:
+  title: DAS BOOT - DEMO
+  author: Sergio Morales (Menyiques)
+  version: 1.0-demo
+  language: es
+  start_location: '@playa'
+  max_score: 10
+  start_message: 'DAS BOOT  ---  VERSION DEMO
+
+    Francia ocupada - 14 de septiembre de 1943 - 03:00 horas
+
+
+    Eres el Capitan James Fletcher, agente del SOE britanico. Acabas de desembarcar
+    cerca de Saint-Corentin. Tu contacto de la Resistance, Marguerite, te espera en
+    la trastienda de la taberna del pueblo... pero llegar hasta ella no sera facil.
+
+
+    OBJETIVO DE LA DEMO: encuentra el modo de bajar a la trastienda y reunete con
+    Marguerite.
+
+
+    (Esta es una demostracion gratuita. La aventura completa continua tras este encuentro.)'
+variables:
+  _PESCADOR_HABLADO: 0
+  _PALABRA_CLAVE: 0
+  _TABERNERO_OK: 0
+  _MARGUERITE_HABLADO: 0
+vocabulary:
+  verbs:
+    NORTE:
+    - norte
+    - n
+    SUR:
+    - sur
+    - s
+    ESTE:
+    - este
+    - e
+    OESTE:
+    - oeste
+    - o
+    - w
+    ARRIBA:
+    - arrib
+    - subir
+    - sube
+    - u
+    ABAJO:
+    - abajo
+    - bajar
+    - baja
+    - d
+    COGER:
+    - coger
+    - coge
+    - tomar
+    - toma
+    - agarr
+    - recog
+    - pilla
+    DEJAR:
+    - dejar
+    - deja
+    - solta
+    - suelt
+    EXAMI:
+    - exami
+    - mirar
+    - mira
+    - obser
+    - ver
+    - inspe
+    HABLA:
+    - habla
+    - habla
+    - pregu
+    - conve
+    - dialo
+    DECIR:
+    - decir
+    - di
+    - dile
+    - susur
+    - pronu
+    USAR:
+    - usar
+    - usa
+    - utili
+    - emple
+    LEER:
+    - leer
+    - lee
+    ENCEN:
+    - encen
+    - encie
+    - ilumi
+    APAGA:
+    - apaga
+    PONER:
+    - poner
+    - ponte
+    - vesti
+    - equip
+    QUITA:
+    - quita
+    - desve
+    INVEN:
+    - inven
+    - inv
+    - i
+    - llevo
+    PUNT:
+    - puntu
+    - punto
+    - score
+    AYUDA:
+    - ayuda
+    - help
+    SALIR:
+    - salir
+    - exit
+    - quit
+  nouns:
+    PESCA:
+    - pesca
+    - ancia
+    - viejo
+    - marin
+    MARGU:
+    - margu
+    - espia
+    - mujer
+    - conta
+    TABER:
+    - taber
+    - dueño
+    - barma
+    VENDA:
+    - venda
+    RADIO:
+    - radio
+    - trans
+    - emiso
+    MORFI:
+    - morfi
+    - droga
+    - jerin
+    - sedan
+    CONFE:
+    - confi
+    - rotor
+    - ajust
+    - hoja
+    CREDE:
+    - crede
+    - ident
+    - docum
+    - carne
+    LINTE:
+    - linte
+    - luz
+    - farol
+    BOTSC:
+    - botel
+    - schna
+    - bebid
+    - aguar
+    MOCHI:
+    - mochi
+    - bolsa
+    - saco
+    CANTI:
+    - canti
+locations:
+  '@playa':
+    name: Playa de desembarco
+    description: 'Una playa de arena oscura azotada por el viento del Atlantico.
+
+      Las olas rompen con violencia contra las rocas negras. Tu bote de goma ya ha
+      sido hundido segun el protocolo SOE. No hay vuelta atras por este camino.
+
+      Al norte se alzan los acantilados.'
+    dark: false
+    exits:
+      N: '@acantilado'
+      S: null
+      E: null
+      O: null
+      U: null
+      D: null
+    on_enter: []
+  '@acantilado':
+    name: Pie del acantilado
+    description: 'La roca humeda y resbaladiza se alza varios metros. Una senda estrecha
+      asciende en zigzag entre la piedra. Un viejo pescador fuma su pipa junto a las
+      rocas, mirando el mar.
+
+      Al norte continua el sendero hacia el bosque. Al sur vuelve la playa.'
+    dark: false
+    exits:
+      N: '@camino_bosque'
+      S: '@playa'
+      E: null
+      O: null
+      U: null
+      D: null
+    on_enter: []
+  '@camino_bosque':
+    name: Camino entre el bosque
+    description: 'Un sendero de tierra flanqueado por pinos oscuros. Al norte se intuyen
+      las luces del pueblo de Saint-Corentin.
+
+      Al oeste, una senda semioculta se pierde entre la maleza. Al sur, los acantilados.'
+    dark: false
+    exits:
+      N: '@pueblo_plaza'
+      S: '@acantilado'
+      E: null
+      O: null
+      U: null
+      D: null
+    on_enter: []
+  '@pueblo_plaza':
+    name: Plaza de Saint-Corentin
+    description: 'Una pequena plaza adoquinada con una fuente seca en el centro. Los
+      carteles de propaganda alemana cubren las paredes.
+
+      Al este, la taberna "Le Moulin Vert" tiene luz en las ventanas.
+
+      Al oeste, la carretera lleva al puesto de control aleman. Al sur, el camino
+      al bosque.'
+    dark: false
+    exits:
+      N: null
+      S: '@camino_bosque'
+      E: '@taberna'
+      O: null
+      U: null
+      D: null
+    on_enter: []
+  '@taberna':
+    name: Taberna Le Moulin Vert
+    description: 'El interior huele a tabaco barato y vino de Burdeos. Unos aldeanos
+      beben en silencio. El tabernero, un hombre delgado de bigote gris, te examina
+      sin hablar.
+
+      Una escalera tras la barra baja a la trastienda.
+
+      Al oeste, la plaza del pueblo.'
+    dark: false
+    exits:
+      N: null
+      S: null
+      E: null
+      O: '@pueblo_plaza'
+      U: null
+      D: '@trastienda'
+    on_enter: []
+  '@trastienda':
+    name: Trastienda de la taberna
+    description: 'Una habitacion pequena atestada de barriles de vino y cajas de madera.
+      Una mujer de unos cuarenta anos con cabello negro recogido te mira fijamente:
+      es Marguerite, tu contacto de la Resistance.
+
+      Varios objetos sobre la mesa esperan tu atencion.'
+    dark: false
+    exits:
+      N: null
+      S: null
+      E: null
+      O: null
+      U: '@taberna'
+      D: null
+    on_enter: []
+objects:
+  '#pescador':
+    name: Viejo pescador breton
+    noun: PESCA
+    description: Un hombre de unos setenta anos con gorro de lana y pipa de barro.
+      Sus ojos azules y astutos observan el horizonte. Demasiado cerca de la base
+      para ser solo un pescador.
+    location: '@acantilado'
+    attributes:
+    - fixed
+  '#linterna':
+    name: una linterna militar
+    noun: LINTE
+    description: 'Una linterna militar de campana, modelo L2A1. La palanca de encendido
+      no responde: sin pilas, es inutil.'
+    location: '@acantilado'
+    light_source: true
+    lit: false
+    initial_message: Entre las rocas hay una linterna militar apagada.
+  '#mochila_campo':
+    name: una mochila de campana alemana
+    noun: MOCHI
+    description: Mochila de lona verde militar alemana. Contiene vendas, raciones
+      y un cuchillo sin filo. Nada de valor para tu mision.
+    location: '@acantilado'
+    initial_message: Junto a la senda hay una mochila de campana abandonada.
+  '#cantimplora_vacia':
+    name: una cantimplora vacia de la Wehrmacht
+    noun: CANTI
+    description: Cantimplora de aluminio con el sello de la Wehrmacht. Completamente
+      vacia. Sin utilidad.
+    location: '@acantilado'
+    initial_message: En el suelo hay una cantimplora vacia.
+  '#botella_schnaps':
+    name: una botella de Obstler aleman
+    noun: BOTSC
+    description: Botella de aguardiente de frutas austriaco, sello de la Wehrmacht.
+      Los soldados alemanes la buscan con avidez. Podria servir como distraccion.
+    location: '@taberna'
+    initial_message: Sobre una mesa hay una botella de aguardiente aleman.
+  '#marguerite':
+    name: Marguerite, contacto de la Resistance
+    noun: MARGU
+    description: Unos cuarenta anos, cabello negro recogido, manos firmes. Dirige
+      la celula local de la Resistance desde la trastienda. Habla poco y nunca dos
+      veces.
+    location: '@trastienda'
+    attributes:
+    - fixed
+  '#radio_portatil':
+    name: una radio SOE Type 3 Mk II
+    noun: RADIO
+    description: Radio portatil cifrada del SOE, la "Paraset". Con ella puedes contactar
+      a la lancha de extraccion HMS Peregrine.
+    location: '@trastienda'
+    initial_message: Sobre la mesa de Marguerite hay una radio portatil del SOE.
+  '#morfina':
+    name: una jeringa de morfina
+    noun: MORFI
+    description: Jeringa precargada con morfina. Suficiente para dejar inconsciente
+      a un adulto. Ideal para neutralizar guardias sin alarma.
+    location: '@trastienda'
+    initial_message: En la mesa hay una jeringa de morfina.
+  '#configuracion_enigma':
+    name: la hoja de configuracion de rotores
+    noun: CONFE
+    description: Hoja con la configuracion mensual de rotores de la Enigma M4. Con
+      esto y un mensaje cifrado, la Enigma dara combinaciones secretas.
+    location: '@trastienda'
+    initial_message: En la mesa de Marguerite hay una hoja doblada de configuracion.
+  '#credencial_falsa':
+    name: una credencial falsa de la Wehrmacht
+    noun: CREDE
+    description: Credencial a nombre de Hauptmann Klaus Weber. Con ella podrias pasar
+      los controles alemanes... en el juego completo.
+    location: '@NOWHERE'
+timers: {}
+condacts:
+  on_start: 'REM Demo: sin temporizadores ni peligro; el objetivo es llegar a Marguerite.'
+  responses: "REM ===========================================================\nREM\
+    \  DEMO - Operacion Tifon Negro\nREM ===========================================================\n\
+    \nON AYUDA _ _\n  PRINT \"------------------------------------------\"\n  PRINT\
+    \ \"COMANDOS (DEMO)\"\n  PRINT \"  Mover: NORTE SUR ESTE OESTE ARRIBA ABAJO\"\n\
+    \  PRINT \"  COGER obj   DEJAR obj   EXAMINAR obj\"\n  PRINT \"  HABLAR CON personaje\
+    \    DECIR palabra\"\n  PRINT \"  INVENTARIO (I)   PUNTUACION   SALIR\"\n  PRINT\
+    \ \"------------------------------------------\"\n  MATCH\nENDON\n\nON PUNT _\
+    \ _\n  SCORE\n  MATCH\nENDON\n\nREM -- Fronteras de la demo: zonas del juego completo\
+    \ --\nON O _ _\n  IF AT @camino_bosque THEN\n    PRINT \"Te adentras en la senda\
+    \ semioculta... pero el camino hacia la base se difumina.\"\n    PRINT \"\"\n\
+    \    PRINT \"==== SOLO EN EL JUEGO COMPLETO ====\"\n    PRINT \"La infiltracion\
+    \ en la base naval forma parte de la aventura completa.\"\n    MATCH\n  ENDIF\n\
+    \  IF AT @pueblo_plaza THEN\n    PRINT \"La carretera lleva al puesto de control\
+    \ aleman.\"\n    PRINT \"\"\n    PRINT \"==== SOLO EN EL JUEGO COMPLETO ====\"\
+    \n    PRINT \"Cruzar el control y entrar en la base forma parte de la aventura\
+    \ completa.\"\n    MATCH\n  ENDIF\nENDON\n\nREM -- Hablar con el pescador (acantilado):\
+    \ da el santo y sena --\nON HABLA PESCA _\n  IF AT @acantilado THEN\n    PRINT\
+    \ \"El viejo te habla sin mirarte, los ojos fijos en el mar:\"\n    PRINT \"'Marguerite\
+    \ te espera en la trastienda de la taberna, pero el tabernero no deja bajar a\
+    \ desconocidos.\"\n    PRINT \"El santo y sena es VENDAVAL. Diselo y te abrira\
+    \ el paso.'\"\n    PRINT \"Vuelve a fumar su pipa.\"\n    LET _PALABRA_CLAVE =\
+    \ 1\n    IF _PESCADOR_HABLADO = 0 THEN\n      LET _PESCADOR_HABLADO = 1\n    \
+    \  ADDSCORE 5\n    ENDIF\n    MATCH\n  ELSE\n    PRINT \"No ves ningun pescador\
+    \ aqui.\"\n    MATCH\n  ENDIF\nENDON\n\nREM -- Tabernero: impide bajar sin el\
+    \ santo y sena --\nON D _ _\n  IF AT @taberna THEN\n    IF _TABERNERO_OK = 0 THEN\n\
+    \      PRINT \"El tabernero se interpone entre tu y la escalera, los brazos cruzados.\
+    \ 'C'est prive.' No piensa moverse.\"\n      MATCH\n    ENDIF\n  ENDIF\nENDON\n\
+    \nON DECIR VENDA\n  IF AT @taberna THEN\n    IF _TABERNERO_OK = 0 THEN\n     \
+    \ LET _TABERNERO_OK = 1\n      PRINT \"Murmuras: 'Vendaval.'\"\n      PRINT \"\
+    El tabernero deja de secar el vaso, te estudia un segundo y se aparta de la escalera\
+    \ senalando hacia abajo.\"\n    ELSE\n      PRINT \"El tabernero asiente. La escalera\
+    \ ya esta libre.\"\n    ENDIF\n    MATCH\n  ELSE\n    PRINT \"Aqui nadie reaccionaria\
+    \ a esa palabra.\"\n    MATCH\n  ENDIF\nENDON\n\nON HABLA TABER\n  IF AT @taberna\
+    \ THEN\n    IF _TABERNERO_OK = 1 THEN\n      PRINT \"El tabernero senala la escalera\
+    \ con la cabeza y sigue secando vasos.\"\n    ELSE\n      IF _PALABRA_CLAVE =\
+    \ 1 THEN\n        LET _TABERNERO_OK = 1\n        PRINT \"Te inclinas sobre la\
+    \ barra y susurras: 'Vendaval.'\"\n        PRINT \"El tabernero se aparta de la\
+    \ escalera y senala hacia abajo.\"\n      ELSE\n        PRINT \"El tabernero te\
+    \ sirve un vino agrio y no responde. Aqui nadie confia en desconocidos. Quiza\
+    \ algun lugareno sepa como ganarse su confianza.\"\n      ENDIF\n    ENDIF\n \
+    \   MATCH\n  ELSE\n    PRINT \"No hay ningun tabernero aqui.\"\n    MATCH\n  ENDIF\n\
+    ENDON\n\nREM -- Los objetos de Marguerite solo se cogen tras hablar con ella --\n\
+    ON COGER (RADIO OR MORFI OR CONFE)\n  IF AT @trastienda THEN\n    IF _MARGUERITE_HABLADO\
+    \ = 0 THEN\n      \tINK 2\n      \tPRINT \"Marguerite no te quita ojo. 'Primero\
+    \ hablemos, Capitaine.' Mejor no tocar nada de la mesa todavia.\"\n      \tINK\
+    \ 0\n\tMATCH\n    ENDIF\n  ENDIF\nENDON\n\nREM -- Hablar con Marguerite: climax\
+    \ de la demo --\nON HABLA MARGU _\n  IF AT @trastienda THEN\n    IF _MARGUERITE_HABLADO\
+    \ = 0 THEN\n      PRINT \"Marguerite te habla en voz muy baja, casi sin mover\
+    \ los labios:\"\n      PRINT \"'Capitaine Fletcher. Escuche. En esta mesa: la\
+    \ radio, la morfina y la hoja de configuracion de la Enigma. Son del U-Boot que\
+    \ capturamos en julio. Coja lo que necesite.\"\n      PRINT \"Y esto es para usted.'\
+    \ Te desliza una credencial falsa de la Wehrmacht.\"\n      CREATE #credencial_falsa\
+    \ @INVEN\n      PRINT \"\"\n      PRINT \"'El resto... depende de usted. Dieu\
+    \ vous garde, Capitaine.'\"\n      LET _MARGUERITE_HABLADO = 1\n      ADDSCORE\
+    \ 5\n      PRINT \"\"\n      PRINT \"================================================\"\
+    \n      PRINT \"        FIN DE LA DEMO\"\n      PRINT \"Has contactado con la\
+    \ Resistance y tienes el equipo.\"\n      PRINT \"La verdadera mision -infiltrarte\
+    \ en la base naval,\"\n      PRINT \"robar los codigos Enigma y hundir el U-571-\
+    \ te\"\n      PRINT \"espera en OPERACION TIFON NEGRO, el juego completo.\"\n\
+    \      PRINT \"================================================\"\n    ELSE\n\
+    \      PRINT \"Marguerite hace un gesto breve. 'Ya tiene todo lo que puedo darle.\
+    \ El resto depende de usted.'\"\n    ENDIF\n    MATCH\n  ENDIF\nENDON"
+_editor:
+  positions:
+    '@acantilado':
+    - 0
+    - -1
+    - 0
+    '@camino_bosque':
+    - 0
+    - -2
+    - 0
+    '@playa':
+    - 0
+    - 0
+    - 0
+    '@pueblo_plaza':
+    - 0
+    - -3
+    - 0
+    '@taberna':
+    - 1
+    - -3
+    - 0
+    '@trastienda':
+    - 2
+    - -2
+    - 0

@@ -1,0 +1,326 @@
+metadata:
+  title: EL FARO
+  author: (tu nombre)
+  version: '1.0'
+  language: es
+  start_location: '@playa'
+  max_score: 12
+  start_message: 'EL FARO
+
+    Una aventura breve hecha con Scriba.
+
+
+    Medianoche. La tormenta azota la costa y, mar adentro, las luces de un barco se
+    acercan peligrosamente a las rocas. El viejo faro lleva anos apagado. Solo tu
+    puedes volver a encenderlo. No hay tiempo que perder.
+
+
+    Escribe AYUDA si necesitas la lista de comandos.'
+variables:
+  _ARENA_CAVADA: 0
+  _PUERTA_ABIERTA: 0
+  _PILAS_PUESTAS: 0
+vocabulary:
+  verbs:
+    ABAJO:
+    - abajo
+    - bajar
+    - baja
+    - d
+    ABRIR:
+    - abrir
+    - abre
+    ARRIB:
+    - arrib
+    - subir
+    - sube
+    - u
+    AYUDA:
+    - ayuda
+    - help
+    CAVAR:
+    - cavar
+    - cava
+    - escar
+    - excav
+    - remov
+    COGER:
+    - coger
+    - coge
+    - tomar
+    - toma
+    - agarr
+    - pilla
+    - recog
+    DEJAR:
+    - dejar
+    - deja
+    - solta
+    - suelt
+    - tirar
+    - tira
+    ENCEN:
+    - encen
+    - encie
+    - prend
+    - ilumi
+    ESTE:
+    - este
+    - e
+    EXAMI:
+    - exami
+    - mirar
+    - mira
+    - obser
+    - ver
+    - inspe
+    INVEN:
+    - inven
+    - inv
+    - i
+    - llevo
+    NORTE:
+    - norte
+    - n
+    OESTE:
+    - oeste
+    - o
+    - w
+    PUNT:
+    - puntu
+    - punto
+    - score
+    SALIR:
+    - salir
+    - fin
+    - quit
+    SUR:
+    - sur
+    - s
+    METER:
+    - meter
+    - mete
+    - poner
+    - pon
+    - colocar
+    - coloca
+    - introducir
+    - introd
+    - insertar
+  nouns:
+    ARENA:
+    - arena
+    - suelo
+    FARO:
+    - faro
+    - torre
+    LAMPA:
+    - lampa
+    - luz
+    - foco
+    - fanal
+    LLAVE:
+    - llave
+    PUERT:
+    - puert
+    - porto
+    - porte
+    LINTE:
+    - linte
+    - linterna
+    PILAS:
+    - pilas
+    - pila
+    - bateria
+    - baterias
+  prepositions: {}
+locations:
+  '@playa':
+    name: Playa de los Naufragos
+    description: 'Estas en una playa estrecha y oscura. La lluvia te cala y las olas
+      rompen con furia a tus pies. La arena humeda se hunde bajo tus botas.
+
+      Un sendero trepa hacia el NORTE, hacia la silueta negra del faro.'
+    dark: false
+    exits:
+      N: '@sendero'
+      S: null
+      E: null
+      O: null
+      U: null
+      D: null
+    on_enter: []
+  '@sendero':
+    name: El sendero del acantilado
+    description: 'Un sendero resbaladizo serpentea por el borde del acantilado. Arriba
+      se alza el faro, enorme y mudo. Una pesada puerta de hierro cierra su entrada
+      al NORTE.
+
+      Abajo, al SUR, vuelve la playa.'
+    dark: false
+    exits:
+      N: '@faro'
+      S: '@playa'
+      E: null
+      O: null
+      U: null
+      D: null
+    on_enter: []
+  '@faro':
+    name: Interior del faro
+    description: 'Dentro del faro reina el silencio. Una escalera de caracol asciende
+      hasta la gran lampara, apagada desde hace anos, esperando una mano que la despierte.
+
+      Al SUR, la puerta da de nuevo al sendero.'
+    dark: true
+    exits:
+      N: null
+      S: '@sendero'
+      E: null
+      O: null
+      U: null
+      D: null
+    on_enter: []
+objects:
+  '#llave':
+    name: una llave oxidada
+    noun: LLAVE
+    description: Una llave de hierro, comida por el salitre. Quiza abra alguna cerradura.
+    location: '@NOWHERE'
+    initial_message: Medio enterrada en la arena asoma una llave oxidada.
+    key: null
+    weight: 0
+    wearable: false
+    container: false
+    openable: false
+    light_source: false
+    lit: false
+    open: false
+    locked: false
+    attributes: []
+  '#arena':
+    name: la arena de la playa
+    noun: ARENA
+    description: Arena oscura y humeda, removida por el temporal. Algo podria estar
+      enterrado en ella; convendria CAVAR.
+    location: '@playa'
+    attributes:
+    - fixed
+  '#puerta':
+    name: la puerta del faro
+    noun: PUERT
+    description: Una pesada puerta de hierro oxidado con una vieja cerradura. Esta
+      cerrada.
+    location: '@sendero'
+    attributes:
+    - fixed
+  '#lampara':
+    name: la lampara del faro
+    noun: LAMPA
+    description: La gran lampara del faro, de bronce y cristal. Lleva anos apagada;
+      solo hay que accionar su mecanismo.
+    location: '@faro'
+    attributes:
+    - fixed
+  '#linterna':
+    name: una linterna
+    noun: LINTE
+    description: Una linterna metalica.
+    location: '@INVEN'
+    weight: 1
+    light_source: true
+    lit: false
+    wearable: false
+    container: false
+    openable: false
+    open: false
+    locked: false
+    key: null
+    attributes: []
+  '#pilas':
+    name: unas pilas
+    noun: PILAS
+    description: Un par de pilas gruesas; servirian para una linterna.
+    location: '@sendero'
+    initial_message: Sobre una roca del sendero hay unas pilas olvidadas.
+    weight: 1
+    wearable: false
+    container: false
+    openable: false
+    open: false
+    locked: false
+    light_source: false
+    lit: false
+    key: null
+    attributes: []
+timers: {}
+condacts:
+  on_start: REM El Faro - aventura de ejemplo de Scriba. Sin temporizadores.
+  responses: "REM ===========================================================\nREM\
+    \  EL FARO - logica del juego\nREM ===========================================================\n\
+    \nON AYUDA _ _\n  PRINT \"------------------------------------------\"\n  PRINT\
+    \ \"COMANDOS\"\n  PRINT \"  Mover: NORTE  SUR  (N / S)\"\n  PRINT \"  EXAMINAR\
+    \ cosa     CAVAR arena\"\n  PRINT \"  COGER cosa        ABRIR puerta\"\n  PRINT\
+    \ \"  METER pilas       ENCENDER linterna\"\n  PRINT \"  ENCENDER lampara  INVENTARIO\
+    \ (I)\"\n  PRINT \"  PUNTUACION        SALIR\"\n  PRINT \"------------------------------------------\"\
+    \n  MATCH\nENDON\n\nON PUNT _ _\n  SCORE\n  MATCH\nENDON\n\nREM -- Paso 1: descubrir\
+    \ la llave cavando/examinando la arena --\nON CAVAR ARENA\n  IF AT @playa THEN\n\
+    \    IF _ARENA_CAVADA = 0 THEN\n      LET _ARENA_CAVADA = 1\n      CREATE #llave\
+    \ @playa\n      PRINT \"Escarbas en la arena fria y tus dedos rozan algo metalico:\"\
+    \n      PRINT \"una llave oxidada queda al descubierto.\"\n      ADDSCORE 3\n\
+    \    ELSE\n      PRINT \"Solo queda arena revuelta.\"\n    ENDIF\n    MATCH\n\
+    \  ENDIF\nENDON\n\nON EXAMI ARENA\n  IF AT @playa THEN\n    IF _ARENA_CAVADA =\
+    \ 0 THEN\n      PRINT \"La arena esta removida por el temporal. Algo asoma a medias;\
+    \ tendrias que CAVAR para sacarlo.\"\n    ELSE\n      PRINT \"Solo queda arena\
+    \ revuelta.\"\n    ENDIF\n    MATCH\n  ENDIF\nENDON\n\nREM -- Paso 2: abrir la\
+    \ puerta del faro con la llave --\nON ABRIR PUERT\n  IF AT @sendero THEN\n   \
+    \ IF _PUERTA_ABIERTA = 1 THEN\n      PRINT \"La puerta del faro ya esta abierta.\"\
+    \n    ELSE\n      IF CARRIED #llave THEN\n        LET _PUERTA_ABIERTA = 1\n  \
+    \      PRINT \"La llave gira con un chirrido oxidado y la puerta de hierro cede.\"\
+    \n        PRINT \"El camino hacia el interior del faro queda libre al NORTE.\"\
+    \n        ADDSCORE 3\n      ELSE\n        PRINT \"La puerta de hierro esta cerrada\
+    \ a cal y canto. Hara falta una llave.\"\n      ENDIF\n    ENDIF\n    MATCH\n\
+    \  ENDIF\nENDON\n\nREM -- La puerta cerrada bloquea el paso al norte (hacia el\
+    \ faro) --\nON N _ _\n  IF AT @sendero THEN\n    IF _PUERTA_ABIERTA = 0 THEN\n\
+    \      PRINT \"La puerta de hierro, cerrada, te corta el paso hacia el faro.\"\
+    \n      MATCH\n    ENDIF\n  ENDIF\nENDON\n\nREM -- Paso 2b: pilas + linterna (puzle\
+    \ con variables) --\nON METER PILAS LINTE\n  IF _PILAS_PUESTAS THEN\n    PRINT\
+    \ \"La linterna ya tiene las pilas puestas.\"\n    MATCH\n  ENDIF\n  IF #pilas.carried\
+    \ AND #linterna.carried THEN\n    LET _PILAS_PUESTAS = 1\n    DESTROY #pilas\n\
+    \    PRINT \"Abres la tapa de la linterna y encajas las pilas. Un clic.\"\n  \
+    \  ADDSCORE 1\n  ELSE\n    PRINT \"Necesitas llevar contigo las pilas y la linterna.\"\
+    \n  ENDIF\n  MATCH\nENDON\n\nON ENCEN LINTE\n  IF _PILAS_PUESTAS = 0 THEN\n  \
+    \  PRINT \"La linterna no se enciende: esta sin pilas.\"\n  ELSE\n    IF #linterna.lit\
+    \ THEN\n      PRINT \"La linterna ya esta encendida.\"\n    ELSE\n      LIT #linterna\n\
+    \      PRINT \"Enciendes la linterna y un haz de luz brota del cristal.\"\n  \
+    \    ADDSCORE 1\n    ENDIF\n  ENDIF\n  MATCH\nENDON\n\nON EXAMI LINTE\n  IF _PILAS_PUESTAS\
+    \ = 0 THEN\n    PRINT \"Una linterna metalica, algo oxidada. Esta SIN PILAS.\"\
+    \n  ELSE\n    IF #linterna.lit THEN\n      PRINT \"Tu linterna, con las pilas\
+    \ puestas y encendida.\"\n    ELSE\n      PRINT \"Tu linterna, con las pilas puestas\
+    \ pero apagada.\"\n    ENDIF\n  ENDIF\n  MATCH\nENDON\n\nREM -- Paso 3 (final):\
+    \ encender la lampara y salvar el barco --\nON ENCEN LAMPA\n  IF AT @faro THEN\n\
+    \    IF DARK THEN\n      PRINT \"Esta demasiado oscuro aqui dentro. No distingues\
+    \ la lampara.\"\n      MATCH\n    ENDIF\n    PRINT \"Accionas el viejo mecanismo.\
+    \ Con un zumbido, la gran lampara despierta\"\n    PRINT \"y un haz de luz blanca\
+    \ barre la tormenta.\"\n    PRINT \"\"\n    PRINT \"Mar adentro, el barco vira\
+    \ a tiempo y se aleja de las rocas.\"\n    PRINT \"El faro vuelve a vivir.\"\n\
+    \    ADDSCORE 4\n    PRINT \"\"\n    PRINT \"*** HAS GANADO ***\"\n    SCORE\n\
+    \    END\n  ENDIF\nENDON"
+  before_turn: ''
+  after_turn: ''
+  on_end: ''
+fx: []
+_editor:
+  positions:
+    '@faro':
+    - 0
+    - -2
+    - 0
+    '@playa':
+    - 0
+    - 0
+    - 0
+    '@sendero':
+    - 0
+    - -1
+    - 0
