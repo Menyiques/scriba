@@ -159,7 +159,8 @@ BUILTIN_VERBS = {
     'sacar':      ['sacar', 'extraer'],
     'inventario': ['inventario', 'inv', 'i'],             # canonical: INVEN
     'punt':       ['puntos', 'puntuacion', 'score'],      # canonical: PUNT
-    'salir':      ['salir', 'abandonar', 'quit'],
+    'salidas':    ['salidas', 'salida', 'salir', 'exits', 'exit'],   # canonical: SALID
+    'acabar':     ['acabar', 'abandonar', 'fin', 'quit'],     # canonical: ACABA
     'abrir':      ['abrir', 'abre'],
     'cerrar':     ['cerrar', 'cierra'],                   # canonical: CERRA
 }
@@ -390,6 +391,9 @@ class PAWSBasic:
                 out.append((objs[id_ci[tok]].get('noun') or '')[:5].upper())
                 continue
             c5 = tok[:5].upper()
+            if c5 == 'SALIR' and getattr(self.interp, 'legado_salir', False):
+                out.append('ACABA')
+                continue
             entry = vl.get(c5)
             out.append(entry[1] if entry else c5)
         return out
@@ -806,17 +810,30 @@ class PAWSInterpreter:
         for alias in ('todo', 'all'):
             self.vocab_lookup[alias[:5].upper()] = ("NOUN", "TODO")
 
+        # Las palabras de SALIDAS de serie: un verbo SALIR de los de antes (el de
+        # abandonar) no se las lleva, que era justo el problema.
+        salidas = {w for w, t in self.vocab_lookup.items() if t == ("VERB", "SALID")}
+        # Un juego de los de antes declara el verbo SALIR (el de abandonar). Sus
+        # cabeceras «ON SALIR» siguen siendo las de abandonar (ACABAR): SALIR ya
+        # es una palabra de SALIDAS de serie, y sin esto ese bloque se quedaria
+        # con la orden SALIDAS.
+        self.legado_salir = any(str(k)[:5].upper() == 'SALIR'
+                                for k in vocab.get("verbs", {}))
         for verb_key, aliases in vocab.get("verbs", {}).items():
             raw_canonical = verb_key[:5].upper()
+            legado = vocab_base.RENOMBRADOS.get(raw_canonical)
             # Si es un verbo de dirección, normalizar a forma corta
-            canonical = dir_verb_map.get(verb_key.upper(), dir_verb_map.get(raw_canonical, raw_canonical))
+            canonical = legado or dir_verb_map.get(verb_key.upper(), dir_verb_map.get(raw_canonical, raw_canonical))
             for alias in aliases:
                 w5 = alias[:5].upper()
+                if legado and w5 in salidas:
+                    continue
                 # También normalizar alias de dirección
                 mapped = dir_verb_map.get(w5)
                 self.vocab_lookup[w5] = ("VERB", mapped if mapped else canonical)
             # El propio key
-            self.vocab_lookup[raw_canonical] = ("VERB", canonical)
+            if not legado:
+                self.vocab_lookup[raw_canonical] = ("VERB", canonical)
 
         # Nombre de cada OBJETO autorregistrado (como hace el motor): así el
         # jugador puede referirse al objeto por su noun aunque NO exista una
@@ -1487,15 +1504,18 @@ class PAWSInterpreter:
                 print(textwrap.fill(msg, width=70))
 
         # Salidas
+        print("\n" + self._linea_salidas(loc))
+
+    def _linea_salidas(self, loc):
+        """La linea "Salidas: N E" de una sala (la de describir y la de SALIDAS)."""
         exits = loc.get("exits", {})
         available = [self._dir_name(d) for d, dest in exits.items() if dest]
         if available:
             # Separadas por un espacio, no por coma: es como las escribe el
             # motor nativo, y con los nombres saliendo ya del mismo catalogo la
             # linea de salidas queda identica en PC y en las maquinas.
-            print("\n" + self._t('salidas', dirs=' '.join(available)))
-        else:
-            print("\n" + self._t('sin_salidas'))
+            return self._t('salidas', dirs=' '.join(available))
+        return self._t('sin_salidas')
 
     def show_inventory(self):
         inventory = self.get_inventory()
@@ -1925,7 +1945,17 @@ class PAWSInterpreter:
             print(self._t('puntuacion', p=pts))
             return True
 
-        if verb == "SALIR":
+        if verb == "SALID":
+            # SALIDAS: por donde se puede ir, sin describir otra vez la sala. A
+            # oscuras no se ven, como no se ve la sala.
+            if self.location_is_dark():
+                print(self._t('oscuro_total'))
+            else:
+                print(self._linea_salidas(
+                    self.locations.get(self.player_location, {})))
+            return True
+
+        if verb in ("ACABA", "SALIR"):
             # Confirmación delegada (p. ej. intérprete embebido en el editor)
             confirm = getattr(self, "confirm_quit", None)
             if callable(confirm):

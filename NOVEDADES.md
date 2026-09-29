@@ -11,6 +11,37 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
 ## [Sin publicar]
 
 ### Novedades
+- **Un clic ligero al teclear**, en todas las máquinas. Cada tecla que acepta la
+  línea de órdenes (letras, BORRAR y ENTER) hace un clic corto; la pausa de
+  «pulsa una tecla» y la portada quedan en silencio. En el Spectrum 48K/128K y
+  el Next, por el altavoz (bit 4 del puerto &FE, dos ciclos de ~2 kHz, sin
+  tocar el borde): la ROM lo hacía al teclear y el motor nativo no usa la ROM.
+  En el CPC, un soplo de ruido por el canal A del AY a volumen bajo (~2 ms,
+  con la misma `SNDREG` de los efectos). En el MSX2, el bit de clic del PPI
+  (`&AB`, el del teclado de la BIOS). En el PCW, el pitido puesto y quitado
+  (`&F8`, órdenes 11 y 12) en ~1 ms. En el reproductor de Windows, un tic de
+  4 ms (`winsound`). Es una rutina por máquina, `KCLICK`, que `read_line`
+  llama y que conserva todos los registros; `verify_click.py` cuenta los
+  clics en 48K, 128K, CPC y PCW.
+- **EX abrevia EXAMINAR** en todos los juegos y máquinas (`EX obj`, y `EX` a
+  secas describe la sala, como EXAMINAR). Es una palabra de serie más de
+  EXAMINAR en español, inglés y portugués (en inglés ya valía `X`), así que no
+  hay que tocar el vocabulario de cada juego. Ningún juego de la carpeta usaba
+  ya la palabra `ex`.
+- **Nuevo comando SALIDAS (EXITS)** en el intérprete de PC y en las seis
+  máquinas nativas: dice por dónde se puede ir, con la misma línea que cierra
+  una descripción («Salidas: N E»), sin volver a describir la sala; a oscuras
+  dice que está oscuro. Sus palabras de serie son SALIDAS, SALIDA, SALIR, EXITS
+  y EXIT (en portugués SAÍDAS/SAIR). Es un condact nuevo, `EXITS`, y va como
+  respuesta de serie al final de las del autor: un `ON SALIDAS` del juego se
+  ejecuta antes que la de serie.
+- **El verbo de abandonar la partida pasa a llamarse ACABAR** (canónico
+  ACABA; también ABANDONAR, FIN y QUIT). Hasta ahora era SALIR, y las
+  máquinas comparan solo las cuatro primeras letras de cada palabra: SALIDAS y
+  SALIR eran la misma (SALI) y escribir SALIDAS acababa la partida. Los juegos de antes que declaran el verbo SALIR
+  siguen funcionando: su verbo se toma por ACABAR (sin las palabras que ahora
+  son de SALIDAS) y su bloque `ON SALIR` es el de abandonar. DAS BOOT ya
+  usa ACABAR, con su AYUDA al día y pruebas nuevas en `tifon.pru`.
 - **Amstrad PCW**: exportación a disco autoarrancable (`pcw_nativo.py`), con el
   mismo motor y la misma base de datos. 90×32 columnas en la pantalla de
   720×256, imágenes tramadas (Bayer) y comprimidas en ZX0. Para el PCW8256,

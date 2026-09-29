@@ -471,8 +471,13 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj
     for w,nid in c.nounalias.items(): vocab.append((w, nid, 1))
     # condacts
     cd=g.get('condacts',{})
+    # Un juego de los de antes declara el verbo SALIR (el de abandonar): sus
+    # cabeceras 'ON SALIR' son las de ACABAR, no las de SALIDAS.
+    _legado_salir=any(str(k)[:5].upper()=='SALIR'
+                      for k in ((g.get('vocabulary') or {}).get('verbs') or {}))
     def vocab_id(word):
         u=word.upper()
+        if _legado_salir and u=='SALIR' and c.verbid.get('ACABA'): return c.verbid['ACABA']
         if u in c.verbalias: return c.verbalias[u]
         if u in c.nounalias: return c.nounalias[u]
         return 0
@@ -564,6 +569,12 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj
                 _b+=bytes([ge.COP['MESSAGE'],_mi&0xFF,(_mi>>8)&0xFF])
             _b+=bytes([ge.COP['DONE']])
             responses.append((_vv,0,bytes(_b)))
+    # Comando SALIDAS, del mismo modo: una respuesta 'ON salidas' al final (las
+    # del autor van antes y mandan) con el condact EXITS, la linea de salidas
+    # de describe sin el resto.
+    _vs=c.verbid.get('SALID') or 0
+    if _vs:
+        responses.append((_vs,0,bytes([ge.COP_EXTRA['EXITS'],ge.COP['DONE']])))
     # temporizadores: duracion, loop, activo inicial y on_expire compilado
     timers=[]
     for tid in getattr(c,'timids',[]):
@@ -581,7 +592,7 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj
         for n in names:
             if n in c.verbid: return c.verbid[n]
         return 0
-    sysverbs={'look':vid_of('MIRAR','M'),'quit':vid_of('FIN','SALIR'),
+    sysverbs={'look':vid_of('MIRAR','M'),'quit':vid_of('FIN','ACABA','SALIR'),
               'get':vid_of('COGER'),'drop':vid_of('DEJAR'),
               'inven':vid_of('INVEN','I'),'exam':vid_of('EXAMI','EXAM')}
     # nombre que significa "todo" (para COGER/DEJAR TODO)

@@ -32,6 +32,7 @@ EOP={'END':0,'CONST':1,'VAR':2,'ADD':3,'SUB':4,'EQ':5,'NE':6,'LT':7,'GT':8,
 # condacts extra: LETX (var,expr) e IF (expr -> salta cuerpo si falso)
 COP_EXTRA={'SHOWPIC':50,'PRVAR':51,'ENDGAME':52,
  'BRIGHT':53,'FLASH':54,'INVERSE':55,'SAMPLE':56,'QUIT':57,'SCR':58,'SCRLOC':59,
+ 'EXITS':60,
  'LETX':26,'IF':27,'JMP':28,
  'INK':29,'PAPER':30,'BORDER':31,'PAUSE':32,'CLS':33,
  'WEAR':34,'REMOVE':35,'LIT':36,'UNLIT':37,'SCORE':38,
@@ -700,7 +701,7 @@ d_nonom:
         ld    de,SEXITS        ; y las salidas al final, como en el export de
         call  print_msg        ; 128K: descripcion, objetos, salidas
         pop   hl               ; ...se recupera aqui, que print_msg se lo lleva
-        ld    a,(hl)
+d_exn:  ld    a,(hl)           ; (d_exn: HL -> numero de salidas; c_exits)
         inc   hl
         ld    b,a
         or    a
@@ -1950,6 +1951,7 @@ read_line:
         ld    b,0
 rl_l:   call  KMREAD          ; lee tecla SIN bloquear (CF=1 si hay)
         jr    nc,rl_idle      ; sin tecla -> precargar una contigua y reintentar
+        call  KCLICK          ; un clic ligero al teclear (conserva todo)
         cp    13
         jr    z,rl_d
         cp    127             ; DEL -> borra el ultimo caracter
@@ -2376,7 +2378,7 @@ rc_loop:
         cp    e
         jr    nc,rc_end
 rc_go:  call  getop
-        cp    60
+        cp    61
         jr    nc,rc_loop
         add   a,a
         ld    e,a
@@ -3101,6 +3103,25 @@ c_sample:
 c_quit: ld    a,1
         ld    (quitf),a
         jp    rc_loop
+; EXITS: la orden SALIDAS. La linea con que acaba describe ("Salidas: N E"),
+; sin el resto; a oscuras, lo mismo que describe: que esta oscuro.
+c_exits:
+        call  newline
+        call  is_dark
+        or    a
+        jr    z,cx_luz
+        call  d_dark
+        jp    rc_loop
+cx_luz: ld    a,(curloc)
+        call  loc_record
+        inc   hl
+        inc   hl               ; tras el mensaje de la descripcion
+        push  hl
+        ld    de,SEXITS
+        call  print_msg
+        pop   hl
+        call  d_exn
+        jp    rc_loop
 
 c_border:
         call  getop           ; BORDER n: color del borde
@@ -3324,6 +3345,7 @@ CTAB:   defw c_at,c_notat,c_present,c_absent,c_carried,c_notcarr,c_zero,c_notzer
         defw c_play,c_addscore
         defw c_showpic,c_prvar,c_endgame
         defw c_bright,c_flash,c_inverse,c_sample,c_quit,c_scr,c_scrloc
+        defw c_exits
 
 show_title:
         ld    a,(hastitle)
@@ -3583,6 +3605,37 @@ CPC_PLAT_ASM = r'''
 ; es una etiqueta de la capa de plataforma (next_nativo.PLAT_ASM).
 SCRATTR: ret
 SMPPLAY: ret
+
+; KCLICK: un clic corto al aceptar una tecla de la linea de ordenes (cada
+; letra, BORRAR y ENTER). Un soplo de ruido por el canal A del AY, a volumen
+; bajo y de unos 2 ms, y otra vez a 0: ligero, sin envolvente ni interrupcion
+; de por medio. SNDREG es MC SOUND REGISTER (la misma que usan los efectos).
+; Conserva todos los registros: read_line llega con la tecla en A.
+KCLICK: push  af
+        push  bc
+        push  de
+        push  hl
+        ld    a,6
+        ld    c,12             ; ruido grave: un "toc", no un pitido agudo
+        call  SNDREG
+        ld    a,7
+        ld    c,&37            ; mezclador: solo ruido en A (el 0x3F de los FX
+        call  SNDREG           ; con el ruido A activado)
+        ld    a,8
+        ld    c,6              ; volumen bajo: es un clic ligero
+        call  SNDREG
+        ld    b,0
+kcl_a:  djnz  kcl_a            ; 2 x 256 vueltas, unos 2 ms
+        ld    b,0
+kcl_b:  djnz  kcl_b
+        ld    a,8
+        ld    c,0
+        call  SNDREG           ; y en silencio
+        pop   hl
+        pop   de
+        pop   bc
+        pop   af
+        ret
 
 ; ---------------------------------------------------------------------------
 ; Paginacion. TXT OUTPUT del firmware desplaza la ventana sin esperar a nadie:

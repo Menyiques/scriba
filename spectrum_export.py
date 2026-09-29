@@ -287,12 +287,21 @@ def recolecta(game):
                 for canon, syns in vocab_base.verbs(_lang, _vov).items()}
     c.verbalias = {}
     todos = dict(builtins)
+    # Las palabras de SALIDAS de serie: un verbo SALIR de los de antes (el de
+    # abandonar, hoy ACABAR) no se las lleva. En las maquinas, que comparan
+    # cuatro letras, SALIDAS y SALIR eran la misma palabra y acababan la partida.
+    _salidas = {translit(a[:5]).upper() for a in builtins.get('SALID', [])}
+    _salidas.add('SALID')
     for vkey, aliases in (game.get('vocabulary', {}).get('verbs') or {}).items():
         v5 = translit(vkey[:5]).upper()
         if v5 in DIRCANON:      # verbos de direccion del juego
             for a in [vkey] + list(aliases or []):
                 c.verbalias[translit(a[:5]).upper()] = c.verbid[DIRCANON[v5]]
             continue
+        if v5 in vocab_base.RENOMBRADOS:
+            v5 = vocab_base.RENOMBRADOS[v5]
+            aliases = [a for a in (aliases or [])
+                       if translit(a[:5]).upper() not in _salidas]
         todos.setdefault(v5, [])
         todos[v5] = list(todos[v5]) + list(aliases or [])
     for v5 in todos:
@@ -1316,7 +1325,7 @@ SUB builtins()
         verInfo()
         RETURN
     END IF
-    IF v = {c.verbid.get('SALIR', 0)} THEN
+    IF v = {c.verbid.get('ACABA', 0)} THEN
         pw("Abandonas la aventura.")
         gameOver()
         RETURN

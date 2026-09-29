@@ -15,9 +15,13 @@ no, se usan los del idioma. Los CANÓNICOS son identificadores internos estables
 
 # CANÓNICO -> {idioma: [sinónimos]}. El primer sinónimo suele ser la forma "bonita".
 VERBS = {
-    'EXAMI': {'es': ['examinar', 'examina', 'mirar', 'mira', 'ver', 'observar'],
-              'en': ['examine', 'x', 'inspect', 'look'],
-              'pt': ['examinar', 'examina', 'olhar', 'ver', 'observar']},
+    # EX: la abreviatura de siempre de EXAMINAR (y X en ingles). Es una palabra
+    # entera, no un prefijo: el motor compara cuatro/cinco letras rellenando con
+    # espacios, asi que EX no se confunde con EXPLO(SIVO) ni con nada que
+    # empiece igual.
+    'EXAMI': {'es': ['examinar', 'examina', 'ex', 'mirar', 'mira', 'ver', 'observar'],
+              'en': ['examine', 'ex', 'x', 'inspect', 'look'],
+              'pt': ['examinar', 'examina', 'ex', 'olhar', 'ver', 'observar']},
     'COGER': {'es': ['coger', 'coge', 'tomar', 'toma', 'agarrar', 'recoger'],
               'en': ['take', 'get', 'grab', 'pick'],
               'pt': ['apanhar', 'apanha', 'pegar', 'agarrar', 'tomar']},
@@ -42,9 +46,18 @@ VERBS = {
     'PUNT':  {'es': ['puntos', 'puntuacion', 'score'],
               'en': ['score', 'points'],
               'pt': ['pontos', 'pontuacao', 'score']},
-    'SALIR': {'es': ['salir', 'abandonar', 'quit'],
-              'en': ['quit', 'exit', 'abandon'],
-              'pt': ['sair', 'abandonar', 'quit']},
+    # SALIDAS: dice por donde se puede ir, sin describir otra vez la sala. En
+    # estos juegos SALIR/EXIT es casi siempre eso ("¿por donde salgo?"), asi que
+    # van aqui y no en ACABAR: antes eran el verbo de abandonar, y en las
+    # maquinas, que comparan cuatro letras, SALIDAS (SALI) acababa la partida.
+    'SALID': {'es': ['salidas', 'salida', 'salir', 'exits', 'exit'],
+              'en': ['exits', 'exit'],
+              'pt': ['saidas', 'saida', 'sair', 'exits', 'exit']},
+    # ACABAR: abandonar la partida. Hasta la 3.0 su canonico era SALIR (y un
+    # verbo SALIR en el vocabulario de un juego se sigue tomando por este).
+    'ACABA': {'es': ['acabar', 'abandonar', 'fin', 'quit'],
+              'en': ['quit', 'abandon'],
+              'pt': ['acabar', 'abandonar', 'fim', 'quit']},
     'ABRIR': {'es': ['abrir', 'abre'],
               'en': ['open'],
               'pt': ['abrir', 'abre']},
@@ -89,7 +102,8 @@ PREPS = {
 LABELS = {
     'EXAMI': 'Examinar', 'COGER': 'Coger', 'DEJAR': 'Dejar', 'PONER': 'Ponerse',
     'QUITA': 'Quitarse', 'METER': 'Meter', 'SACAR': 'Sacar', 'INVEN': 'Inventario',
-    'PUNT': 'Puntuación', 'SALIR': 'Salir', 'ABRIR': 'Abrir', 'CERRA': 'Cerrar',
+    'PUNT': 'Puntuación', 'SALID': 'Salidas', 'ACABA': 'Acabar', 'ABRIR': 'Abrir',
+    'CERRA': 'Cerrar',
     'N': 'Norte', 'S': 'Sur', 'E': 'Este', 'O': 'Oeste', 'U': 'Arriba', 'D': 'Abajo',
     'EN': 'en / in', 'CON': 'con / with', 'A': 'a / to', 'DE': 'de / from',
     'SOBRE': 'sobre / on', 'BAJO': 'bajo / under', 'PARA': 'para / for',
@@ -117,9 +131,14 @@ def _corta5(lst):
     return out
 
 
+# Canonicos que han cambiado de nombre: los overrides de metadata['vocab_base']
+# y los verbos del vocabulario de un juego con el nombre viejo valen por el nuevo.
+RENOMBRADOS = {'SALIR': 'ACABA'}
+
+
 def _group(table, lang, overrides):
     lang = norm_lang(lang)
-    ov = overrides or {}
+    ov = {RENOMBRADOS.get(k, k): v for k, v in (overrides or {}).items()}
     out = {}
     for canon, bylang in table.items():
         if canon in ov and ov[canon]:

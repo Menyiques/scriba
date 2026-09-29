@@ -57,6 +57,13 @@ cada plataforma resuelve a su manera:
   salvo `TXTO` y `KMW`, que son rutinas de `CPC_PLAT_ASM`: paginan el texto
   (esperan tecla antes de que una línea sin leer se vaya por arriba, como
   `nxmas` en Next/MSX2) y llaman al firmware como `TXTFW`/`KMWFW`.
+  `read_line` llama a `KCLICK` con cada tecla aceptada (el clic al teclear): es
+  una rutina por máquina que conserva TODOS los registros -- Spectrum/Next en
+  `next_nativo.PLAT_ASM` (altavoz, con `nxbrd` para no tocar el borde), CPC en
+  `CPC_PLAT_ASM` (AY por `SNDREG`), MSX2 y PCW dentro de sus `KMREAD_*` (que
+  sustituyen el tramo `KMREAD..CASOPEN` del Next y se llevarían por delante la
+  del Spectrum). Una plataforma nueva tiene que definirla aunque sea con `ret`.
+  `verify_click.py` lo comprueba.
   El CPC no precarga las salas contiguas: mientras AMSDOS lee, el teclado no
   se atiende (se pierden letras), así que solo se lee de disco cuando el
   jugador ya espera (al entrar en la sala). Las pruebas de tiempos de disco,

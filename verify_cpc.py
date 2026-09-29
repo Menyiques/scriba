@@ -22,7 +22,8 @@ import z80
 
 _FW = (0xBB5A, 0xBB09, 0xBB06, 0xBC0E, 0xBC32, 0xBC38, 0xBB90, 0xBB96, 0xBD19,
        0xBB66, 0xBBA8, 0xBBAB, 0xBCEF, 0xBCD7, 0xBCDD, 0x8B00, 0x8B03, 0x8B06,
-       0xBC77, 0xBC83, 0xBC7A)
+       0xBC77, 0xBC83, 0xBC7A,
+       0xBD34)          # SNDREG: los efectos y el clic de las teclas
 
 
 def _build(game):
@@ -45,6 +46,12 @@ def _build(game):
     mem[dbaddr:dbaddr + len(db)] = db
     cpu = z80.Z80(mem)
     cpu.hook_call = {a: (lambda c: None) for a in _FW}
+    # TXTO cuenta las lineas para esperar tecla antes de que una sin leer se
+    # vaya por arriba (pagina): pregunta donde esta el cursor y como es la
+    # ventana. Aqui, el cursor arriba de una ventana de 25 filas: nunca pagina.
+    cpu.hook_call[0xBB78] = lambda c: (setattr(c, 'h', 1), setattr(c, 'l', 1))
+    cpu.hook_call[0xBB69] = lambda c: (setattr(c, 'h', 0), setattr(c, 'd', 79),
+                                       setattr(c, 'l', 0), setattr(c, 'e', 24))
     cpu.hook_call[sym['detect128']] = lambda c: None
     cpu.sp = 0xBFF0
     cpu.run(start=sym['init'])
@@ -61,6 +68,13 @@ def _run(cpu, mem, addr):
     n = 0
     while n < 400000 and cpu.pc != 0xBFFE:
         n += 1
+        if cpu.pc == 0xBB5A:
+            # TXTO acaba con un JP al TXT OUTPUT del firmware (cola de la
+            # rutina de pagina): hook_call solo ve los CALL, asi que aqui se
+            # hace el RET que haria el firmware
+            cpu.pc = mem[cpu.sp] | (mem[cpu.sp + 1] << 8)
+            cpu.sp += 2
+            continue
         cpu.step()
 
 

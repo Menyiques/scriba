@@ -467,6 +467,7 @@ nxmh:    defb 0            ; mascara AND del primer byte de pantalla
 nxml:    defb 0            ; mascara AND del segundo
 nxfil:   defb 0            ; contador de lineas de pixeles
 nxpcnt:  defb 0            ; lineas desplazadas desde la ultima pausa
+nxbrd:   defb 0            ; el color del borde puesto (KCLICK lo repone)
 nxritmo: defb 0            ; caracteres impresos en el barrido actual
 nxultimo: defb 255         ; slot de imagen que hay puesta (255 = ninguna)
 nxcaps:  defb 0            ; CAPS SHIFT pulsado en el ultimo escaneo
@@ -961,6 +962,7 @@ nxi_ink:
 SCRBORDER:
         call  nxcolor
         and   7
+        ld    (nxbrd),a
         out   (254),a
         ret
 
@@ -993,6 +995,7 @@ NXCOLT: defb 0,0,1,1,1,2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,5,5,5,6,6,6,7
 ; ---------------------------------------------------------------------------
 NXINIT:
         ld    a,NXBORDE
+        ld    (nxbrd),a
         out   (254),a
         ld    a,56             ; papel 7, tinta 0
         ld    (nxattr),a
@@ -1128,6 +1131,35 @@ NXKTAB:
         defb 'p','o','i','u','y'
         defb 13,'l','k','j','h'
         defb ' ',0,'m','n','b'
+
+; ---------------------------------------------------------------------------
+; KCLICK: un clic corto al aceptar una tecla de la linea de ordenes. La ROM del
+; Spectrum lo hace al teclear y este motor no usa la ROM: dos ciclos de unos
+; 2 kHz por el altavoz (bit 4 del puerto &FE), con el borde tal como esta
+; (nxbrd: en &FE el borde va en los mismos ocho bits). Conserva los registros.
+; ---------------------------------------------------------------------------
+KCLICK:
+        push  af
+        push  bc
+        push  de
+        ld    a,(nxbrd)
+        ld    e,a              ; E = borde
+        ld    d,2              ; dos ciclos
+kcl_c:  ld    a,e
+        or    16
+        out   (254),a          ; altavoz puesto
+        ld    b,60
+kcl_a:  djnz  kcl_a
+        ld    a,e
+        out   (254),a          ; y quitado: el borde, como estaba
+        ld    b,60
+kcl_b:  djnz  kcl_b
+        dec   d
+        jr    nz,kcl_c
+        pop   de
+        pop   bc
+        pop   af
+        ret
 
 ; ---------------------------------------------------------------------------
 ; Sin equivalente util en fase 1.

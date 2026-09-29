@@ -871,6 +871,23 @@ KEYTAB:
         defb  0,0,0,0,0,0,0,127                ; &FFF9 (el ultimo, <-DEL)
         defb  0,0,0,0,0,13,0,0                 ; &FFFA (ENTER del teclado numerico)
 
+; KCLICK: un clic corto al aceptar una tecla de la linea de ordenes. El PCW solo
+; tiene el pitido (bleeper) de puesto/quitado, comandos 11 y 12 del puerto
+; &F8: puesto un instante (~1 ms) es un clic, no un pitido. Conserva los
+; registros.
+KCLICK:
+        push  af
+        push  bc
+        ld    a,11
+        out   (&F8),a          ; pitido puesto
+        ld    b,0
+kcl_a:  djnz  kcl_a            ; 256 vueltas, ~1 ms a 4 MHz
+        ld    a,12
+        out   (&F8),a          ; pitido quitado
+        pop   bc
+        pop   af
+        ret
+
 '''
 
 MCWAIT_PCW = r'''MCWAIT:

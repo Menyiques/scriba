@@ -231,6 +231,38 @@ class GameSession:
         self._in_queue.put(None)
 
 
+# ─── Clic al teclear ─────────────────────────────────────────────────────────
+
+def clic_wav(hz=1500, ms=4, amp=28, rate=22050):
+    """Un WAV de 8 bits, mono y de unos 4 ms: un tic de tono corto que se apaga
+    solo, a poco volumen. Es el clic que hacen las máquinas de 8 bits al teclear
+    (el motor nativo lo lleva en cada una); aquí se genera una vez en memoria."""
+    import math
+    import struct
+    n = max(1, int(rate * ms / 1000))
+    datos = bytearray()
+    for i in range(n):
+        env = 1.0 - i / n                         # decae hasta cero
+        v = 128 + int(amp * env * math.sin(2 * math.pi * hz * i / rate))
+        datos.append(max(0, min(255, v)))
+    cab = (b'RIFF' + struct.pack('<I', 36 + len(datos)) + b'WAVEfmt ' +
+           struct.pack('<IHHIIHH', 16, 1, 1, rate, rate, 1, 8) +
+           b'data' + struct.pack('<I', len(datos)))
+    return bytes(cab) + bytes(datos)
+
+
+def hace_clic(wav):
+    """Suena el clic sin bloquear. Solo en Windows (winsound); en otro sitio, o
+    si falla, no hace nada: nunca puede estropear el juego."""
+    if sys.platform != 'win32' or not wav:
+        return
+    try:
+        import winsound
+        winsound.PlaySound(wav, winsound.SND_MEMORY | winsound.SND_ASYNC)
+    except Exception:
+        pass
+
+
 # ─── Imágenes ────────────────────────────────────────────────────────────────
 
 def buscar_imagen(img_dir, loc_id):
@@ -329,6 +361,14 @@ def main(argv=None):
 
     btn.configure(command=_enviar)
     ent.bind('<Return>', _enviar)
+
+    _wav_clic = clic_wav()
+
+    def _tecla(e):
+        # letras, borrar y ENTER: no las teclas que solo modifican (Shift...)
+        if e.char or e.keysym in ('BackSpace', 'Delete', 'Return', 'KP_Enter'):
+            hace_clic(_wav_clic)
+    ent.bind('<KeyPress>', _tecla, add='+')
 
     def _set_imagen(loc_id):
         if _img_ref['loc'] == loc_id:

@@ -830,6 +830,31 @@ ns_l:   di
         pop   bc
         ret
 
+; ---------------------------------------------------------------------------
+; KCLICK: un clic corto al aceptar una tecla de la linea de ordenes. El bit 7
+; del puerto C del PPI es el "click" del MSX (el del teclado de la BIOS): se
+; pone y se quita con el modo de bit del puerto de control (&AB: &0F puesto,
+; &0E quitado), dos ciclos de unos 2 kHz. No toca las filas del teclado (bits
+; 0-3) ni el resto del puerto. Conserva los registros.
+; ---------------------------------------------------------------------------
+KCLICK:
+        push  af
+        push  bc
+        ld    c,2              ; dos ciclos
+kcl_c:  ld    a,&0F
+        out   (&AB),a          ; click puesto
+        ld    b,60
+kcl_a:  djnz  kcl_a
+        ld    a,&0E
+        out   (&AB),a          ; y quitado
+        ld    b,60
+kcl_b:  djnz  kcl_b
+        dec   c
+        jr    nz,kcl_c
+        pop   bc
+        pop   af
+        ret
+
 '''
 
 # TXTPAGE: A = banco -> la pagina 1. El registro de ASCII16 para &4000-&7FFF
