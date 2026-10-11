@@ -550,9 +550,12 @@ máquina (pero **no comprueba la suma**; la del cargador la asegura un `assert`)
 
 ## Estado
 
-Rama de trabajo: `fix/predicados-objeto-v2.44`. Scriba 2.8.
+Rama de trabajo: `master`. Scriba 3.0, publicada el 12/10/2026 como
+`Scriba v3.0.zip` (lo monta `build_exe.bat`; ver «Dos registros de cambios»).
+Siete destinos nativos (48K, 128K, Next, CPC Modo 1 y 2, MSX2, PCW 8256/8512)
+más Windows, y cinco idiomas de serie (es, en, pt, ca, fr).
 
-**Boriel se ha ido** (v2.54). Las cuatro máquinas salen del motor nativo Z80 y
+**Boriel se ha ido** (v2.54). Todas las máquinas salen del motor nativo Z80 y
 no hay otro camino: se borraron `next_export.py`, `cpc_export.py`,
 `empaqueta_cpc.py`, `empaqueta_nextap.py`, `construye_nextap.py`,
 `empaqueta48.py` y `build_nextap.bat`, y con ellos el submenú «Exportaciones
