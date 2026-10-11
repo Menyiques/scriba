@@ -542,11 +542,15 @@ class ScribaEditor:
                        command=lambda: self._export_pcw_nativo('8512'))
         fm.add_command(label="Exportar para Windows (.exe)…",
                        command=self._export_windows)
+        fm.add_command(label="Exportar todos los idiomas y máquinas…",
+                       command=self._export_todo)
         fm.add_separator()
         fm.add_command(label="Exportar literales para traducir (CSV)…",
                        command=self._export_literales)
         fm.add_command(label="Importar literales traducidos (CSV → YAML)…",
                        command=self._import_literales)
+        fm.add_command(label="Importar DAAD (.ddb → YAML)…",
+                       command=self._import_daad)
         fm.add_separator()
         self._zx_cols = tk.IntVar(value=42)
         cm = tk.Menu(fm, tearoff=0)
@@ -896,6 +900,9 @@ class ScribaEditor:
             ("Autor",            "author",         False),
             ("Versión",          "version",        False),
             ("Idioma",           "language",       False),
+            # el principio del nombre de lo que se exporta a dist/ (vacio = el
+            # del .yaml): DAS-BOOT -> DAS-BOOT_128kb_es.tap, DAS-BOOT_next_en.nex
+            ("Nombre de los ficheros", "nombre_export", False),
             ("Start location",   "start_location", False),
             ("Puntuación máx",   "max_score",      False),
             ("Mensaje inicial",  "start_message",  True),
@@ -914,14 +921,17 @@ class ScribaEditor:
                 w.grid(row=i, column=1, sticky=tk.EW, padx=4, pady=2)
             self._meta_w[key] = w
 
-        # Combo del color de BORDE: se fija en el cargador BASIC (loader) del TAP.
+        # Combo del color de BORDE: el del cargador y el del arranque del juego en
+        # todas las maquinas con borde (48K, 128K, Next, CPC, MSX2). Un BORDER
+        # en el on_start lo cambia despues. Se aplica al elegirlo.
         brow = len(fields)
-        ttk.Label(fr, text="Borde (loader):").grid(row=brow, column=0, sticky=tk.NW,
-                                                   padx=8, pady=4)
+        ttk.Label(fr, text="Borde:").grid(row=brow, column=0, sticky=tk.NW,
+                                          padx=8, pady=4)
         self._border_var = tk.StringVar(value=self._BORDER_NOMBRES[0])
-        ttk.Combobox(fr, textvariable=self._border_var, state='readonly',
-                     values=self._BORDER_NOMBRES, width=20).grid(
-                         row=brow, column=1, sticky=tk.W, padx=4, pady=2)
+        cb_borde = ttk.Combobox(fr, textvariable=self._border_var, state='readonly',
+                                values=self._BORDER_NOMBRES, width=20)
+        cb_borde.grid(row=brow, column=1, sticky=tk.W, padx=4, pady=2)
+        cb_borde.bind('<<ComboboxSelected>>', self._border_elegido)
 
         mbtn = ttk.Frame(fr)
         mbtn.grid(row=brow + 1, column=0, columnspan=2, pady=8, sticky=tk.W)
@@ -944,8 +954,20 @@ class ScribaEditor:
                   text="128K: img/Spectrum/screen.scr o .jpg/.bmp (o Original)"
                        "\nNext: img/Original/screen.png|jpg"
                   ).pack(anchor=tk.W)
+        # ── debajo, la imagen de la presentación: la tira intro.* o, si no la
+        #    hay, la de la sala inicial, que es la que sale entonces ──
+        ttk.Label(mfr, text="Imagen de la presentación (intro):").pack(
+            anchor=tk.W, pady=(12, 0))
+        self.intro_img_canvas = tk.Canvas(mfr, width=256, height=64,
+                                          bg="#000000", highlightthickness=1,
+                                          highlightbackground="#44556a")
+        self.intro_img_canvas.pack(pady=4)
+        self.intro_img_nota = ttk.Label(mfr, foreground='#667788',
+                                        justify=tk.LEFT, wraplength=260)
+        self.intro_img_nota.pack(anchor=tk.W)
         fr.columnconfigure(1, weight=1)
         self._refresh_menu_img()
+        self._refresh_intro_img()
 
     # ─── Tab: Localización ─────────────────────────────────────────────────
 
@@ -2466,6 +2488,7 @@ class ScribaEditor:
             self._refresh_loc_img(lid)
         try:
             self._refresh_menu_img()
+            self._refresh_intro_img()
         except Exception:
             pass
 
@@ -2671,6 +2694,97 @@ class ScribaEditor:
         img.put(' '.join('{' + ' '.join(f) + '}' for f in filas))
         cv.create_image(0, 0, anchor=tk.NW, image=img)
         self.menu_img_photo = img
+
+    def _intro_path(self):
+        """(ruta, propio) de la imagen de la presentacion que usara la
+        plataforma de preview, o (None, False). Busca como los exportadores:
+        en 128K, img/Spectrum (tambien .scr) y luego el master de img/Original;
+        en Next, img/Original (el editor la convierte a .nxi al exportar).
+        'propio' = esta en la carpeta de la maquina, no en Original."""
+        if not self.filepath:
+            return None, False
+        base = os.path.join(os.path.dirname(os.path.abspath(self.filepath)), 'img')
+        if self._plat() != 'next':
+            p = self._busca_img(os.path.join(base, 'Spectrum'), 'intro',
+                                ('.scr',) + IMG_ZX_EXT)
+            if p:
+                return p, True
+        return self._busca_img(os.path.join(base, 'Original'), 'intro',
+                               ('.png', '.jpg', '.jpeg')), False
+
+    def _tira_preview(self, path, propio):
+        """(filas, None) con la tira 256x64 de path tal como saldra en la
+        plataforma de preview, o (None, motivo) si no vale como tira."""
+        if path.lower().endswith('.scr'):
+            try:
+                with open(path, 'rb') as f:
+                    raw = f.read()
+            except OSError as e:
+                return None, str(e)
+            if len(raw) == 6912:
+                return None, 'es de pantalla entera'
+            filas = self._scr_top_third(raw)
+            return (filas, None) if filas else (None, 'mide %d bytes' % len(raw))
+        try:
+            from PIL import Image
+            with Image.open(path) as im:
+                an, al = im.size
+        except Exception as e:
+            return None, str(e)
+        r = an / float(al or 1)
+        if abs(r - 4.0 / 3.0) < abs(r - 4.0):
+            return None, 'es de pantalla entera (%dx%d)' % (an, al)
+        if self._plat() != 'next':
+            # 128K: la conversion dithered, como la del export (el arte de
+            # img/Spectrum va sin autocontraste; el master de Original, con el)
+            try:
+                import png2spectrum
+                bmp, att = png2spectrum.to_scr_topthird(path, contrast=not propio)
+                return self._scr_top_third(bytes(bmp) + bytes(att)), None
+            except Exception:
+                pass
+        return self._img_top_third(path), None
+
+    def _refresh_intro_img(self):
+        """Previsualiza, debajo de la de menu, la imagen de la presentacion: la
+        tira intro.* como saldra en la plataforma elegida o, si no la hay (o es
+        de pantalla entera, que se ignora), la de la sala inicial, que es la que
+        sale entonces."""
+        cv = getattr(self, 'intro_img_canvas', None)
+        if cv is None:
+            return
+        cv.delete('all')
+        self.intro_img_photo = None
+        nota = getattr(self, 'intro_img_nota', None)
+        path, propio = self._intro_path()
+        filas, texto = None, ''
+        if path:
+            rel = '/'.join(os.path.normpath(path).split(os.sep)[-2:])
+            filas, motivo = self._tira_preview(path, propio)
+            if filas:
+                texto = 'img/%s: sale con el mensaje inicial.' % rel
+            else:
+                texto = 'img/%s %s: se ignora.' % (rel, motivo)
+        if not filas:
+            ini = str((self.game.get('metadata') or {}).get('start_location') or '')
+            p = self._img_file_for(ini) if ini else None
+            if p:
+                d, _ = self._img_dir_loc()
+                prop = bool(d and os.path.dirname(os.path.abspath(p))
+                            == os.path.abspath(d))
+                filas, _m = self._tira_preview(p, prop)
+            texto = ((texto + ' ') if texto else 'Sin intro.png|jpg (tira 4:1). ') + \
+                'Sale la de la sala inicial (%s).' % (ini or '?')
+        if nota is not None:
+            nota.configure(text=texto)
+        if not filas:
+            cv.create_text(128, 32, text='(sin imagen)', fill='#5a7a9a',
+                           font=self.fnt_ui)
+            return
+        img = tk.PhotoImage(width=256, height=64)
+        img.put(' '.join('{' + ' '.join(f) + '}' for f in filas))
+        cv.create_image(0, 0, anchor=tk.NW, image=img)
+        self.intro_img_photo = img
 
     def _redraw(self):
         self.canvas.delete("all")
@@ -3670,6 +3784,7 @@ class ScribaEditor:
             b = 0
         self._border_var.set(self._BORDER_NOMBRES[max(0, min(7, b))])
         self._refresh_menu_img()      # preview de la imagen de menu/titulo
+        self._refresh_intro_img()     # ...y la de la presentacion, debajo
 
     def _dialog_mensajes(self):
         """Editor de los mensajes del sistema del motor (para multiidioma). Los
@@ -3872,6 +3987,11 @@ class ScribaEditor:
             if key == "max_score":
                 try: val = int(val)
                 except ValueError: val = 0
+            if key == "nombre_export":
+                val = self._nombre_fichero(val)
+                if not val:                 # vacio: el nombre del .yaml
+                    meta.pop(key, None)
+                    continue
             meta[key] = val
         try:
             meta['border'] = int(self._border_var.get().split(' ')[0])
@@ -3880,6 +4000,25 @@ class ScribaEditor:
         self.dirty = True
         self.sv_status.set("Metadata guardada.")
         self._run_validation()
+
+    def _border_elegido(self, _ev=None):
+        """El combo del borde va directo a la metadata: si no, exportar sin pulsar
+        'Aplicar metadata' compilaba con el borde de antes."""
+        try:
+            b = int(self._border_var.get().split(' ')[0])
+        except (ValueError, IndexError):
+            return
+        meta = self.game.setdefault("metadata", {})
+        if meta.get('border') != b:
+            meta['border'] = b
+            self.dirty = True
+        on_start = str((self.game.get('condacts') or {}).get('on_start') or '')
+        m = re.search(r'(?mi)^\s*BORDER\s+(\d+)', on_start)
+        if m and (int(m.group(1)) & 7) != b:
+            self.sv_status.set("Borde %d. Ojo: el on_start pone BORDER %s y lo cambia "
+                               "al empezar la partida." % (b, m.group(1)))
+        else:
+            self.sv_status.set("Borde %d." % b)
 
     # ── Objetos ──
 
@@ -5509,6 +5648,50 @@ class ScribaEditor:
         self._redraw()
         self.root.title('Scriba ' + SCRIBA_VERSION)
 
+    def _import_daad(self):
+        """Convierte una base de datos DAAD (.ddb) en un juego de Scriba y lo
+        abre. Lo que no tiene equivalente queda como REM; el informe lo cuenta."""
+        src = filedialog.askopenfilename(
+            title='Importar base de datos DAAD',
+            filetypes=[('DAAD', '*.ddb'), ('Todos', '*.*')])
+        if not src:
+            return
+        base = simpledialog.askstring(
+            'Importar DAAD',
+            'Direccion de carga del .ddb (vacio = deducirla).\n'
+            'Ejemplos: 0x8400 (Spectrum), 0x0000 (PC).', parent=self.root)
+        dst = filedialog.asksaveasfilename(
+            title='Guardar el juego importado', defaultextension='.yaml',
+            initialfile=os.path.splitext(os.path.basename(src))[0] + '.yaml',
+            filetypes=[('YAML', '*.yaml')])
+        if not dst:
+            return
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+            if here not in sys.path:
+                sys.path.insert(0, here)
+            import ddb2scriba
+            juego, inf, x = ddb2scriba.importa(
+                src, int(base, 0) if base and base.strip() else None)
+            with open(dst, 'w', encoding='utf-8') as f:
+                yaml.safe_dump(juego, f, allow_unicode=True, sort_keys=False,
+                               width=100)
+        except Exception as e:
+            messagebox.showerror('Importar DAAD', str(e))
+            return
+        self._do_open(dst)
+        msg = ('DAAD %d (%s, %s): %d localizaciones, %d objetos, %d mensajes.\n'
+               'Condacts traducidos: %d · aproximados: %d · sin equivalente: %d\n'
+               % (x.version, x.maquina, x.idioma, x.nloc, x.nobj, x.nmsg,
+                  inf['traducidos'], inf['aproximados'], inf['sin_equivalente']))
+        if inf['detalle_sin_equivalente']:
+            msg += '\nSin equivalente (quedan como REM):\n' + ', '.join(
+                '%s ×%d' % kv for kv in inf['detalle_sin_equivalente'].items())
+        if inf['detalle_aproximados']:
+            msg += '\n\nAproximados (revisar):\n' + ', '.join(
+                '%s ×%d' % kv for kv in inf['detalle_aproximados'].items())
+        messagebox.showinfo('Importar DAAD', msg)
+
     def _open_file(self):
         path = filedialog.askopenfilename(
             title='Abrir juego Scriba',
@@ -5867,19 +6050,44 @@ class ScribaEditor:
             return raiz, os.path.join(raiz, 'dist')
         return d, d                                                 # layout antiguo
 
-    def _dist_name(self, base, plataforma, ext):
+    _SUFIJOS_IDIOMA = ('_es', '_en', '_pt', '_ca', '_fr', '_pt-pt', '_por', '_cat', '_fra')
+
+    @classmethod
+    def _sin_idioma(cls, nombre):
+        """'apolo11_en' -> 'apolo11': el nombre del juego sin sufijo de idioma."""
+        for suf in cls._SUFIJOS_IDIOMA:
+            if nombre.lower().endswith(suf):
+                return nombre[:-len(suf)]
+        return nombre
+
+    @staticmethod
+    def _codigo_idioma(lang):
+        """Codigo corto del idioma (es/en/pt/ca/fr, como vocab_base.norm_lang);
+        uno que Scriba no conoce (de, it...) se queda como esta, no como 'es'."""
+        import vocab_base
+        s = str(lang or 'es').strip().lower()
+        n = vocab_base.norm_lang(s)
+        if n != 'es' or s.startswith(('es', 'cas', 'spa')):
+            return n
+        return re.sub(r'[^a-z]', '', s)[:3] or 'es'
+
+    @staticmethod
+    def _nombre_fichero(s):
+        """Lo que se puede poner en un nombre de fichero de Windows."""
+        s = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '', str(s or ''))
+        return s.strip().strip('.').strip()
+
+    def _dist_name(self, base, plataforma, ext, lang=None):
         """Nombre de distribución: {juego}_{plataforma}_{idioma}.{ext}.
-        'base' es el nombre del .bas/.dsk (p.ej. 'apolo11_en'); se le quita el
-        sufijo de idioma si lo lleva y se usa metadata['language'] (es/en/pt)."""
-        lng = str((self.game.get('metadata') or {}).get('language') or 'es').strip().lower()
-        lang = ('pt' if lng.startswith(('pt', 'por'))
-                else 'en' if lng.startswith('en') else 'es')
-        juego = base
-        for suf in ('_es', '_en', '_pt', '_pt-pt', '_por'):
-            if juego.lower().endswith(suf):
-                juego = juego[:-len(suf)]
-                break
-        return '%s_%s_%s.%s' % (juego, plataforma, lang, ext)
+        {juego} es metadata['nombre_export'] si el juego lo trae (Metadatos,
+        «Nombre de los ficheros»); si no, 'base', el nombre del .yaml (p.ej.
+        'apolo11_en'), sin el sufijo de idioma si lo lleva. El idioma es 'lang'
+        o, sin el, metadata['language'] del juego abierto."""
+        meta = self.game.get('metadata') or {}
+        if lang is None:
+            lang = meta.get('language')
+        juego = self._nombre_fichero(meta.get('nombre_export')) or self._sin_idioma(base)
+        return '%s_%s_%s.%s' % (juego, plataforma, self._codigo_idioma(lang), ext)
 
     def _dir_juego(self, sub):
         """Subcarpeta <raiz>/<sub> del juego, creandola si falta (o None)."""
@@ -6097,23 +6305,8 @@ class ScribaEditor:
             pass
 
         import threading
-        import zipfile
         import re as _re
-        # El reproductor: el propio Scriba.exe que esta corriendo (hace de
-        # reproductor cuando lleva un juego pegado). Desde el codigo fuente no
-        # hay .exe que copiar: vale uno compilado en dist/ o un ScribaPlayer.exe.
-        here = (os.path.dirname(sys.executable) if getattr(sys, 'frozen', False)
-                else os.path.dirname(os.path.abspath(__file__)))
-        cand = []
-        if getattr(sys, 'frozen', False):
-            cand.append(sys.executable)
-        cand += [os.path.join(here, 'dist', 'Scriba.exe'),
-                 os.path.join(here, 'dist', 'Scriba_v_%s.exe'
-                              % SCRIBA_VERSION.replace('.', '_')),
-                 os.path.join(here, 'ScribaPlayer.exe'),
-                 os.path.join(os.path.dirname(here), 'ScribaPlayer.exe'),
-                 os.path.join(here, 'dist', 'ScribaPlayer.exe')]
-        player_exe = next((c for c in cand if os.path.isfile(c)), None)
+        player_exe = self._player_exe()
         if not player_exe:
             messagebox.showerror(
                 'Exportar para Windows',
@@ -6162,27 +6355,8 @@ class ScribaEditor:
                     importlib.reload(scriba_pack)
                 game = copy.deepcopy(self.game)
                 game.pop('_editor', None)
-                orig = os.path.join(game_dir, 'img', 'Original')
-                bloque = scriba_pack.empaqueta(
-                    game, orig if os.path.isdir(orig) else None, titulo=title)
-                os.makedirs(distdir, exist_ok=True)
-                scriba_pack.pega(player_exe, exe_path, bloque)
-                # Comprobacion: el .exe recien hecho tiene que devolver el juego
-                # y conservar la cabecera que busca el arranque de PyInstaller.
-                leido = scriba_pack.lee_de(exe_path)
-                if not leido or not leido[0].get('locations'):
-                    raise RuntimeError('el .exe no devuelve el juego al releerlo')
-                with open(exe_path, 'rb') as f:
-                    if scriba_pack.MAGIC_PYI not in f.read():
-                        raise RuntimeError(
-                            'el .exe de origen no parece un ejecutable de '
-                            'PyInstaller: no lleva su cabecera')
-                if os.path.isfile(zip_path):
-                    os.remove(zip_path)
-                with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
-                    z.write(exe_path, safe + '.exe')
-                info = {'bloque': len(bloque), 'exe': os.path.getsize(exe_path),
-                        'imgs': len(leido[1])}
+                info = self._empaqueta_windows(game, title, player_exe, game_dir,
+                                               exe_path, zip_path, safe + '.exe')
             except Exception as e:
                 err = str(e)
 
@@ -6214,6 +6388,55 @@ class ScribaEditor:
             self.root.after(0, _fin)
 
         threading.Thread(target=trabajo, daemon=True).start()
+
+    @staticmethod
+    def _player_exe():
+        """El reproductor de Windows: el propio Scriba.exe que esta corriendo
+        (hace de reproductor cuando lleva un juego pegado). Desde el codigo
+        fuente no hay .exe que copiar: vale uno compilado en dist/ o un
+        ScribaPlayer.exe de los de antes. None si no hay ninguno."""
+        here = (os.path.dirname(sys.executable) if getattr(sys, 'frozen', False)
+                else os.path.dirname(os.path.abspath(__file__)))
+        cand = []
+        if getattr(sys, 'frozen', False):
+            cand.append(sys.executable)
+        cand += [os.path.join(here, 'dist', 'Scriba.exe'),
+                 os.path.join(here, 'dist', 'Scriba_v_%s.exe'
+                              % SCRIBA_VERSION.replace('.', '_')),
+                 os.path.join(here, 'ScribaPlayer.exe'),
+                 os.path.join(os.path.dirname(here), 'ScribaPlayer.exe'),
+                 os.path.join(here, 'dist', 'ScribaPlayer.exe')]
+        return next((c for c in cand if os.path.isfile(c)), None)
+
+    @staticmethod
+    def _empaqueta_windows(game, title, player_exe, game_dir, exe_path, zip_path,
+                           nombre_en_zip):
+        """Pega el juego (texto e img/Original, cifrado) detras del reproductor
+        en exe_path, comprueba que se relee bien y lo mete en zip_path con el
+        nombre nombre_en_zip. Devuelve {'bloque', 'exe', 'imgs'}."""
+        import zipfile
+        import scriba_pack
+        orig = os.path.join(game_dir, 'img', 'Original')
+        bloque = scriba_pack.empaqueta(
+            game, orig if os.path.isdir(orig) else None, titulo=title)
+        os.makedirs(os.path.dirname(exe_path), exist_ok=True)
+        scriba_pack.pega(player_exe, exe_path, bloque)
+        # Comprobacion: el .exe recien hecho tiene que devolver el juego
+        # y conservar la cabecera que busca el arranque de PyInstaller.
+        leido = scriba_pack.lee_de(exe_path)
+        if not leido or not leido[0].get('locations'):
+            raise RuntimeError('el .exe no devuelve el juego al releerlo')
+        with open(exe_path, 'rb') as f:
+            if scriba_pack.MAGIC_PYI not in f.read():
+                raise RuntimeError(
+                    'el .exe de origen no parece un ejecutable de '
+                    'PyInstaller: no lleva su cabecera')
+        if os.path.isfile(zip_path):
+            os.remove(zip_path)
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
+            z.write(exe_path, nombre_en_zip)
+        return {'bloque': len(bloque), 'exe': os.path.getsize(exe_path),
+                'imgs': len(leido[1])}
 
 
     def _ventana_resultado(self, titulo, msg, path, presupuesto='',
@@ -6422,6 +6645,8 @@ class ScribaEditor:
         try:
             import capabilities
             pantallas = {n.lower() for n in capabilities.used_scr(self.game)}
+            # y la imagen de la presentacion, si el juego la trae
+            pantallas.add(capabilities.INTRO)
         except Exception:
             pantallas = set()
         exts = ('.png', '.jpg', '.jpeg')
@@ -6488,7 +6713,7 @@ class ScribaEditor:
             return
         es128 = (str(modelo) == '128')
         etiqueta = 'ZX Spectrum %sK' % ('128' if es128 else '48')
-        plat = '128kb_nativo' if es128 else '48kb_nativo'
+        plat = '128kb' if es128 else '48kb'
         destino = 'spectrum128' if es128 else 'spectrum48'
         name = os.path.splitext(os.path.basename(self.filepath))[0]
         path = os.path.join(distdir, self._dist_name(name, plat, 'tap'))
@@ -6685,6 +6910,8 @@ class ScribaEditor:
                     msg += 'Música: no (nada en music/)\n'
                 if info.get('aviso_psg'):
                     msg += 'Aviso: %s\n' % info['aviso_psg']
+                if info.get('aviso_intro'):
+                    msg += 'Aviso: %s\n' % info['aviso_intro']
                 if lineas:
                     msg += '\n\n' + chr(10).join(lineas[:1])
                 adv = self._aviso_caps(game, 'next')
@@ -6924,6 +7151,364 @@ class ScribaEditor:
             self.root.after(0, _fin)
 
         threading.Thread(target=trabajo, daemon=True).start()
+
+    # ── Exportar todo: cada idioma en cada maquina ─────────────────────────
+    _MAQUINAS_TODO = (
+        ('48', 'ZX Spectrum 48K'),
+        ('128', 'ZX Spectrum 128K'),
+        ('next', 'ZX Spectrum Next'),
+        ('cpc1', 'Amstrad CPC, Modo 1'),
+        ('cpc2', 'Amstrad CPC, Modo 2'),
+        ('msx2', 'MSX2'),
+        ('pcw', 'Amstrad PCW 8256'),
+        ('pcw8512', 'Amstrad PCW 8512'),
+        ('windows', 'Windows (.exe)'),
+    )
+    _NOMBRE_IDIOMA = {'es': 'Español', 'en': 'English', 'pt': 'Português',
+                      'ca': 'Català', 'fr': 'Français'}
+
+    def _idiomas_disponibles(self):
+        """[(codigo, origen, ruta)] de los idiomas en que se puede exportar el
+        juego abierto: el suyo ('juego'); uno por cada CSV traducido
+        <nombre>_textos_<idioma>.csv junto al YAML ('csv'), que se aplica al
+        juego tal como esta en el editor; y, de los idiomas sin CSV, los YAML
+        hermanos <nombre>_<idioma>.yaml ('yaml'), como los de apolo11."""
+        name = os.path.splitext(os.path.basename(self.filepath))[0]
+        raiz = self._sin_idioma(name)
+        carpeta = os.path.dirname(os.path.abspath(self.filepath))
+        propio = self._codigo_idioma((self.game.get('metadata') or {}).get('language'))
+        out, vistos = [(propio, 'juego', None)], {propio}
+        ficheros = sorted(os.listdir(carpeta))
+        pat = re.compile(re.escape(name) + r'_textos_([A-Za-z-]{2,6})\.csv$', re.I)
+        for fn in ficheros:
+            m = pat.match(fn)
+            if m and self._codigo_idioma(m.group(1)) not in vistos:
+                vistos.add(self._codigo_idioma(m.group(1)))
+                out.append((self._codigo_idioma(m.group(1)), 'csv',
+                            os.path.join(carpeta, fn)))
+        yo = os.path.normcase(os.path.abspath(self.filepath))
+        pat = re.compile(re.escape(raiz) + r'(_[A-Za-z-]{2,6})?\.ya?ml$', re.I)
+        for fn in ficheros:
+            ruta = os.path.join(carpeta, fn)
+            if not pat.match(fn) or os.path.normcase(os.path.abspath(ruta)) == yo:
+                continue
+            try:
+                with open(ruta, encoding='utf-8') as f:
+                    m = re.search(r'(?m)^\s+language:\s*[\'"]?([A-Za-z-]+)', f.read())
+            except OSError:
+                continue
+            cod = self._codigo_idioma(m.group(1) if m else 'es')
+            if cod not in vistos:
+                vistos.add(cod)
+                out.append((cod, 'yaml', ruta))
+        return out
+
+    def _export_todo(self):
+        """Archivo > Exportar todos los idiomas y maquinas: elige idiomas y
+        maquinas (todo marcado de entrada) y lo exporta todo a dist/."""
+        self._commit_active_code_view()
+        if not self.game.get('locations'):
+            messagebox.showinfo('Exportar', 'Abre o crea un juego primero.')
+            return
+        if not self.filepath:
+            messagebox.showinfo('Exportar', 'Guarda el juego (.yaml) primero.')
+            return
+        idiomas = self._idiomas_disponibles()
+
+        win = tk.Toplevel(self.root)
+        win.title('Exportar todos los idiomas y máquinas')
+        win.transient(self.root)
+        win.grab_set()
+        win.resizable(False, False)
+        cuerpo = ttk.Frame(win, padding=14)
+        cuerpo.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(cuerpo, justify=tk.LEFT, wraplength=520,
+                  text='Cada idioma marcado se exporta a cada máquina marcada, '
+                       'todo a la carpeta dist/ del juego. Los idiomas con CSV '
+                       'se traducen del juego tal como está ahora en el '
+                       'editor.').pack(anchor=tk.W, pady=(0, 10))
+        fi = ttk.LabelFrame(cuerpo, text='Idiomas', padding=8)
+        fi.pack(fill=tk.X)
+        v_idiomas = []
+        for cod, origen, ruta in idiomas:
+            de = ('el juego abierto' if origen == 'juego'
+                  else 'traducción de ' + os.path.basename(ruta) if origen == 'csv'
+                  else os.path.basename(ruta))
+            txt = '%s (%s) — %s' % (self._NOMBRE_IDIOMA.get(cod, cod), cod, de)
+            v = tk.BooleanVar(value=True)
+            ttk.Checkbutton(fi, text=txt, variable=v).pack(anchor=tk.W)
+            v_idiomas.append(((cod, origen, ruta), v))
+        fm = ttk.LabelFrame(cuerpo, text='Máquinas', padding=8)
+        fm.pack(fill=tk.X, pady=(10, 0))
+        antes = getattr(self, '_todo_maquinas', None)    # lo elegido la ultima vez
+        v_maquinas = []
+        for i, (clave, etiqueta) in enumerate(self._MAQUINAS_TODO):
+            v = tk.BooleanVar(value=antes is None or clave in antes)
+            ttk.Checkbutton(fm, text=etiqueta, variable=v).grid(
+                row=i // 3, column=i % 3, sticky=tk.W, padx=(0, 18))
+            v_maquinas.append(((clave, etiqueta), v))
+
+        def exportar():
+            ids = [x for x, v in v_idiomas if v.get()]
+            maqs = [x for x, v in v_maquinas if v.get()]
+            if not ids or not maqs:
+                messagebox.showinfo('Exportar', 'Marca al menos un idioma y una máquina.',
+                                    parent=win)
+                return
+            self._todo_maquinas = {c for c, _e in maqs}
+            win.destroy()
+            self._export_todo_lanza(ids, maqs)
+
+        botones = ttk.Frame(cuerpo)
+        botones.pack(fill=tk.X, pady=(12, 0))
+        ttk.Button(botones, text='Cancelar', command=win.destroy).pack(side=tk.RIGHT)
+        ttk.Button(botones, text='Exportar', command=exportar).pack(
+            side=tk.RIGHT, padx=(0, 8))
+        win.bind('<Escape>', lambda _e: win.destroy())
+        win.update_idletasks()
+        px = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_reqwidth()) // 2
+        py = self.root.winfo_rooty() + (self.root.winfo_height() - win.winfo_reqheight()) // 3
+        win.geometry(f'+{max(0, px)}+{max(0, py)}')
+
+    def _export_todo_lanza(self, idiomas, maquinas):
+        """Exporta cada idioma a cada maquina en un hilo, con barra de progreso y
+        un boton para parar (acaba la exportacion en curso y no empieza mas).
+        Un fallo (un juego que no cabe en 48K, por ejemplo) no para el resto."""
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        if not getattr(sys, 'frozen', False):
+            # modulos frescos desde el codigo fuente, como en cada exportacion
+            import importlib
+            for m in ('z80asm', 'txtpack', 'mensajes', 'capabilities', 'game_engine',
+                      'nativecc', 'font42', 'png2cpc', 'png2next', 'dsk',
+                      'empaqueta_nex', 'spectrum_export', 'next_nativo',
+                      'spectrum48_nativo', 'spectrum128_nativo', 'cpc_nativo',
+                      'msx2_nativo', 'pcw_nativo', 'traduccion', 'scriba_pack'):
+                try:
+                    importlib.reload(importlib.import_module(m))
+                except Exception:
+                    pass
+        name = os.path.splitext(os.path.basename(self.filepath))[0]
+        raiz = self._game_root()
+        temp_next = self._bas_temp_path('Next')
+        cands = [os.path.join(raiz, 'img'), os.path.join(here, 'img')]
+        ctx = {
+            'name': name, 'raiz': raiz, 'dist': self._dir_juego('dist'),
+            'propio': self._codigo_idioma((self.game.get('metadata') or {}).get('language')),
+            'temp_next': temp_next,
+            'datadir_next': os.path.join(os.path.dirname(os.path.abspath(temp_next)), 'data'),
+            'musicdir': os.path.join(raiz, 'music'),
+            'img_cpc': next((d for d in cands
+                             if os.path.isdir(os.path.join(d, 'Original'))
+                             or os.path.isdir(os.path.join(d, 'AmstradCPC'))), None),
+        }
+        game0 = copy.deepcopy(self.game)
+        game0.pop('_editor', None)
+        trabajos = [(idi, maq) for idi in idiomas for maq in maquinas]
+
+        import threading
+        parar = threading.Event()
+        win = tk.Toplevel(self.root)
+        win.title('Exportando todos los idiomas y máquinas')
+        win.transient(self.root)
+        win.grab_set()
+        win.resizable(False, False)
+        win.protocol('WM_DELETE_WINDOW', parar.set)
+        sv_msg = tk.StringVar(value='Preparando…')
+        ttk.Label(win, textvariable=sv_msg, width=52,
+                  anchor=tk.W).pack(padx=16, pady=(14, 6))
+        bar = ttk.Progressbar(win, length=380, mode='determinate',
+                              maximum=len(trabajos))
+        bar.pack(padx=16, pady=(0, 8))
+        b_parar = ttk.Button(win, text='Parar')
+        b_parar.configure(command=lambda: (parar.set(), b_parar.configure(
+            state=tk.DISABLED), sv_msg.set('Parando al acabar la exportación en curso…')))
+        b_parar.pack(pady=(0, 12))
+        win.update_idletasks()
+        px = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_reqwidth()) // 2
+        py = self.root.winfo_rooty() + (self.root.winfo_height() - win.winfo_reqheight()) // 2
+        win.geometry(f'+{max(0, px)}+{max(0, py)}')
+
+        def paso(i, texto):
+            def _f():
+                bar['value'] = i
+                if not parar.is_set():
+                    sv_msg.set(texto)
+            self.root.after(0, _f)
+
+        def trabajo():
+            juegos, notas, res = {}, {}, []
+            for i, ((cod, origen, ruta), (maq, etiqueta)) in enumerate(trabajos):
+                if parar.is_set():
+                    break
+                paso(i, '%d/%d · %s · %s' % (i + 1, len(trabajos),
+                                             self._NOMBRE_IDIOMA.get(cod, cod), etiqueta))
+                try:
+                    if cod not in juegos:
+                        try:
+                            juegos[cod] = self._juego_en_idioma(game0, cod, origen, ruta)
+                        except Exception as e:
+                            juegos[cod] = e
+                    if isinstance(juegos[cod], Exception):
+                        raise juegos[cod]
+                    g, notas[cod] = juegos[cod]
+                    path, nota = self._exporta_maquina(maq, copy.deepcopy(g), cod, ctx)
+                    res.append((cod, etiqueta, True, os.path.basename(path), nota))
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    res.append((cod, etiqueta, False, '',
+                                (str(e).strip().split('\n') or [''])[0]))
+            paso(len(trabajos), 'Hecho.')
+
+            def _fin():
+                win.destroy()
+                self._ventana_todo(idiomas, res, notas, len(trabajos),
+                                   parar.is_set(), ctx['dist'])
+            self.root.after(0, _fin)
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def _juego_en_idioma(self, game0, cod, origen, ruta):
+        """(juego, nota) en el idioma 'cod': el del editor tal cual, el del
+        editor con el CSV traducido aplicado, o el YAML hermano."""
+        if origen == 'juego':
+            return copy.deepcopy(game0), ''
+        if origen == 'csv':
+            import traduccion
+            g, aplicadas, avisos = traduccion.importa_csv(game0, ruta, idioma=cod)
+            if not aplicadas:
+                raise RuntimeError('%s no trae ninguna traducción' % os.path.basename(ruta))
+            cambiados = sum(1 for a in avisos if a.startswith('original cambiado'))
+            nota = '%d textos traducidos' % aplicadas
+            if cambiados:
+                nota += ('; %d han cambiado en el juego desde que se exportó el CSV '
+                         '(sale la traducción vieja)' % cambiados)
+            sin_fila = [a for a in avisos if 'sin fila en el CSV' in a]
+            if sin_fila:
+                nota += '; ' + sin_fila[0].replace(' (¿CSV antiguo?)', ', en el idioma original')
+            return g, nota
+        import yaml
+        with open(ruta, encoding='utf-8') as f:
+            g = yaml.safe_load(f)
+        g.pop('_editor', None)
+        return g, 'de ' + os.path.basename(ruta)
+
+    def _exporta_maquina(self, maq, game, cod, ctx):
+        """Exporta 'game' (ya en el idioma 'cod') a una maquina de
+        _MAQUINAS_TODO, con el mismo nombre en dist/ que su opcion del menu.
+        Devuelve (ruta, nota); si no se puede, lanza la excepcion."""
+        name, dist, raiz = ctx['name'], ctx['dist'], ctx['raiz']
+
+        def destino(plat, ext):
+            return os.path.join(dist, self._dist_name(name, plat, ext, cod))
+        caps = {'48': 'spectrum48', '128': 'spectrum128', 'next': 'next',
+                'cpc1': 'cpc', 'cpc2': 'cpc', 'msx2': 'msx2', 'pcw': 'pcw',
+                'pcw8512': 'pcw'}.get(maq)
+        if maq in ('48', '128'):
+            import spectrum48_nativo
+            import spectrum128_nativo
+            modulo = spectrum128_nativo if maq == '128' else spectrum48_nativo
+            path = destino('128kb' if maq == '128' else '48kb', 'tap')
+            info = modulo.export_tap(game, path, game_dir=raiz)
+            if info.get('libre', 0) < 0:
+                raise RuntimeError('no cabe: se sale del mapa plano por %d bytes'
+                                   % -info['libre'])
+        elif maq == 'next':
+            import next_nativo
+            if 'next_imgs' not in ctx:          # las imagenes, una vez para todos
+                ctx['next_imgs'] = self._next_convert_images(ctx['temp_next'])
+            path = destino('next', 'nex')
+            next_nativo.export_nex(game, path, datadir=ctx['datadir_next'],
+                                   musicdir=ctx['musicdir'])
+        elif maq in ('cpc1', 'cpc2'):
+            import cpc_nativo
+            modo = 1 if maq == 'cpc1' else 2
+            path = destino('cpc' if modo == 1 else 'cpc_m2', 'dsk')
+            cpc_nativo.export_native(game, path, modo=modo, img_dir=ctx['img_cpc'])
+        elif maq == 'msx2':
+            import msx2_nativo
+            path = destino('msx2', 'rom')
+            msx2_nativo.export_rom(game, path, game_dir=raiz)
+        elif maq in ('pcw', 'pcw8512'):
+            import pcw_nativo
+            path = destino(maq, 'dsk')
+            pcw_nativo.export_dsk(game, path, game_dir=raiz,
+                                  modelo='8512' if maq == 'pcw8512' else '8256')
+        elif maq == 'windows':
+            player = self._player_exe()
+            if not player:
+                raise RuntimeError('no hay Scriba.exe que copiar: compílalo una vez '
+                                   'con build_exe.bat')
+            title = (game.get('metadata') or {}).get('title') or self._sin_idioma(name)
+            safe = re.sub(r'[^\w .\-]+', '', str(title)).strip() or 'Aventura'
+            # cada uno lleva el idioma (DAS BOOT_es.exe, DAS BOOT_ca.exe...),
+            # para no pisarse en dist/ y que case con el manual y los paquetes
+            exe = os.path.join(dist, '%s_%s.exe' % (safe, cod))
+            path = destino('windows', 'zip')
+            self._empaqueta_windows(game, title, player, raiz, exe, path, safe + '.exe')
+        else:
+            raise ValueError('máquina desconocida: %s' % maq)
+        nota = ''
+        adv = self._aviso_caps(game, caps) if caps else ''
+        if adv:
+            nota = 'no soporta: ' + '; '.join(l.strip().lstrip('·').strip()
+                                              for l in adv.split('\n')[2:])
+        return path, nota
+
+    def _ventana_todo(self, idiomas, res, notas, total, parado, distdir):
+        """Informe de «Exportar todos los idiomas y maquinas»: por idioma, cada
+        maquina con su fichero o con su error."""
+        ok = sum(1 for r in res if r[2])
+        lineas = ['Exportados %d de %d.' % (ok, total)
+                  + (' %d con error.' % (len(res) - ok) if len(res) > ok else '')
+                  + (' Parado a mano: %d sin hacer.' % (total - len(res)) if parado else '')]
+        for cod, _origen, _ruta in idiomas:
+            mios = [r for r in res if r[0] == cod]
+            if not mios:
+                continue
+            lineas.append('')
+            cab = '%s (%s)' % (self._NOMBRE_IDIOMA.get(cod, cod), cod)
+            if notas.get(cod):
+                cab += ' — ' + notas[cod]
+            lineas.append(cab)
+            ancho = max(len(r[1]) for r in mios)
+            for _c, etiqueta, bien, fichero, nota in mios:
+                lineas.append('  %s %s  %s' % ('✔' if bien else '✘', etiqueta.ljust(ancho),
+                                               fichero if bien else nota))
+                if bien and nota:
+                    lineas.append('    ' + ' ' * ancho + '  ⚠ ' + nota)
+        texto = '\n'.join(lineas)
+        self.sv_status.set('Exportar todo: %d de %d' % (ok, total))
+
+        win = tk.Toplevel(self.root)
+        win.title('Exportar todos los idiomas y máquinas')
+        win.transient(self.root)
+        cuerpo = ttk.Frame(win, padding=14)
+        cuerpo.pack(fill=tk.BOTH, expand=True)
+        caja = ttk.Frame(cuerpo)
+        caja.pack(fill=tk.BOTH, expand=True)
+        txt = tk.Text(caja, width=100, height=min(32, len(lineas) + 1),
+                      font=self.fnt_code, relief=tk.FLAT, wrap=tk.NONE,
+                      background=self.root.cget('background'))
+        sb = ttk.Scrollbar(caja, orient=tk.VERTICAL, command=txt.yview)
+        txt.configure(yscrollcommand=sb.set)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        txt.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        txt.insert('1.0', texto)
+        txt.configure(state=tk.DISABLED)
+        botones = ttk.Frame(cuerpo)
+        botones.pack(fill=tk.X, pady=(12, 0))
+        ttk.Button(botones, text='Cerrar', command=win.destroy).pack(side=tk.RIGHT)
+        ttk.Button(botones, text='Abrir carpeta',
+                   command=lambda: self._open_folder(distdir)).pack(
+                       side=tk.RIGHT, padx=(0, 8))
+        win.bind('<Escape>', lambda _e: win.destroy())
+        win.update_idletasks()
+        px = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_reqwidth()) // 2
+        py = self.root.winfo_rooty() + (self.root.winfo_height() - win.winfo_reqheight()) // 3
+        win.geometry(f'+{max(0, px)}+{max(0, py)}')
 
     def _export_literales(self):
         """Exporta todos los literales del juego a un CSV (clave;original;

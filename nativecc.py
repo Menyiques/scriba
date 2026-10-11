@@ -27,9 +27,43 @@ class Ctx:
         self.objs[n.upper()]=len(self.objs); return self.objs[n.upper()]
 
 CMP={'=':'EQ','==':'EQ','<>':'NE','!=':'NE','<':'LT','>':'GT'}
+
+def _es_prop(a):
+    """('var', '#objeto.propiedad') -> True. paws_lang deja las propiedades de
+    objeto como si fueran el nombre de una variable."""
+    return a[0]=='var' and str(a[1]).startswith('#') and '.' in str(a[1])
+
+def _prop_rpn(name,ctx):
+    """#objeto.propiedad como valor en una expresion. Hasta la 3.0 caia en
+    ctx.var() y era una variable nueva que valia siempre 0: IF #pilas.carried
+    no se cumplia nunca en las maquinas nativas (en PC si). Las que cambian en
+    la partida van al motor; las demas no pueden cambiar en nativo (no hay
+    LET para ellas) y valen lo que diga el YAML, como en el interprete."""
+    base,_s,p=str(name).partition('.')
+    p=p.lower(); o=ctx.obj(base)
+    din={'carried':'CARRIED','worn':'WORN','present':'PRESENT','open':'HASOBJOPEN',
+         'lit':'OBJLIT','locked':'OBJLOCK'}
+    if p in din: return [(din[p],o)]
+    O=getattr(ctx,'objdata',{}).get(base.upper(),{})
+    if p in ('fixed',):
+        v='fixed' in [str(x).lower() for x in (O.get('attributes') or [])] or bool(O.get('fixed'))
+    elif p in ('light_source','light'):
+        v=bool(O.get('light_source') or O.get('light'))
+    elif p in ('openable','wearable','container'):
+        v=bool(O.get(p))
+    elif p=='weight':
+        v=int(O.get('weight') or 0)
+    elif p in ('isat','loc','location'):
+        raise ValueError('%s solo se puede comparar con un destino: %s = @sala, @INVEN, '
+                         '@ONME, @NOWHERE o #contenedor' % (name,name))
+    else:
+        raise ValueError('propiedad de objeto desconocida: %s' % name)
+    return [('CONST',int(v)&0xFF)]
+
 def expr_rpn(a,ctx):
     t=a[0]
     if t=='num': return [('CONST',a[1])]
+    if _es_prop(a): return _prop_rpn(a[1],ctx)
     if t=='var': return [('VAR',ctx.var(a[1]))]
     if t=='bin':
         op={'+':'ADD','-':'SUB'}[a[1]]
@@ -84,7 +118,17 @@ def cond_rpn(a,ctx):
             return [(nm,v)]
         return [(op,ctx.obj(args[0]))]              # CARRIED/PRESENT/ABSENT/NOTCARR
     if t=='cmp':
-        op=a[1]; l=expr_rpn(a[2],ctx); r=expr_rpn(a[3],ctx)
+        op=a[1]
+        # #obj.isat = destino (@sala, @INVEN, @ONME, @NOWHERE o #contenedor)
+        for izq,der in ((a[2],a[3]),(a[3],a[2])):
+            if _es_prop(izq) and str(izq[1]).partition('.')[2].lower() in ('isat','loc','location'):
+                dst=str(der[1]) if der[0]=='var' else ''
+                if (op not in ('=','==','<>','!=') or not (dst.startswith(('@','#'))
+                        or dst.upper() in ('INVEN','PUESTO','NADA','WORN','NOWHERE'))):
+                    raise ValueError('%s solo admite = o <> con un destino' % izq[1])
+                rpn=_isat_rpn(ctx,ctx.obj(str(izq[1]).partition('.')[0]),der[1])
+                return rpn+([('NOT',)] if op in ('<>','!=') else [])
+        l=expr_rpn(a[2],ctx); r=expr_rpn(a[3],ctx)
         if op in ('<=',): return l+r+[('GT',),('NOT',)]
         if op in ('>=',): return l+r+[('LT',),('NOT',)]
         return l+r+[(CMP[op],)]
@@ -160,6 +204,17 @@ def compile_stmt(ln, up, ctx):
     if up.startswith('PRINT'):
         return _print_rpn(translit(_string(ln)), ctx)
     if up.startswith('LET'):
+        # LET #obj.propiedad = 0/1: las tres que el motor nativo guarda en RAM,
+        # con sus condacts. Las demas (peso, fijo, fuente de luz...) no tienen
+        # sitio en el motor: error claro en vez de una variable fantasma.
+        mp=re.match(r'LET\s+(#\w+)\.(\w+)\s*=\s*(.+)$',ln.strip(),re.I)
+        if mp:
+            o=ctx.obj(mp.group(1)); p=mp.group(2).lower(); val=mp.group(3).strip()
+            pares={'lit':('LIT','UNLIT'),'open':('OPEN','CLOSE'),'locked':('LOCK','UNLOCK')}
+            if p in pares and re.fullmatch(r'\d+',val):
+                return bytes([ge.COP_EXTRA[pares[p][0 if int(val) else 1]], o])
+            raise ValueError('LET %s.%s = %s: en las maquinas nativas solo se pueden asignar '
+                             'lit, open y locked, con 0 o 1' % (mp.group(1),mp.group(2),val))
         m=re.match(r'LET\s+(\w+)\s*=\s*(.+)',ln,re.I)
         v=ctx.var(m.group(1)); eb=ge.enc_expr(expr_rpn(pl.parse_expr(m.group(2)),ctx))
         return bytes([26,v])+eb
@@ -374,7 +429,11 @@ def desplaza_acentos(s):
     translit_disp convierte cada acento en '?'."""
     return ''.join(chr(ord(ch)+80) if 144<=ord(ch)<160 else ch for ch in s)
 
-def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj_desc=True):
+def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj_desc=True,
+                 intro_scr=False):
+    # intro_scr: la plataforma tiene una imagen 'intro' en tira (lo comprueba
+    # cada exportador con sus carpetas). Solo cuenta si hay imagen_intro: la
+    # presentacion la pinta en vez de la de la sala inicial (SCRINTRO).
     g=c.game
     # idioma para los acentos (es/pt). Fija el set de acentos de translit_disp.
     lang=str((getattr(c,'meta',{}) or {}).get('language','') or '').lower()
@@ -432,14 +491,22 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj
         is_cont=bool(O.get('container') or O.get('openable'))
         is_light=bool(O.get('light_source') or O.get('light'))
         incont=0
-        if O.get('worn'):
+        # Las ubicaciones especiales, con arroba y sin ella (@INVEN / INVEN,
+        # @ONME / PUESTO, @NOWHERE / NADA). Hasta la 3.0 solo se miraba 'worn',
+        # y un objeto con location '@INVEN' empezaba en ninguna parte: la
+        # linterna de El Faro no estaba en el inventario y el juego no se podia
+        # acabar en ninguna maquina nativa (en PC si).
+        _lu=str(lname).upper() if lname else ''
+        if O.get('worn') or _lu in ('@ONME','ONME','PUESTO','WORN'):
             loc=ge.WORN
+        elif _lu in ('@INVEN','INVEN'):
+            loc=ge.CARRIED
         elif lname in c.locidx:
             loc=c.locidx[lname]-1
         elif lname in c.objidx:                # empieza dentro de un contenedor
             loc=ge.CONTAINED; incont=c.objidx[lname]   # OBJIN = (contenedor 0-based)+1
         else:
-            loc=254
+            loc=ge.NOWHERE
         fixed=1 if ('fixed' in attrs or O.get('fixed')) else 0   # no cogible
         light=1 if is_light else 0
         lit=1 if (is_light and O.get('lit')) else 0
@@ -458,6 +525,7 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj
     ctx.vars={k.upper().replace('_',''):i for i,k in enumerate(c.vars.keys())}
     ctx.locs={name:(c.locidx[name]-1) for name in c.locidx}
     ctx.objs={name.upper():(c.objidx[name]-1) for name in c.objidx}
+    ctx.objdata={str(name).upper():(O or {}) for name,O in (g.get('objects') or {}).items()}
     ctx.verbs={w.upper():vid for w,vid in c.verbalias.items()}
     ctx.nouns={w.upper():nid for w,nid in c.nounalias.items()}
     ctx.timers={str(tid).upper():i for i,tid in enumerate(getattr(c,'timids',[]))}
@@ -465,6 +533,17 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj
     ctx.smplist=(g.get('samples') or [])   # idem para SAMPLE "nombre"
     import capabilities
     ctx.scrlist=capabilities.used_scr(g)   # SCR nombre -> indice, por orden de uso
+    # La 'intro' va al final de la lista (no mueve los indices de las demas) y,
+    # si el guion ya la usa con SCR intro, se reutiliza su indice.
+    _intro_idx=None
+    if (imagen_intro and intro_scr
+            and ((getattr(c,'meta',{}) or {}).get('start_message') or '').strip()):
+        _bajas=[n.lower() for n in ctx.scrlist]
+        if capabilities.INTRO in _bajas:
+            _intro_idx=_bajas.index(capabilities.INTRO)
+        else:
+            ctx.scrlist.append(capabilities.INTRO)
+            _intro_idx=len(ctx.scrlist)-1
     # vocabulario
     vocab=[]
     for w,vid in c.verbalias.items(): vocab.append((w, vid, 2 if vid<=6 else 0))
@@ -541,7 +620,11 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj
             # La imagen de la sala se pone AQUI, no en start: asi el on_start del
             # autor (que suele fijar borde, tinta y papel, y limpiar) ya ha
             # corrido, y no se ve el borde cambiar despues de pintar la imagen.
-            _b += bytes([ge.COP_EXTRA['SHOWPIC']])
+            # Si el juego trae imagen 'intro', esa en vez de la de la sala.
+            if _intro_idx is not None:
+                _b += bytes([ge.COP_EXTRA['SCRINTRO'], _intro_idx & 0xFF])
+            else:
+                _b += bytes([ge.COP_EXTRA['SHOWPIC']])
         for _p in _ini:
             if _filas:
                 _n = 1 if not _p else (len(_p) + _anc - 1) // _anc
@@ -575,6 +658,25 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj
     _vs=c.verbid.get('SALID') or 0
     if _vs:
         responses.append((_vs,0,bytes([ge.COP_EXTRA['EXITS'],ge.COP['DONE']])))
+    # Comandos GRABAR y RECUPERAR, del mismo modo: respuestas al final con
+    # RAMSAVE y RAMLOAD, que llevan sus dos mensajes (el de exito y el de
+    # fallo) del catalogo de mensajes del sistema, con lo que haya puesto el
+    # autor en metadata['mensajes'].
+    try:
+        import mensajes as _mm
+        _defm=_mm.defaults()
+    except Exception:
+        _defm={}
+    _ovm=((getattr(c,'meta',{}) or {}).get('mensajes') or {})
+    def _sysmsg(mid):
+        return ctx.msg(translit(str(_ovm.get(mid) or _defm.get(mid) or '')))
+    for _verbo,_op,_ok,_no in (('GRABA','RAMSAVE','grabada','no_grabar'),
+                               ('RECUP','RAMLOAD','recuperada','sin_grabar')):
+        _vid=c.verbid.get(_verbo) or 0
+        if _vid:
+            _m1,_m2=_sysmsg(_ok),_sysmsg(_no)
+            responses.append((_vid,0,bytes([ge.COP_EXTRA[_op],_m1&0xFF,(_m1>>8)&0xFF,
+                                            _m2&0xFF,(_m2>>8)&0xFF,ge.COP['DONE']])))
     # temporizadores: duracion, loop, activo inicial y on_expire compilado
     timers=[]
     for tid in getattr(c,'timids',[]):

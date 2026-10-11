@@ -186,8 +186,13 @@ def imagen(imgs, loc_id):
     """La imagen de una localizacion, como fichero en memoria. None si no hay."""
     if not imgs or not loc_id:
         return None
-    for ext in EXTS:
-        datos = imgs.get(str(loc_id) + ext)
-        if datos is not None:
-            return io.BytesIO(datos)
+    # con arroba y sin ella, como los exportadores nativos: los masteres de
+    # img/Original llevan la del id (@morfina.jpg) y el guion puede pedir
+    # 'SCR @sala morfina'
+    nombre = str(loc_id)
+    for n in (nombre, '@' + nombre.lstrip('@'), nombre.lstrip('@')):
+        for ext in EXTS:
+            datos = imgs.get(n + ext)
+            if datos is not None:
+                return io.BytesIO(datos)
     return None

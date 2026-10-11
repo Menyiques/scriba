@@ -73,12 +73,18 @@ _PT_LANG = False   # lo fija export_bas segun metadata['language'] ('pt')
 # Conversiones de display SIN los acentos soportados (esos van por _ACC_CODE).
 _TR_DISP = str.maketrans({
     '—': '-', '–': '-', '«': "'", '»': "'", '“': "'", '”': "'", '’': "'",
-    '…': '...', '·': '-', '━': '-', '"': "'",
+    '‘': "'",
+    # el punto volado de la ele geminada catalana (col·lecció -> col.lecció)
+    '…': '...', '·': '.', '━': '-', '"': "'",
     '\n': ' ', '\r': ' ', '\t': ' ',
     'ä': 'a', 'ö': 'o', 'Ä': 'A', 'Ö': 'O', 'ß': 'ss',
     'à': 'a', 'è': 'e', 'ì': 'i', 'ò': 'o', 'ù': 'u',
     'â': 'a', 'ê': 'e', 'î': 'i', 'ô': 'o', 'û': 'u',
-    'ç': 'c', 'Ç': 'C', 'ë': 'e', 'ï': 'i',
+    'ç': 'c', 'Ç': 'C', 'ë': 'e', 'ï': 'i', 'ÿ': 'y',
+    # mayusculas del frances y del catalan sin glifo propio
+    'À': 'A', 'Â': 'A', 'È': 'E', 'Ê': 'E', 'Ë': 'E', 'Ì': 'I', 'Î': 'I',
+    'Ï': 'I', 'Ò': 'O', 'Ô': 'O', 'Ù': 'U', 'Û': 'U',
+    'œ': 'oe', 'Œ': 'OE', 'æ': 'ae', 'Æ': 'AE',
 })
 
 # Transliteracion de DISPLAY para PORTUGUES: conserva los del set _ACC_CODE_PT
@@ -92,6 +98,8 @@ _TR_DISP_PT = str.maketrans({
     'è': 'e', 'ì': 'i', 'ò': 'o', 'ù': 'u', 'î': 'i', 'û': 'u', 'ë': 'e', 'ï': 'i',
     'À': 'A', 'Â': 'A', 'Ê': 'E', 'Î': 'I', 'Ô': 'O', 'Û': 'U', 'Õ': 'O',
     'Í': 'I', 'Ó': 'O', 'Ú': 'U', '¿': '?', '¡': '!',
+    '‘': "'", 'ÿ': 'y', 'È': 'E', 'Ë': 'E', 'Ì': 'I', 'Ï': 'I', 'Ò': 'O',
+    'Ù': 'U', 'œ': 'oe', 'Œ': 'OE', 'æ': 'ae', 'Æ': 'AE',
 })
 
 
@@ -266,6 +274,10 @@ def recolecta(game):
         n5 = translit((objs[oid].get('noun') or '')[:5]).upper()
         if n5:
             c.nounalias.setdefault(n5, c.nounid[n5])
+    # TODO en el idioma del juego (tout, tot, tudo...) y siempre TODO y ALL
+    import vocab_base as _vb
+    for _w in _vb.todo((game.get('metadata') or {}).get('language')):
+        c.nounalias.setdefault(translit(_w[:5]).upper(), c.nounid['TODO'])
     c.nounalias['TODO'] = c.nounid['TODO']
     c.nounalias['ALL'] = c.nounid['TODO']
 
@@ -279,7 +291,11 @@ def recolecta(game):
     _lang = _meta.get('language')
     _vov = _meta.get('vocab_base') or {}
     _dirs = vocab_base.dirs(_lang, _vov)        # {N: [palabras], ...}
-    DIRCANON = {}
+    # Las claves NORTE, ARRIB... de los verbos de direccion de un juego son
+    # direccion en cualquier idioma (si no, en un juego traducido "ON ARRIB" no
+    # casa con la direccion de subir); encima, las palabras de este idioma.
+    DIRCANON = {translit(k[:5]).upper(): v
+                for k, v in vocab_base.CLAVES_DIRECCION.items()}
     for _canon, _syns in _dirs.items():
         for _s in _syns:
             DIRCANON[translit(_s[:5]).upper()] = _canon
@@ -308,11 +324,21 @@ def recolecta(game):
         if v5 not in c.verbid:
             c.verbid[v5] = vid
             vid += 1
+    # Una palabra de serie que el juego usa como nombre es del juego, como en el
+    # interprete de PC (que carga el vocabulario del juego despues): si no, el
+    # verbo se queda la palabra y las respuestas con ese nombre dejan de casar
+    # (en Tifon, GUARDAR de GRABAR se comia a GUARD, el guardia).
+    _del_juego = set()
+    for vkey, aliases in (game.get('vocabulary', {}).get('verbs') or {}).items():
+        for a in [vkey] + list(aliases or []):
+            _del_juego.add(translit(a[:5]).upper())
     for v5, aliases in todos.items():
         i = c.verbid[v5]
         c.verbalias[v5] = i
         for a in aliases:
             a5 = translit(a[:5]).upper()
+            if a5 in c.nounalias and a5 not in _del_juego:
+                continue
             mapped = DIRCANON.get(a5)
             c.verbalias[a5] = c.verbid[mapped] if mapped else i
     # direcciones en claro (desde vocab_base; incluye N/S/E/O/U/D canónicos)
@@ -320,6 +346,19 @@ def recolecta(game):
         c.verbalias[_canon] = c.verbid[_canon]
         for _s in _syns:
             c.verbalias[translit(_s[:5]).upper()] = c.verbid[_canon]
+    # Las claves de los verbos que no son tambien una palabra de su lista (los
+    # identificadores internos: en un juego traducido, COGER, QUITA, ACABA...)
+    # van al final de la tabla. El motor compara cuatro letras y se queda con la
+    # primera entrada que casa: en DAS BOOT en ingles la clave QUITA (quitarse
+    # una prenda) iba antes que el QUIT de serie de ACABAR, y QUIT no
+    # abandonaba la partida. Solo cambia el orden, no a que verbo va cada palabra.
+    _palabras = set(_canon for _canon in _dirs)
+    for _syns in list(todos.values()) + list(_dirs.values()):
+        _palabras.update(translit(a[:5]).upper() for a in _syns)
+    for vkey, aliases in (game.get('vocabulary', {}).get('verbs') or {}).items():
+        if translit(vkey[:5]).upper() in DIRCANON:
+            _palabras.update(translit(a[:5]).upper() for a in (aliases or []))
+    c.verbalias = dict(sorted(c.verbalias.items(), key=lambda kv: kv[0] not in _palabras))
 
     # variables del juego
     c.vars = {}
@@ -1955,6 +1994,21 @@ def _clase_pantalla(path):
         an, al = im.size
     r = an / float(al or 1)
     return 8 if abs(r - 4.0) < abs(r - 4.0 / 3.0) else 24
+
+
+def filas_pantalla_spectrum(img_dir, nombre):
+    """Cuantas filas tendria la pantalla suelta `nombre` en el Spectrum, sin
+    convertirla: 8 (tira), 24 (pantalla entera) o 0 si no esta. Busca en el
+    mismo orden que pantallas_spectrum. Sirve para decidir antes de compilar
+    si la presentacion lleva su imagen 'intro' (solo si es una tira)."""
+    import os
+    ruta = busca_img(img_dir, nombre, ('.scr',))
+    if ruta:
+        return {2304: 8, 6912: 24}.get(os.path.getsize(ruta), 0)
+    ruta = (busca_img(img_dir, nombre, IMG_ZX_EXT)
+            or busca_img(os.path.join(os.path.dirname(img_dir), 'Original'),
+                         nombre, ('.png', '.jpg', '.jpeg')))
+    return _clase_pantalla(ruta) if ruta else 0
 
 
 def pantallas_spectrum(img_dir, nombres):

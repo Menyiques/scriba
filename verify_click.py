@@ -24,6 +24,10 @@ import sys
 
 POR_DEFECTO = os.path.join('Games', 'Operacion Tifon Negro',
                            'Operacion Tifon Negro.yaml')
+# DAS BOOT ya no cabe en 48K (solo sale para 128K y Next): el clic del 48K se
+# prueba con la demo, que si cabe
+POR_DEFECTO_48 = os.path.join('Games', 'operacion_tifon_negro_demo',
+                              'operacion_tifon_negro_demo.yaml')
 ORDEN = 'MIRAR'                       # cinco letras y un ENTER: seis teclas
 TECLAS = len(ORDEN) + 1
 
@@ -122,7 +126,7 @@ def _estaticas():
 def main():
     yaml_path = sys.argv[1] if len(sys.argv) > 1 else POR_DEFECTO
     _estaticas()
-    _spectrum('48', yaml_path)
+    _spectrum('48', sys.argv[1] if len(sys.argv) > 1 else POR_DEFECTO_48)
     _spectrum('128', yaml_path)
     _cpc(yaml_path)
     _pcw(yaml_path)

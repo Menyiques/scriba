@@ -1463,9 +1463,26 @@ def compila(game, game_dir=None, guion=None, imagenes=True, modelo='8256'):
                 salas.append((i, lid, p))
     portada = busca_imagen(game_dir, 'screen') if (imagenes and game_dir) else None
 
+    # La imagen de la presentacion (intro.*), si la hay y es una tira (con la
+    # misma regla que las pantallas del SCR, mas abajo).
+    import capabilities
+    p_intro = busca_imagen(game_dir, capabilities.INTRO) if (salas and game_dir) else None
+    intro_tira = False
+    if p_intro:
+        try:
+            from PIL import Image
+            w, h = Image.open(p_intro).size
+            intro_tira = w >= 3 * h
+        except Exception as e:
+            avisos.append('intro: %s' % e)
+        if not intro_tira:
+            avisos.append('intro: es de pantalla entera; la presentacion usa la '
+                          'imagen de la sala inicial')
+
     ficha = scriba_info.ficha(game, 'pcw', scriba_info.ahora())
     spec, _ = nc.compile_game(c, sysm[:ge.NSYS], width=COLS, filas=0,
-                              ficha=ficha, imagen_intro=bool(salas))
+                              ficha=ficha, imagen_intro=bool(salas),
+                              intro_scr=intro_tira)
     idioma = str((game.get('metadata') or {}).get('language', '') or 'es')
     nlocs = len(spec['locations'])
     ids = [0x80 + b for b in range(BLK0, max_blk)]
@@ -1479,7 +1496,8 @@ def compila(game, game_dir=None, guion=None, imagenes=True, modelo='8256'):
             proc_after=spec['proc_after'], proc_onstart=spec['proc_onstart'],
             hdrbuf=0, imgbuf=0, loc_slot=b'', vall=spec['vall'],
             font_acc=spec['font_acc'], timers=spec['timers'],
-            llevarmax=spec['llevarmax'], fx=fx_blob, texto=texto)
+            llevarmax=spec['llevarmax'], fx=fx_blob, texto=texto,
+            exit_names=_sal)
 
     bancos = [bytearray(b) for b in _db(ORG)[1]['bancos_texto']]
     texto_bytes = sum(len(b) for b in bancos) - len(fx_blob)

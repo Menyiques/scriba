@@ -8,6 +8,7 @@ Uso:
   python interpreter.py ejemplo.json
 """
 
+import copy
 import json
 import sys
 import os
@@ -39,6 +40,8 @@ DIR_NAMES_L = {
     'es': {'N': 'Norte', 'S': 'Sur', 'E': 'Este', 'O': 'Oeste', 'U': 'Arriba', 'D': 'Abajo'},
     'en': {'N': 'North', 'S': 'South', 'E': 'East', 'O': 'West', 'U': 'Up', 'D': 'Down'},
     'pt': {'N': 'Norte', 'S': 'Sul', 'E': 'Este', 'O': 'Oeste', 'U': 'Acima', 'D': 'Abaixo'},
+    'ca': {'N': 'Nord', 'S': 'Sud', 'E': 'Est', 'O': 'Oest', 'U': 'Amunt', 'D': 'Avall'},
+    'fr': {'N': 'Nord', 'S': 'Sud', 'E': 'Est', 'O': 'Ouest', 'U': 'Haut', 'D': 'Bas'},
 }
 
 # Los nombres de las salidas salen del catalogo compartido de mensajes
@@ -129,8 +132,61 @@ MSGS = {
     'fin_juego':      ("FIN DEL JUEGO - Puntuación: {p}/{max}", "GAME OVER - Score: {p}/{max}", "FIM DO JOGO - Pontuação: {p}/{max}"),
     'abandonar':      ("¿Seguro que quieres abandonar la aventura? (s/n)", "Are you sure you want to quit the adventure? (y/n)", "Tens a certeza que queres abandonar a aventura? (s/n)"),
     'hasta_luego':    ("¡Hasta luego!", "See you later!", "Até logo!"),
+    'pulsa_enter':    ("[Pulsa ENTER]", "[Press ENTER]", "[Prima ENTER]"),
+    'grabada':        ("Partida grabada.", "Game saved.", "Jogo gravado."),
+    'recuperada':     ("Partida recuperada.", "Game restored.", "Jogo recuperado."),
+    'sin_grabar':     ("No hay ninguna partida grabada.", "There is no saved game.",
+                       "Não há nenhum jogo gravado."),
+    'otra_partida':   ("Pulsa ENTER para jugar otra vez.", "Press ENTER to play again.",
+                       "Prima ENTER para jogar outra vez."),
     'fin_aventura':   ("¡Hasta la próxima aventura!", "Until the next adventure!", "Até à próxima aventura!"),
 }
+
+# Catalan y frances (columnas 4 y 5) de los mensajes que solo usa el
+# interprete de PC. Los del catalogo comun (mensajes.py) los trae la
+# traduccion del juego en metadata['mensajes'], y los que falten aqui salen en
+# espanol. En frances, de usted (vous), como es costumbre en sus aventuras.
+MSGS_CA_FR = {
+    'no_entiendo_ayuda': ("No ho entenc. Escriu AJUDA per veure les ordres.",
+                          "Je ne comprends pas. Tapez AIDE pour voir les commandes."),
+    'pasa_tiempo':     ("Passa el temps...", "Le temps passe..."),
+    'sin_salidas':     ("No hi ha sortides visibles.", "Aucune sortie visible."),
+    'contiene_inline': ("(conté: {c})", "(contient : {c})"),
+    'puesto_cab':      ("Portes posat:", "Vous portez :"),
+    'peso_inv':        ("Pes: {p}/{m}", "Poids : {p}/{m}"),
+    'no_cabe_peso':    ("No pots carregar tant de pes.", "Vous ne pouvez pas porter autant de poids."),
+    'contiene':        ("Conté: {c}", "Contient : {c}"),
+    'vacio':           ("És buit.", "C'est vide."),
+    'que_poner':       ("Què et vols posar?", "Que voulez-vous mettre ?"),
+    'no_inventario':   ("No portes això o no és a l'inventari.",
+                        "Vous n'avez pas cela ou ce n'est pas dans votre inventaire."),
+    'que_quitar':      ("Què et vols treure?", "Que voulez-vous enlever ?"),
+    'que_abrir':       ("Què vols obrir?", "Que voulez-vous ouvrir ?"),
+    'abres':           ("Obres {o}.", "Vous ouvrez {o}."),
+    'dentro_hay':      ("A dins hi ha: {c}.", "À l'intérieur, il y a : {c}."),
+    'que_cerrar':      ("Què vols tancar?", "Que voulez-vous fermer ?"),
+    'no_cerrar':       ("No pots tancar {o}.", "Vous ne pouvez pas fermer {o}."),
+    'cierras':         ("Tanques {o}.", "Vous fermez {o}."),
+    'que_meter':       ("Què vols ficar?", "Que voulez-vous mettre ?"),
+    'donde_meter':     ("On ho vols ficar?", "Où voulez-vous le mettre ?"),
+    'primero_coger':   ("Primer has d'agafar {o}.", "Vous devez d'abord prendre {o}."),
+    'no_meter_si':     ("No pots ficar una cosa dins de si mateixa.",
+                        "Vous ne pouvez pas mettre une chose dans elle-même."),
+    'no_contenedor_p': ("No pots ficar res a {o}.", "Vous ne pouvez rien mettre dans {o}."),
+    'cont_cerrado':    ("{o} està tancat.", "{o} est fermé."),
+    'no_cabe':         ("No hi cap a {o}.", "Cela ne rentre pas dans {o}."),
+    'que_sacar':       ("Què vols treure?", "Que voulez-vous sortir ?"),
+    'no_dentro':       ("No és dins de cap contenidor.", "Ce n'est dans aucun contenant."),
+    'peso_sacar':      ("Portaries massa pes.", "Vous porteriez trop de poids."),
+    'abandonar':       ("Segur que vols abandonar l'aventura? (s/n)",
+                        "Voulez-vous vraiment abandonner l'aventure ? (o/n)"),
+    'hasta_luego':     ("Fins aviat!", "À bientôt !"),
+    'pulsa_enter':     ("[Prem ENTER]", "[Appuyez sur ENTRÉE]"),
+    'otra_partida':    ("Prem ENTER per tornar a jugar.", "Appuyez sur ENTRÉE pour rejouer."),
+    'fin_aventura':    ("Fins a la propera aventura!", "À la prochaine aventure !"),
+}
+for _k, (_ca, _fr) in MSGS_CA_FR.items():
+    MSGS[_k] = tuple(MSGS[_k][:3]) + (_ca, _fr)
 
 # Verbos de dirección (completos y truncados a 5) → forma canónica corta.
 # Se usa tanto al construir el vocabulario como al casar responses legacy.
@@ -698,7 +754,7 @@ class PAWSInterpreter:
         if not txt:
             row = MSGS.get(mid)
             if row:
-                idx = {'en': 1, 'pt': 2}.get(self._lang, 0)
+                idx = {'en': 1, 'pt': 2, 'ca': 3, 'fr': 4}.get(self._lang, 0)
                 txt = row[idx] if idx < len(row) else row[0]
             else:
                 txt = ''
@@ -727,7 +783,9 @@ class PAWSInterpreter:
         self.meta = game.get("metadata", {})
         _lng = str(self.meta.get('language') or 'es').strip().lower()
         self._lang = ('pt' if _lng.startswith(('pt', 'por'))
-                      else 'en' if _lng.startswith('en') else 'es')
+                      else 'en' if _lng.startswith('en')
+                      else 'ca' if _lng.startswith('ca')
+                      else 'fr' if _lng.startswith('fr') else 'es')
         self.variables = {norm_var(k): v
                           for k, v in (game.get("variables", {}) or {}).items()}
         self.locations = game.get("locations", {})
@@ -739,6 +797,21 @@ class PAWSInterpreter:
         self.pantalla = None
         # SCR @sala pantalla: pantalla que sustituye a la imagen de una sala
         self.loc_pantalla = {}
+        # Imagen de la presentacion ('intro'), o None. La pone el reproductor
+        # de ventana si el juego trae intro.* en tira: entonces sale con el
+        # mensaje inicial y la partida espera ENTER antes de describir la
+        # primera sala, como el PAUSE 0 de las maquinas nativas. Sin ella, la
+        # presentacion no se para (el probador y las baterias no la ponen).
+        # Lo que pone el reproductor y la partida grabada sobreviven a 'jugar
+        # otra vez', que vuelve a llamar a __init__ (ver run).
+        self.imagen_intro = getattr(self, 'imagen_intro', None)
+        # Con otra_partida (tambien del reproductor), al acabar se ofrece jugar
+        # otra vez, como en las maquinas nativas. Sin ella, se acaba y ya.
+        self.otra_partida = getattr(self, 'otra_partida', False)
+        # GRABAR / RECUPERAR: una sola partida grabada, en memoria
+        self._grabada = getattr(self, '_grabada', None)
+        self._sin_turno = False      # la orden de este turno no lo gasta
+        self._acabada = False        # termino con END o ACABAR (no al cerrar)
         self.vocab_lookup = {}  # siempre se reconstruye desde el juego
         self.responses = game.get("responses", {}).get("entries", [])
         self.condacts = game.get("condacts", {})
@@ -805,9 +878,10 @@ class PAWSInterpreter:
                 dir_verb_map[w5] = canonical
         self._dir_words = dict(dir_verb_map)
 
-        # Palabra especial TODO ("COGER TODO") — integrada en el intérprete.
-        # El vocabulario del juego se carga después y puede redefinirla.
-        for alias in ('todo', 'all'):
+        # Palabra especial TODO ("COGER TODO") — integrada en el intérprete, en
+        # el idioma del juego (tout, tot, tudo...) y siempre TODO y ALL. El
+        # vocabulario del juego se carga después y puede redefinirla.
+        for alias in vocab_base.todo(_lang):
             self.vocab_lookup[alias[:5].upper()] = ("NOUN", "TODO")
 
         # Las palabras de SALIDAS de serie: un verbo SALIR de los de antes (el de
@@ -822,8 +896,14 @@ class PAWSInterpreter:
         for verb_key, aliases in vocab.get("verbs", {}).items():
             raw_canonical = verb_key[:5].upper()
             legado = vocab_base.RENOMBRADOS.get(raw_canonical)
-            # Si es un verbo de dirección, normalizar a forma corta
-            canonical = legado or dir_verb_map.get(verb_key.upper(), dir_verb_map.get(raw_canonical, raw_canonical))
+            # Si es un verbo de dirección, normalizar a forma corta. La clave
+            # (NORTE, ARRIB...) es direccion en cualquier idioma: si no, en un
+            # juego traducido "ON ARRIB" no casaria con la direccion de subir.
+            canonical = (legado or dir_verb_map.get(verb_key.upper())
+                         or dir_verb_map.get(raw_canonical)
+                         or vocab_base.CLAVES_DIRECCION.get(verb_key.upper())
+                         or vocab_base.CLAVES_DIRECCION.get(raw_canonical)
+                         or raw_canonical)
             for alias in aliases:
                 w5 = alias[:5].upper()
                 if legado and w5 in salidas:
@@ -863,6 +943,14 @@ class PAWSInterpreter:
         Devuelve (verb, noun1, noun2) en forma canónica de 5 letras,
         o None si no se reconoce.
         """
+        # Sin tildes (el vocabulario va sin ellas: "pêcheur", "três") y con el
+        # apostrofo y el guion como separadores ("l'uniforme", "esconde-te"),
+        # como hace el motor nativo.
+        import unicodedata
+        text = ''.join(c for c in unicodedata.normalize('NFD', text)
+                       if unicodedata.category(c) != 'Mn')
+        for sep in ("'", '’', '-'):
+            text = text.replace(sep, ' ')
         words = text.strip().upper().split()
         if not words:
             return None, None, None
@@ -903,6 +991,12 @@ class PAWSInterpreter:
         if dir_key in getattr(self, '_dir_words', {}):
             verb = self._dir_words[dir_key]
 
+        # El mismo nombre dos veces seguidas no son dos nombres ("caja fuerte",
+        # con caja y fuerte sinonimos de la caja): si no, el segundo hueco se
+        # llena y una respuesta "ON ABRIR CAJAF _" deja de casar.
+        def _sin_repes(lst):
+            return [n for i, n in enumerate(lst) if i == 0 or lst[i - 1] != n]
+        nouns_before, nouns_after = _sin_repes(nouns_before), _sin_repes(nouns_after)
         nouns_found = nouns_before + nouns_after
         if nouns_found:
             noun1 = nouns_found[0]
@@ -1514,7 +1608,14 @@ class PAWSInterpreter:
             # Separadas por un espacio, no por coma: es como las escribe el
             # motor nativo, y con los nombres saliendo ya del mismo catalogo la
             # linea de salidas queda identica en PC y en las maquinas.
-            return self._t('salidas', dirs=' '.join(available))
+            dirs = ' '.join(available)
+            txt = self._t('salidas', dirs=dirs)
+            # Una traduccion de 'salidas' es solo la etiqueta ("Exits:"), como
+            # en el motor nativo, que pone las direcciones detras: sin esto se
+            # perdian.
+            if dirs not in txt:
+                txt = txt.rstrip() + ' ' + dirs
+            return txt
         return self._t('sin_salidas')
 
     def show_inventory(self):
@@ -1779,6 +1880,9 @@ class PAWSInterpreter:
             return True
 
         if verb == "PONER":
+            # "poner X en Y" ("mettre X dans Y") es meter, no ponerse
+            if noun2:
+                return self.handle_builtin("METER", noun1, noun2)
             if not noun1:
                 print(self._t('que_poner'))
                 return True
@@ -1945,6 +2049,26 @@ class PAWSInterpreter:
             print(self._t('puntuacion', p=pts))
             return True
 
+        if verb == "GRABA":
+            # GRABAR: una sola partida grabada, en memoria (como el RAMSAVE de
+            # las maquinas nativas). No gasta turno y sobrevive a 'jugar otra
+            # vez' (run() no la toca al reiniciar).
+            self._grabada = self._estado()
+            self._sin_turno = True
+            print(self._t('grabada'))
+            return True
+
+        if verb == "RECUP":
+            self._sin_turno = True
+            if self._grabada is None:
+                print(self._t('sin_grabar'))
+                return True
+            self._pon_estado(self._grabada)
+            # como en las nativas, donde describir borra el texto de antes
+            self.describe_location()
+            print(self._t('recuperada'))
+            return True
+
         if verb == "SALID":
             # SALIDAS: por donde se puede ir, sin describir otra vez la sala. A
             # oscuras no se ven, como no se ve la sala.
@@ -1975,16 +2099,49 @@ class PAWSInterpreter:
                 resp = input("> ").strip().lower()
             except (EOFError, KeyboardInterrupt):
                 resp = "s"
-            if resp in ("s", "si", "sí", "yes", "y"):
+            if resp in ("s", "si", "sí", "yes", "y", "sim", "o", "oui"):
                 self.running = False
             return True
 
         return False
 
+    # ─── GRABAR / RECUPERAR ──────────────────────────────────────────────────
+
+    def _estado(self):
+        """Lo que guarda GRABAR: lo mismo que el RAMSAVE de las maquinas
+        nativas (variables, objetos, temporizadores, sala y pantallas por sala)
+        mas la cuenta de turnos."""
+        return copy.deepcopy({
+            'variables': self.variables, 'objects': self.objects,
+            'timers': self.timers, 'player_location': self.player_location,
+            'loc_pantalla': self.loc_pantalla, 'turns': self.turns})
+
+    def _pon_estado(self, est):
+        """RECUPERAR: deja la partida como estaba al GRABAR."""
+        est = copy.deepcopy(est)
+        for k, v in est.items():
+            setattr(self, k, v)
+        self.pantalla = None
+        self.recalc_weight()
+
     # ─── BUCLE PRINCIPAL ─────────────────────────────────────────────────────
 
     def run(self):
-        """Bucle principal del juego."""
+        """Bucle principal. Con otra_partida (lo pone el reproductor de
+        ventana), al acabar ofrece jugar otra vez, como las maquinas nativas:
+        la partida vuelve a empezar de cero, pero la grabada se conserva."""
+        while True:
+            self._partida()
+            if not (self.otra_partida and self._acabada):
+                break
+            try:
+                input(self._t('otra_partida'))
+            except (EOFError, KeyboardInterrupt):
+                break
+            self.__init__(self.game)
+
+    def _partida(self):
+        """Una partida, de la presentacion al final."""
         title = self.meta.get("title", "Aventura sin título")
         print(f"\n{title}")
 
@@ -1994,7 +2151,13 @@ class PAWSInterpreter:
         self.execute_condact_blocks(self.condacts.get("on_start", []))
 
         if start_msg:
+            if self.imagen_intro:
+                self.pantalla = self.imagen_intro
             print(f"\n{start_msg}\n")
+            if self.imagen_intro:
+                # para que se vea la imagen de la presentacion (describir la
+                # sala la quita); en el reproductor, input es su caja de texto
+                input(self._t('pulsa_enter'))
 
         # Describir localización inicial
         self.describe_location()
@@ -2021,6 +2184,7 @@ class PAWSInterpreter:
             if not vacia:
                 self.last_command = raw
             self.turns += 1
+            self._sin_turno = False
 
             # CONDACTS before_turn
             self.execute_condact_blocks(self.condacts.get("before_turn", []))
@@ -2066,6 +2230,10 @@ class PAWSInterpreter:
 
             if not self.running:
                 break
+            # GRABAR / RECUPERAR no gastan turno: ni temporizadores ni
+            # after_turn, como en las maquinas nativas (noturn)
+            if self._sin_turno:
+                continue
 
             # Tick timers
             self.tick_timers()
@@ -2073,6 +2241,8 @@ class PAWSInterpreter:
             # CONDACTS after_turn
             self.execute_condact_blocks(self.condacts.get("after_turn", []))
 
+        # acabada de verdad (END o ACABAR), no porque se cerro la ventana
+        self._acabada = not self.running
         print("\n" + self._t('fin_aventura'))
 
 

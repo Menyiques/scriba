@@ -284,6 +284,23 @@ def buscar_imagen(img_dir, loc_id):
     return None
 
 
+def imagen_intro(img_dir):
+    """'intro' si el juego trae imagen de presentacion en tira (4:1, como la de
+    una sala; la proporcion mas cercana, como deciden las maquinas nativas), o
+    None. Una de pantalla entera no cuenta: la presentacion sale como siempre."""
+    p = buscar_imagen(img_dir, 'intro')
+    if not p:
+        return None
+    try:
+        from PIL import Image
+        with Image.open(p) as im:
+            an, al = im.size
+    except Exception:
+        return None
+    r = an / float(al or 1)
+    return 'intro' if abs(r - 4.0) < abs(r - 4.0 / 3.0) else None
+
+
 # ─── Ventana ─────────────────────────────────────────────────────────────────
 
 def main(argv=None):
@@ -344,6 +361,12 @@ def main(argv=None):
     btn.pack(side=tk.LEFT, padx=(6, 0))
 
     ses = GameSession(game)
+    # la imagen de la presentacion: con ella la partida espera ENTER tras el
+    # mensaje inicial (si no, describir la primera sala la quitaria al momento)
+    ses.interp.imagen_intro = imagen_intro(img_dir)
+    # al acabar, ENTER empieza otra partida (y la grabada sigue ahi), como en
+    # las maquinas nativas
+    ses.interp.otra_partida = True
 
     def _append(s):
         txt.configure(state=tk.NORMAL)

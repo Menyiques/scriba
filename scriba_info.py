@@ -16,6 +16,10 @@ PLATAFORMA = {
     'pc':      'PC (interprete)',
     '48k':     'ZX Spectrum 48K',
     '128k':    'ZX Spectrum 128K',
+    # las claves con que llaman los exportadores nativos (VERSION decia
+    # «Sistema: spectrum128»)
+    'spectrum48':  'ZX Spectrum 48K',
+    'spectrum128': 'ZX Spectrum 128K',
     'tap':     'ZX Spectrum Next',
     'next':    'ZX Spectrum Next',
     'cpc':     'Amstrad CPC',

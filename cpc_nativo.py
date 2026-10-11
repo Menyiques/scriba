@@ -23,6 +23,13 @@ SYS_MSGS = [
 ]
 
 
+OTRA_PARTIDA = {'es': 'Pulsa una tecla para jugar otra vez.',
+                'en': 'Press a key to play again.',
+                'pt': 'Prime uma tecla para jogar outra vez.',
+                'ca': 'Prem una tecla per tornar a jugar.',
+                'fr': 'Appuyez sur une touche pour rejouer.'}
+
+
 def _sys_msgs_y_salidas(meta):
     """Construye los mensajes de sistema y los nombres de salida del motor CPC
     desde metadata['mensajes'] (el MISMO catálogo que Spectrum/Next, mensajes.py),
@@ -67,8 +74,14 @@ def _sys_msgs_y_salidas(meta):
     # "== FIN DEL JUEGO - Puntuacion: {p}/{max} ==" se toma solo el prefijo.
     msgs.append(prefix('fin_juego'))
     # SOTRA: lo que se ofrece al acabar. No esta en el catalogo historico,
-    # asi que se admite override del autor y si no, texto por defecto.
-    msgs.append(t('otra_partida') or 'Pulsa una tecla para jugar otra vez.')
+    # asi que se admite override del autor y si no, el texto por defecto en el
+    # idioma del juego (antes salia siempre en espanol).
+    try:
+        import vocab_base
+        lang = vocab_base.norm_lang((meta or {}).get('language'))
+    except Exception:
+        lang = 'es'
+    msgs.append(t('otra_partida') or OTRA_PARTIDA.get(lang, OTRA_PARTIDA['es']))
     # SNADAC / SNADAD / SOSCHAY: COGER TODO y DEJAR TODO sin nada, y COGER
     # TODO a oscuras (v2.13; antes daban "No ves eso aqui" / "No llevas eso").
     msgs += [t('nada_coger'), t('nada_dejar'), t('oscuro_hay')]
@@ -394,6 +407,29 @@ def _reparte_ranuras(loc_pics, libres):
     return donde, slots
 
 
+def _filas_pantalla(img_dir, nombre):
+    """Cuantas filas tendria la pantalla suelta `nombre` en el CPC, sin
+    convertirla: 8, 24 o 0 si no esta. Busca como export_native las del SCR:
+    un .scr en img/AmstradCPC es de 8; si no, un png/jpg en img/AmstradCPC o
+    img/Original, segun su proporcion."""
+    import os
+    import spectrum_export as sx
+    if not img_dir:
+        return 0
+
+    def _busca(carpeta, exts):
+        if not os.path.isdir(carpeta):
+            return None
+        return (sx.busca_img(carpeta, nombre, exts) or
+                sx.busca_img(carpeta, '@' + nombre.lstrip('@'), exts))
+    cpcdir = os.path.join(img_dir, 'AmstradCPC')
+    if _busca(cpcdir, ('.scr',)):
+        return 8
+    pp = (_busca(cpcdir, ('.png', '.jpg', '.jpeg')) or
+          _busca(os.path.join(img_dir, 'Original'), ('.png', '.jpg', '.jpeg')))
+    return sx._clase_pantalla(pp) if pp else 0
+
+
 def export_native(game, dsk_path, modo=1, img_dir=None):
     """Compila el juego y escribe un .dsk arrancable. Devuelve un dict de info.
     modo: 1 (40 columnas, imagenes de 4 colores) o 2 (80 columnas, 2 colores).
@@ -403,6 +439,7 @@ def export_native(game, dsk_path, modo=1, img_dir=None):
     import spectrum_export as sx
     import nativecc as nc
     import game_engine as ge
+    import next_nativo as nx
     import dsk
     import presupuesto
     presupuesto.empieza()
@@ -419,8 +456,15 @@ def export_native(game, dsk_path, modo=1, img_dir=None):
     # de salida antes de la presentacion (asi la presentacion sale debajo)
     import scriba_info
     ficha = scriba_info.ficha(game, 'cpc', scriba_info.ahora())
+    # la imagen de la presentacion (intro.*), si la hay y es una tira
+    import capabilities
+    f_intro = _filas_pantalla(img_dir, capabilities.INTRO)
     spec, info = nc.compile_game(c, sys_msgs, width=width, ficha=ficha,
-                                 imagen_intro=True)
+                                 imagen_intro=True, intro_scr=(f_intro == 8))
+    if f_intro == 24:
+        info.setdefault('notas_scr', []).append(
+            'intro: es de pantalla entera; la presentacion usa la imagen de la '
+            'sala inicial')
     tintas = _tintas_texto(game, modo)
 
     # Efectos de sonido FX (AY): se embeben SOLO los referenciados por PLAY. El
@@ -530,13 +574,16 @@ def export_native(game, dsk_path, modo=1, img_dir=None):
     # se ensambla una vez para saber donde empieza la DB.
     nranuras = max(1, len(loc_pics))
     aviso = _aviso_6128(game.get('metadata'))
+    # el borde de la metadata (0-7, estilo Spectrum), al color del firmware
+    bmeta = nx.borde_metadata(game)
+    borde = None if bmeta is None else _ZX2CPC[bmeta]
 
     def _motor(dbaddr, slots, tbufn, mtable):
         slots = list(slots) + [(0xC0, 0x4000)] * (nranuras - len(slots))
         return ge.assemble_engine(org=org, db_base=dbaddr, nloc=len(spec['locations']),
                                   pantallas=pant_tabla, modo=modo, tintas=tintas,
                                   slots=slots, tbufn=tbufn, mtable=mtable,
-                                  imgtop=IMGTOP, aviso128=aviso)
+                                  imgtop=IMGTOP, aviso128=aviso, borde=borde)
 
     def _mkdb(dbaddr, hb=0, texto=None, loc_slot=b''):
         return ge.build_game_db(
@@ -601,7 +648,8 @@ def export_native(game, dsk_path, modo=1, img_dir=None):
             if any(o.get('desc') for o in spec['objects']):
                 _con = len(todo_banco)
                 spec, _info2 = nc.compile_game(c, sys_msgs, width=width, ficha=ficha,
-                                               imagen_intro=True, obj_desc=False)
+                                               imagen_intro=True, obj_desc=False,
+                                               intro_scr=(f_intro == 8))
                 todo_banco, _i = _mkdb(dbaddr, texto=_banca(()))
                 presupuesto.apunta(
                     'CPC: las descripciones de los objetos no caben (%s bytes) y se '

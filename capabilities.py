@@ -241,6 +241,16 @@ def partes_scr(arg1, arg2):
     return None, nombre_pantalla(arg1)
 
 
+# La imagen de la presentacion. Es una pantalla suelta con este nombre, en las
+# carpetas de siempre (img/Original/intro.jpg, o la de cada maquina). Si existe
+# y es una tira como la de una sala (4:1), la presentacion la pinta con el
+# mensaje inicial en vez de la imagen de la sala inicial. Cada exportador
+# comprueba si la tiene (con su forma de buscar y de medir) y se lo dice a
+# nativecc.compile_game(intro_scr=...), que la pone al final de la lista de
+# pantallas. Una intro de pantalla entera se ignora, con aviso.
+INTRO = 'intro'
+
+
 def used_scr(game):
     """Las pantallas sueltas que pide algun SCR (en cualquiera de sus dos
     formas), por orden de primera aparicion y sin repetir. Ese orden es el

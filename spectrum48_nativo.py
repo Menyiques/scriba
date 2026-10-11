@@ -348,7 +348,7 @@ def pantallas_asm_48(pant):
 S48TIT_CALL = '        call  KMW           ; la portada que cargo el BASIC, hasta una tecla\n'
 
 
-def _engine_48(portada=False):
+def _engine_48(portada=False, grabar=True):
     """ENGINE_ASM adaptado. Se parte del parche que ya hace el Next sin imagenes
     ni portada (detect128 -> NXINIT, show_title -> ret, show_loc_image -> ventana
     a pantalla completa, wrap_print -> char_lento) y solo se le anade la pila:
@@ -358,10 +358,17 @@ def _engine_48(portada=False):
     sobre la que ha cargado el BASIC (ver S48TIT_CALL)."""
     src = nx._engine_next(False, False)
     i = src.index('start:  call  init')
-    return (src[:i] + (S48TIT_CALL if portada else '') +
-            'start:  ld    sp,S48SP      ; la pila de BASIC no da para el motor\n'
-            '        call  init' +
-            src[i + len('start:  call  init'):])
+    src = (src[:i] + (S48TIT_CALL if portada else '') +
+           'start:  ld    sp,S48SP      ; la pila de BASIC no da para el motor\n'
+           '        call  init' +
+           src[i + len('start:  call  init'):])
+    # El 48K (grabar=False) no tiene sitio para la partida grabada (unos 440
+    # bytes): GRABAR dice que esta version no puede. Esta funcion la usan
+    # tambien el 128K, el MSX2 y el PCW, que si la guardan. Si cambia la linea
+    # del motor, que falle aqui a voces.
+    _snap = 'SNAPBUF:  defs 417+LOCSCRN'
+    assert _snap in src, 'no encuentro SNAPBUF en ENGINE_ASM'
+    return src if grabar else src.replace(_snap, 'SNAPBUF   equ 0')
 
 
 def prefijo(org, db_base, borde=7, sp=SP48, ntxt=0, nscr=0, nloc=256):
@@ -390,7 +397,7 @@ def ensambla(org=ORG, db_base=None, idioma='es', borde=7, guion=None,
         extra = ('SCRUN:' + DZX0_ASM + chr(10) +
                  pantallas_asm_48(pantallas) + chr(10))
     fuente = (prefijo(org, db_base, borde, nscr=len(pantallas or ()), nloc=nloc) +
-              _engine_48(portada and guion is None) +
+              _engine_48(portada and guion is None, grabar=False) +
               plat + chr(10) +
               Z80N_ASM + chr(10) +
               nx.IMG_ASM_VACIO + chr(10) +
@@ -498,7 +505,7 @@ def compila(game, ancho=COLS, org=ORG, guion=None, game_dir=None):
             proc_after=spec['proc_after'], proc_onstart=spec['proc_onstart'],
             hdrbuf=0, imgbuf=0, loc_slot=b'', vall=spec['vall'],
             font_acc=spec['font_acc'], timers=spec['timers'],
-            llevarmax=spec['llevarmax'], fx=fx_blob)[0]
+            llevarmax=spec['llevarmax'], fx=fx_blob, exit_names=_sal)[0]
 
     # pantallas sueltas (SCR): comprimidas, dentro del binario
     pant = []

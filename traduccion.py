@@ -14,6 +14,7 @@ Textos cubiertos:
   - localizaciones: name, description (+ literales de on_enter / on_look)
   - objetos: name, description, initial_message
   - condacts/scripts: cada literal entrecomillado ("...") -> cnd.<nombre>#<i>
+  - temporizadores: los literales de su on_expire -> tim.<id>.on_expire#<i>
   - vocabulario: verbs / nouns / prepositions (las sinonimos que teclea el jugador)
 
 Los saltos de linea se guardan como "\\n" (literal) en el CSV para que cada texto
@@ -103,6 +104,15 @@ def recolecta_literales(game):
         for j, lit in enumerate(_literales(lineas)):
             out.append(('cnd.%s#%d' % (cname, j), lit))
 
+    # lo que dice un temporizador al acabarse (on_expire): en muchos juegos,
+    # los finales (capturado, se acabo el tiempo...)
+    for tid, tim in (game.get('timers') or {}).items():
+        if not isinstance(tim, dict):
+            continue
+        lineas, _ = _script_lineas(tim.get('on_expire'))
+        for j, lit in enumerate(_literales(lineas)):
+            out.append(('tim.%s.on_expire#%d' % (tid, j), lit))
+
     voc = game.get('vocabulary') or {}
     for grupo in _VOC_GRUPOS:
         d = voc.get(grupo) or {}
@@ -133,7 +143,11 @@ def _reemplaza_nth(script_val, idx, nuevo):
 
 
 def _aplica(game, clave, trad):
-    base, _, idx = clave.partition('#')
+    # el numero de literal va tras el ULTIMO '#', y solo si es un numero: los
+    # ids de objeto llevan su propio '#' (obj.#linterna.name)
+    base, _, idx = clave.rpartition('#')
+    if not idx.isdigit():
+        base, idx = clave, ''
     partes = base.split('.')
     pref = partes[0]
     try:
@@ -162,6 +176,12 @@ def _aplica(game, clave, trad):
             if cname not in cnd:
                 return False
             cnd[cname] = _reemplaza_nth(cnd[cname], int(idx), trad)
+        elif pref == 'tim':                      # literal del on_expire de un timer
+            tid, campo = partes[1], partes[2]
+            tim = (game.get('timers') or {}).get(tid)
+            if not isinstance(tim, dict):
+                return False
+            tim[campo] = _reemplaza_nth(tim.get(campo), int(idx), trad)
         elif pref == 'voc':
             grupo, wid = partes[1], partes[2]
             d = (game.get('vocabulary') or {}).get(grupo)

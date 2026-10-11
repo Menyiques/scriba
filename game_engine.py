@@ -28,11 +28,12 @@ EOP={'END':0,'CONST':1,'VAR':2,'ADD':3,'SUB':4,'EQ':5,'NE':6,'LT':7,'GT':8,
  'AND':9,'OR':10,'NOT':11,'AT':12,'NOTAT':13,'ZERO':14,'NOTZERO':15,'DARK':16,
  'CARRIED':17,'PRESENT':18,'ABSENT':19,'NOTCARR':20,
  'ISAT':21,'CHANCE':22,'WORN':23,'NOTWORN':24,'VERB':25,'NOUN1':26,
- 'TIMER':27,'HASOBJOPEN':28,'NOUN2':29,'ISIN':30,'ENTERED':31}
+ 'TIMER':27,'HASOBJOPEN':28,'NOUN2':29,'ISIN':30,'ENTERED':31,
+ 'OBJLIT':32,'OBJLOCK':33}
 # condacts extra: LETX (var,expr) e IF (expr -> salta cuerpo si falso)
 COP_EXTRA={'SHOWPIC':50,'PRVAR':51,'ENDGAME':52,
  'BRIGHT':53,'FLASH':54,'INVERSE':55,'SAMPLE':56,'QUIT':57,'SCR':58,'SCRLOC':59,
- 'EXITS':60,
+ 'EXITS':60,'SCRINTRO':61,'RAMSAVE':62,'RAMLOAD':63,
  'LETX':26,'IF':27,'JMP':28,
  'INK':29,'PAPER':30,'BORDER':31,'PAUSE':32,'CLS':33,
  'WEAR':34,'REMOVE':35,'LIT':36,'UNLIT':37,'SCORE':38,
@@ -99,15 +100,21 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     dic=txtpack.build_dict(''.join(messages),96)
     exps=txtpack.expansions(dic); ntok=len(exps)
     toks=[txtpack.tokenize(m,dic) for m in messages]; nmsg=len(messages)
-    # Dedup de vocabulario: cada entrada se graba como 4 letras + id + tipo y el
-    # parser solo compara esas 4 primeras letras, asi que los alias que colapsan a
-    # la misma (4 letras, id, tipo) son entradas identicas y redundantes. Quitarlas
-    # no cambia el comportamiento y baja el contador (p.ej. PT: 336 -> 249).
-    _seen=set(); _dv=[]
+    # Dedup de vocabulario: cada entrada se graba como 5 letras + id + tipo y el
+    # parser busca primero las 5 exactas y, si nada casa, las 4 primeras
+    # (vocab_lookup). Sobra una entrada si otra anterior tiene sus mismas 5
+    # letras (gana siempre la anterior) o si la primera con sus 4 letras ya da
+    # el mismo id y tipo (la segunda pasada lo resuelve igual). Quitarlas no
+    # cambia el comportamiento y baja el contador.
+    _v5=set(); _p4={}; _dv=[]
     for _w,_vid,_typ in vocab:
-        _k=(_w.upper()[:4], _vid, _typ)
-        if _k in _seen: continue
-        _seen.add(_k); _dv.append((_w,_vid,_typ))
+        _a=(_w.upper()[:5]+'     ')[:5]
+        if _a in _v5: continue
+        _v5.add(_a)
+        _p=_p4.get(_a[:4])
+        if _p is None: _p4[_a[:4]]=(_vid,_typ)
+        elif _p==(_vid,_typ): continue
+        _dv.append((_w,_vid,_typ))
     vocab=_dv
     nloc=len(locations); nvocab=len(vocab); nobj=len(objects)
     if nvocab>65535:
@@ -159,7 +166,7 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
         ex=L['exits']; lb.append(len(ex))
         for vid,dest in ex: lb.append(vid&0xFF); lb.append(dest&0xFF)
     p=ldat+len(lb)
-    vocaddr=p; p+=nvocab*6
+    vocaddr=p; p+=nvocab*7
     objname=p; p+=nobj*2
     objnoun=p; p+=nobj
     objloc=p; p+=nobj
@@ -305,7 +312,7 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     for x in lptr: w16(x)
     out+=lb
     for word,vid,typ in vocab:
-        w=(word.upper()[:4]+'    ')[:4]
+        w=(word.upper()[:5]+"     ")[:5]
         for ch in w: out.append(ord(ch)&0xFF)
         out.append(vid&0xFF); out.append(typ&0xFF)
     for o in objects: out.append(o['name']&0xFF); out.append((o['name']>>8)&0xFF)
@@ -584,6 +591,9 @@ mainloop:
         ld    a,(quitf)      ; END dentro de una respuesta (o el verbo SALIR):
         or    a              ; ni after_turn ni temporizadores
         jr    nz,ml_fin
+        ld    a,(noturn)     ; GRABAR/RECUPERAR no gastan turno: ni after_turn
+        or    a              ; ni temporizadores (lo recuperado queda tal cual)
+        jr    nz,ml_noturn
         ld    hl,(afterp)
         call  run_proc
         ld    a,(curloc)      ; cerrado el turno, ya no es "recien entrado"
@@ -593,6 +603,10 @@ mainloop:
         or    a
         jr    z,mainloop
 ml_fin: ret
+ml_noturn:
+        xor   a
+        ld    (noturn),a
+        jp    mainloop
 
 dispatch:
         call  run_response
@@ -1997,7 +2011,18 @@ rl_idle:
         pop   hl
         jp    rl_l
 
-parse:  xor   a
+parse:  ld    hl,INBUF        ; el apostrofo y el guion separan palabras, como
+pa_sep: ld    a,(hl)           ; el espacio: "l'uniforme", "esconde-te"
+        or    a
+        jr    z,pa_go
+        cp    39
+        jr    z,pa_esp
+        cp    45
+        jr    nz,pa_sig
+pa_esp: ld    (hl),32
+pa_sig: inc   hl
+        jr    pa_sep
+pa_go:  xor   a
         ld    (verbid),a
         ld    (nounid),a
         ld    (nounid2),a
@@ -2029,6 +2054,8 @@ pa_h:   call  norm_word
 pa_n:   ld    a,(nounid)
         or    a
         jr    z,pa_n1         ; primer nombre
+        cp    d               ; el mismo otra vez ("caja fuerte", dos sinonimos
+        jr    z,pa_w          ; de la caja): no es un segundo nombre
         ld    a,(nounid2)
         or    a
         jr    nz,pa_w         ; ya hay dos nombres
@@ -2041,7 +2068,7 @@ pa_n1:  ld    a,d
 
 norm_word:
         ld    de,KEY
-        ld    b,4
+        ld    b,5
 nw1:    ld    a,(hl)
         cp    32
         jr    z,nw_p
@@ -2073,7 +2100,18 @@ upcase: cp    97
         sub   32
         ret
 
+; vocab_lookup: KEY (5 letras) -> CF=1, A = id, E = tipo. Dos pasadas: primero
+; las 5 letras exactas y, si nada casa, las 4 primeras, que es lo que hacia el
+; motor antes. Con 4 solas PRISONER era PRISE y MONTRE era MONTER: la primera
+; entrada de la tabla (los verbos van antes) tapaba la palabra del jugador. La
+; vuelta a 4 mantiene lo que ya se entendia (EXAM = EXAMINAR).
 vocab_lookup:
+        ld    a,5
+        call  vl_pasa
+        ret   c
+        ld    a,4
+vl_pasa:
+        ld    (vllen),a
         ld    a,(nvocab)
         ld    c,a
         ld    a,(nvocab+1)
@@ -2084,23 +2122,26 @@ vocab_lookup:
 vl_s:   push  hl
         push  bc
         ld    de,KEY
-        ld    b,4
+        ld    a,(vllen)
+        ld    b,a
 vl_c:   ld    a,(de)
         cp    (hl)
         jr    nz,vl_nm
         inc   hl
         inc   de
         djnz  vl_c
+        pop   bc
+        pop   hl
+        ld    de,5            ; entrada: 5 letras, id, tipo
+        add   hl,de
         ld    a,(hl)
         inc   hl
         ld    e,(hl)
-        pop   bc
-        pop   hl
         scf
         ret
 vl_nm:  pop   bc
         pop   hl
-        ld    de,6
+        ld    de,7
         add   hl,de
         dec   bc
         ld    a,b
@@ -2378,7 +2419,7 @@ rc_loop:
         cp    e
         jr    nc,rc_end
 rc_go:  call  getop
-        cp    61
+        cp    64
         jr    nc,rc_loop
         add   a,a
         ld    e,a
@@ -2704,7 +2745,7 @@ eval_expr:
         xor   a
         ld    (esp),a
 ev_l:   call  getop
-        cp    32
+        cp    34
         jr    nc,ev_l
         add   a,a
         ld    e,a
@@ -2929,6 +2970,23 @@ ex_isin:
 exin_no:
         call  getop          ; hay que consumir el operando igual
         jp    ex_f
+; ex_olit / ex_olock: #obj.lit y #obj.locked en una expresion. Las demas
+; propiedades de objeto las traduce nativecc a lo que ya habia (CARRIED,
+; WORN, PRESENT, HASOBJOPEN, ISAT/ISIN) o a una constante.
+ex_olit:
+        call  getop
+        call  objlit_addr
+        ld    a,(hl)
+        or    a
+        jp    nz,ex_t
+        jp    ex_f
+ex_olock:
+        call  getop
+        call  objlock_addr
+        ld    a,(hl)
+        or    a
+        jp    nz,ex_t
+        jp    ex_f
 ex_chance:
         call  getop          ; n (0..100)
         ld    c,a
@@ -3010,7 +3068,7 @@ ex_f:   xor   a
 ETAB:   defw ex_end,ex_const,ex_var,ex_add,ex_sub,ex_eq,ex_ne,ex_lt,ex_gt,ex_and
         defw ex_or,ex_not,ex_at,ex_notat,ex_zero,ex_nzero,ex_dark,ex_carr,ex_pres,ex_abs,ex_ncar
         defw ex_isat,ex_chance,ex_worn,ex_nworn,ex_verb,ex_noun1,ex_timer,ex_hasopen
-        defw ex_noun2,ex_isin,ex_entered
+        defw ex_noun2,ex_isin,ex_entered,ex_olit,ex_olock
 ; c_prvar: imprime el valor de una variable en decimal, donde este el cursor.
 ; Es la mitad que le faltaba a PRINT "...{_VARIABLE}...": nativecc parte el
 ; texto por las llaves y va alternando trozo de mensaje y variable.
@@ -3333,6 +3391,103 @@ scr_rest:
 c_showpic:
         call  loc_scr
         jp    rc_loop
+; c_scrintro n: la imagen de la presentacion, cuando el juego trae una 'intro'.
+; Es la pantalla suelta n, siempre una tira de 8 filas (el compilador no deja
+; pasar otra), pintada borrando antes, igual que la imagen de una sala: el
+; mensaje inicial sale debajo. Si esta maquina no la tiene, la de la sala
+; inicial, como hace SHOWPIC.
+c_scrintro:
+        call  getop
+        ld    c,1
+        call  SHOWSCR
+        cp    255
+        jp    nz,rc_loop
+        call  loc_scr
+        jp    rc_loop
+; ---- GRABAR / RECUPERAR la partida (RAMSAVE / RAMLOAD) ----------------------
+; Una sola partida grabada, en la RAM del motor (SNAPBUF): las variables, el
+; estado de los objetos, los temporizadores, la sala y las pantallas que haya
+; reasignado SCR @sala. snapok va en el binario (vale 0 al cargar) y init no
+; lo toca, asi que lo grabado sobrevive a 'jugar otra vez'. Ninguno de los dos
+; gasta turno (noturn). Operandos: el mensaje de exito y el de fallo (16 bits
+; cada uno). Sin SNAPBUF (el 48K, que no tiene sitio), GRABAR dice que no puede.
+c_ramsave:
+        call  snap_msgs
+        ld    hl,SNAPBUF
+        ld    a,h
+        or    l
+        jr    z,snap_no
+        xor   a                ; graba: estado -> SNAPBUF
+        call  snap_copia
+        ld    a,1
+        ld    (snapok),a
+        ld    de,(snapm1)
+snap_msg:
+        push  de
+        call  newline
+        pop   de
+        call  print_msg
+        jp    rc_loop
+snap_no:
+        ld    de,(snapm2)
+        jr    snap_msg
+c_ramload:
+        call  snap_msgs
+        ld    a,(snapok)
+        or    a
+        jr    z,snap_no
+        ld    a,1              ; recupera: SNAPBUF -> estado
+        call  snap_copia
+        ld    a,(curloc)       ; ya se esta en la sala: no es "recien entrado"
+        ld    (prevloc),a
+        call  describe         ; describir borra el texto: el mensaje, despues
+        ld    de,(snapm1)
+        jr    snap_msg
+; snap_msgs: lee los dos mensajes (exito, fallo) y deja el turno sin gastar
+snap_msgs:
+        call  getop16
+        ld    (snapm1),de
+        call  getop16
+        ld    (snapm2),de
+        ld    a,1
+        ld    (noturn),a
+        ret
+; snap_copia: A = 0 graba (estado -> SNAPBUF), 1 recupera (SNAPBUF -> estado),
+; trozo a trozo segun snaptab (direccion y longitud; direccion 0 = fin)
+snap_copia:
+        ld    (snapdir),a
+        ld    hl,SNAPBUF
+        ld    (snapb),hl
+        ld    hl,snaptab
+sc_l:   ld    e,(hl)
+        inc   hl
+        ld    d,(hl)
+        inc   hl
+        ld    a,d
+        or    e
+        ret   z
+        ld    c,(hl)
+        inc   hl
+        ld    b,(hl)
+        inc   hl
+        ld    (snapt),hl
+        ld    hl,(snapb)
+        ld    a,(snapdir)
+        or    a
+        jr    nz,sc_cp         ; recupera: de la copia (HL) al motor (DE)
+        ex    de,hl            ; graba: del motor (HL) a la copia (DE)
+sc_cp:  ldir
+        ld    a,(snapdir)
+        or    a
+        jr    z,sc_g
+        ld    (snapb),hl
+        jr    sc_n
+sc_g:   ld    (snapb),de
+sc_n:   ld    hl,(snapt)
+        jr    sc_l
+snaptab:
+        defw  FLAGS,64,OBJLOC,64,OBJLIT,64,OBJOPEN,64,OBJLOCK,64,OBJIN,64
+        defw  TCUR,16,TACT,16,curloc,1,LOCSCR,LOCSCRN,0
 
 CTAB:   defw c_at,c_notat,c_present,c_absent,c_carried,c_notcarr,c_zero,c_notzero,c_eq
         defw c_goto,c_message,c_mes,c_get,c_drop,c_destroy,c_create,c_place,c_set
@@ -3345,7 +3500,7 @@ CTAB:   defw c_at,c_notat,c_present,c_absent,c_carried,c_notcarr,c_zero,c_notzer
         defw c_play,c_addscore
         defw c_showpic,c_prvar,c_endgame
         defw c_bright,c_flash,c_inverse,c_sample,c_quit,c_scr,c_scrloc
-        defw c_exits
+        defw c_exits,c_scrintro,c_ramsave,c_ramload
 
 show_title:
         ld    a,(hastitle)
@@ -3580,7 +3735,8 @@ FLAGS:    defs 64
 esp:      defb 0
 darkf:    defb 0
 ESTACK:   defs 16
-KEY:      defs 4
+KEY:      defs 5
+vllen:    defb 0
 INBUF:    defs 41
 OBJLOC:   defs 64
 OBJLIT:   defs 64
@@ -3593,6 +3749,15 @@ BUF:      defs 1024
 LOCSCR:   defs LOCSCRN       ; pantalla reasignada por sala (SCR @sala); 255 = la suya
                              ; (LOCSCRN y no NLOC: z80asm no distingue mayusculas y
                              ;  NLOC chocaria con la variable nloc de arriba)
+snapok:   defb 0             ; hay partida grabada (GRABAR); init no lo toca
+noturn:   defb 0             ; la orden de este turno no lo gasta (GRABAR/RECUPERAR)
+snapdir:  defb 0
+snapb:    defw 0
+snapt:    defw 0
+snapm1:   defw 0
+snapm2:   defw 0
+; la partida grabada: lo que copia snaptab (6 x 64 + 2 x 16 + 1 + LOCSCRN)
+SNAPBUF:  defs 417+LOCSCRN
 '''
 
 CPC_PLAT_ASM = r'''
@@ -4277,8 +4442,8 @@ d128_si:
         ld    b,TINTA1
         ld    c,TINTA1
         call  SCRINK
-        ld    b,TINTA0
-        ld    c,TINTA0
+        ld    b,BORDE
+        ld    c,BORDE
         call  SCRBORDER
 ''')
 
@@ -4326,12 +4491,13 @@ SLOTS_CPC = [(0xC4 + b, 0x4000 + k * 0x1400) for b in range(4) for k in range(3)
 
 def assemble_engine(org=ORG, db_base=DB, nloc=256, pantallas=None, modo=2,
                     tintas=None, slots=None, tbufn=256, mtable=0x8000,
-                    imgtop=0xA67C, aviso128='Necesita un CPC 6128.'):
+                    imgtop=0xA67C, aviso128='Necesita un CPC 6128.', borde=None):
     """El motor del CPC. pantallas: [(filas, 16 tintas)] de las pantallas
     sueltas del SCR (filas 0 = no esta en el disco), en el orden de
     spec['pantallas']. modo: 1 (40 columnas, 4 colores) o 2 (80, 2).
     tintas: (papel, pluma) del texto, colores del firmware; por defecto los de
-    siempre de cada modo. slots: [(config del banco, direccion)] de las
+    siempre de cada modo. borde: color del firmware del borde al arrancar (el
+    de la metadata); sin el, el del papel. slots: [(config del banco, direccion)] de las
     ranuras de la cache de imagenes. tbufn: lo que ocupa el mensaje mas largo
     (tokens + 0), que es lo que TXTPAGE copia fuera del banco. mtable: la
     tabla de matrices de los acentos (en los 32K centrales). aviso128: lo que
@@ -4345,6 +4511,7 @@ def assemble_engine(org=ORG, db_base=DB, nloc=256, pantallas=None, modo=2,
     L.append('COLS1 equ %d'%(39 if modo == 1 else 79))
     L.append('TINTA0 equ %d'%(tintas[0] & 31))
     L.append('TINTA1 equ %d'%(tintas[1] & 31))
+    L.append('BORDE equ %d'%((tintas[0] if borde is None else borde) & 31))
     L.append('IMGTOP equ &%04X'%imgtop)
     L.append('TBUFN equ %d'%max(1, tbufn))
     L.append('LOCSCRN equ %d'%max(1, nloc))

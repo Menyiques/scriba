@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Scriba publicidad flyer (en)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,wght@0,400;0,600;0,700;0,800;1,400;1,700&family=Source+Code+Pro:wght@400;700&display=block" rel="stylesheet">
+<style>
+@page { size: 210mm 297mm; margin: 0; }
+html, body { margin: 0; padding: 0; background: #f2f2f2; }
+body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.pag { position: relative; width: 210mm; height: 297mm; overflow: hidden;
+       background: #f2f2f2; color: #1e1e1e;
+       font-family: 'Source Serif 4', Georgia, serif; }
+.a { position: absolute; }
+img { display: block; }
+.fit { white-space: nowrap; }
+.barra { left: 12.71mm; width: 184.75mm; top: 10.84mm; height: 1.36mm; background: #221e1b; }
+.cab { left: 12.71mm; width: 184.75mm; top: 12.2mm; height: 6.52mm;
+       border-bottom: 0.34mm solid #1e1e1e; display: flex; align-items: center;
+       justify-content: space-between; font-size: 7.35pt; }
+.cab .i { font-weight: 700; letter-spacing: 0.13em; }
+.cab .c { font-style: italic; font-size: 8.6pt; }
+.cab .d { letter-spacing: 0.11em; }
+.titular { left: 12.0mm; width: 138mm; top: 19.59mm; font-size: 45.1pt; line-height: 18.26mm;
+           font-weight: 700; letter-spacing: -0.012em; color: #0a0a0a;
+           text-shadow: -0.3mm -0.22mm 0 #d9c300, 0.32mm 0.25mm 0 #d4006c; }
+.sello { left: 151.55mm; top: 27.19mm; width: 20.25mm; height: 20.25mm; border-radius: 50%;
+         background: #d4006c; color: #fff; display: flex; flex-direction: column;
+         align-items: center; justify-content: center; }
+.sello .n { font-style: italic; font-size: 9.3pt; line-height: 1; white-space: nowrap;
+           transform: rotate(9deg); margin: 0.6mm 0 0.7mm 1.6mm; }
+.sello .v { font-style: italic; font-weight: 600; font-size: 22pt; line-height: 1;
+           transform: rotate(5deg); margin: 0 1.6mm 0 0; }
+.logo { left: 173.32mm; top: 38.63mm; width: 23.89mm; }
+/* --k: escala que el script baja (hasta 0,8) si un bloque no cabe en su alto */
+.entradilla { left: 12.71mm; width: 146mm; top: 62.03mm; font-style: italic; color: #2a2a2a;
+              font-size: calc(11.9pt * var(--k, 1)); line-height: calc(5.55mm * var(--k, 1)); }
+.cap { top: 118.45mm; width: 58mm; font-size: 8.1pt; line-height: 4mm; }
+.cap b { font-weight: 700; }
+.cap i { color: #333; }
+.col { top: 126.52mm; width: 56.75mm; font-size: calc(9.44pt * var(--k, 1));
+       line-height: calc(4.75mm * var(--k, 1)); }
+.col h2 { margin: 0 0 1.38mm 0; font-size: 15.3pt; line-height: 7mm; color: #006484;
+          font-weight: 600; white-space: nowrap; }
+.col p { margin: 0; }
+.col ul { margin: 2.29mm 0 0 0; padding: 0; list-style: none;
+          font-size: calc(8.9pt * var(--k, 1)); line-height: calc(4.08mm * var(--k, 1)); }
+.col li { position: relative; padding-left: 4.36mm; margin-bottom: calc(1.45mm * var(--k, 1)); }
+.col li::before { content: ''; position: absolute; left: 0; top: 0.9mm; width: 2.2mm;
+                  height: 2.2mm; background: #a80854; }
+pre { margin: 2.43mm 0 0 0; font-family: 'Source Code Pro', Consolas, monospace;
+      font-size: calc(7.04pt * var(--k, 1)); line-height: calc(4.02mm * var(--k, 1));
+      color: #2b2b2b; }
+pre .k { color: #006484; font-weight: 700; }
+pre .r { color: #5d5d5d; font-style: italic; }
+pre .s { color: #98144c; }
+table { margin-top: 2.15mm; border-collapse: collapse; width: 100%; }
+td { padding: 0; height: calc(5.08mm * var(--k, 1)); vertical-align: baseline;
+     font-size: calc(8.9pt * var(--k, 1)); }
+td.f { font-style: italic; color: #333; width: 15.5mm; }
+.nov3 { left: 12.62mm; top: 193.05mm; font-size: 37pt; line-height: 1; font-weight: 700;
+        color: #0a0a0a; text-shadow: -0.45mm -0.25mm 0 #d9c300, 0.45mm 0.25mm 0 #d4006c; }
+.novt { left: 33.68mm; top: 194.86mm; font-size: 15.1pt; line-height: 5.75mm; }
+.novt b { font-weight: 700; display: block; }
+.novt i { display: block; }
+.lista { left: 12.71mm; width: 88mm; top: 209.96mm; margin: 0; padding: 0; list-style: none;
+         font-size: calc(8.5pt * var(--k, 1)); line-height: calc(4.2mm * var(--k, 1));
+         counter-reset: n; }
+.lista li { position: relative; padding-left: 4.61mm; margin-bottom: calc(0.95mm * var(--k, 1));
+            counter-increment: n; }
+.lista li::before { content: counter(n); position: absolute; left: 0; top: 0;
+                    color: #a80854; font-weight: 700; }
+.lista b { font-weight: 700; }
+.editor { left: 106.57mm; top: 195.01mm; width: 91.23mm; }
+.edpie { left: 106.57mm; width: 91.2mm; top: 242.42mm;
+         font-size: calc(8.14pt * var(--k, 1)); line-height: calc(4.02mm * var(--k, 1)); }
+.edpie i { color: #333; }
+.regla { left: 12.71mm; width: 184.75mm; top: 259.13mm; height: 0.34mm; background: #1e1e1e; }
+.pt { left: 12.62mm; width: 112mm; top: 261.93mm; font-size: 17pt; line-height: 7.4mm; }
+.pt b { font-weight: 700; }
+.url { left: 12.63mm; top: 269.75mm; font-size: 13.1pt; line-height: 7mm; color: #006480; }
+.cod { left: 12.62mm; width: 108.6mm; top: 278.08mm; font-size: 8.4pt; line-height: 3.5mm;
+       color: #333; }
+.cod a { color: #006480; text-decoration: none; }
+.prog { left: 130.37mm; width: 39.05mm; top: 267.44mm; text-align: center; font-style: italic;
+        font-size: 7.73pt; color: #333; white-space: nowrap; }
+.meny { left: 130.37mm; top: 273.11mm; width: 39.05mm; }
+.qr { left: 176.28mm; top: 263.71mm; width: 21.52mm; }
+</style></head>
+<body><div class="pag">
+<div class="a barra"></div>
+<div class="a cab"><span class="i">ADVERTISEMENT</span><span class="c fit" style="max-width:110mm">A multi-platform text adventure system</span><span class="d">VERSION 3.0 · OCTOBER 2026</span></div>
+<div class="a titular"><div class="fit">BASIC outside.</div><div class="fit">ASM inside.</div></div>
+<div class="a sello"><div class="n">New!</div><div class="v">3.0</div></div>
+<img class="a logo" src="img/scriba_logo.png" alt="SCRIBA">
+<div class="a entradilla" data-max="76.9">Write your text adventure once and take it to the Spectrum, the Amstrad, the MSX2 and the PC. Visual editor, debugger and multi-language support included.</div>
+<img class="a" src="img/apolo_128k.png" style="left:12.2mm;top:77.93mm;width:58.96mm" alt="">
+<img class="a" src="img/apolo_next.png" style="left:75.9mm;top:78.02mm;width:58.11mm" alt="">
+<img class="a" src="img/apolo_cpc.png" style="left:139.01mm;top:77.93mm;width:58.88mm" alt="">
+<div class="a cap" style="left:12.71mm;width:58mm"><b>ZX Spectrum 128K.</b> <i>Apollo 11, in Spanish.</i></div><div class="a cap" style="left:76.12mm;width:58mm"><b>ZX Spectrum Next.</b> <i>Layer 2 graphics.</i></div><div class="a cap" style="left:139.52mm;width:58mm"><b>Amstrad CPC 6128.</b> <i>Mode 1, in 4 colours.</i></div>
+<div class="a col" style="left:12.71mm" data-max="190.6"><h2 class="fit">Native ASM</h2><p>Your adventure runs on a native Z80 machine-code engine. Since 3.0, every machine is built from the same engine, compiled in pure Python.</p><ul><li>AY music, FX and digitised WAV sound</li><li>On the Next, Layer 2 and the ROM left untouched</li><li>A memory budget with every export</li></ul></div>
+<div class="a col" style="left:76.71mm" data-max="190.6"><h2 class="fit">Condacts in BASIC</h2><p>If you have written BASIC, you can already write condacts: ON, IF, THEN, ELSE, LET and PRINT, with variables and timers.</p><pre><span class="r">REM El Faro</span>
+<span class="k">ON</span> DIG SAND
+  <span class="k">IF AT</span> @beach <span class="k">THEN</span>
+    <span class="k">LET</span> _SAND_DUG = 1
+    <span class="k">CREATE</span> #key @beach
+    <span class="k">PRINT</span> <span class="s">"A key peeks out."</span>
+  <span class="k">ENDIF</span>
+<span class="k">ENDON</span></pre></div>
+<div class="a col" style="left:140.71mm" data-max="190.6"><h2 class="fit">Seven platforms</h2><p>One database, compiled for each machine and in five languages: Spanish, Catalan, English, French and Portuguese.</p><table><tr><td>ZX Spectrum 48K</td><td class="f">.TAP</td></tr><tr><td>ZX Spectrum 128K</td><td class="f">.TAP</td></tr><tr><td>ZX Spectrum Next</td><td class="f">.NEX</td></tr><tr><td>Amstrad CPC 6128</td><td class="f">.DSK</td></tr><tr><td>MSX2</td><td class="f">MegaROM</td></tr><tr><td>Amstrad PCW</td><td class="f">disk</td></tr><tr><td>Windows</td><td class="f">.EXE</td></tr></table></div>
+<div class="a nov3">3.0</div>
+<div class="a novt"><b>What's new</b><i>in this version</i></div>
+<ol class="a lista" data-max="257.9"><li><b>MSX2.</b> MegaROM cartridge, SCREEN 5 at 42 columns and music through the PSG.</li><li><b>Amstrad PCW.</b> Self-booting disk for the 8256 and 8512, at 90×32.</li><li><b>Native Z80 engine</b> on every machine. Goodbye, Boriel.</li><li><b>CPC in Mode 1.</b> 40 columns and 4-colour images in ZX0.</li><li><b>128K and Next.</b> Text, music and FX in memory banks.</li><li><b>Windows.</b> A single encrypted .exe with the game inside.</li><li><b>DAAD import.</b> Opens DAAD 1 and 2 .ddb games (8-bit) and converts them to YAML, logic included.</li></ol>
+<img class="a editor" src="img/editor.png" alt="">
+<div class="a edpie" data-max="257.9"><b>The editor.</b> <i>Draggable map of Apollo 11, with tabs for objects, vocabulary, condacts and sound. Instant testing on the PC, with a step-by-step debugger.</i></div>
+<div class="a regla"></div>
+<div class="a pt fit"><b>Try it today.</b> <i>Join the channel.</i></div>
+<div class="a url">t.me/ScribaAdventures</div>
+<div class="a cod">Source code at <a>github.com/Menyiques/scriba</a>, with El Faro and the DAS BOOT demo.</div>
+<div class="a prog">A program by Sergio Morales</div>
+<img class="a meny" src="img/menyiques.png" alt="Menyiques soft">
+<img class="a qr" src="img/qr.png" alt="QR">
+</div><script>
+var MM = 96 / 25.4;
+document.fonts.ready.then(function () {
+  // lo que va en una linea y no cabe a lo ancho: se encoge
+  document.querySelectorAll('.fit').forEach(function (e) {
+    var t = 0, s = parseFloat(getComputedStyle(e).fontSize);
+    while (e.scrollWidth > e.clientWidth + 0.5 && t++ < 60) {
+      s *= 0.985; e.style.fontSize = s + 'px';
+    }
+  });
+  // los bloques con data-max (mm desde arriba) que se pasan: se encoge su --k
+  document.querySelectorAll('[data-max]').forEach(function (e) {
+    var k = 1, max = parseFloat(e.getAttribute('data-max')) * MM;
+    while (e.getBoundingClientRect().bottom > max && k > 0.8) {
+      k -= 0.01; e.style.setProperty('--k', k.toFixed(2));
+    }
+  });
+  document.body.setAttribute('data-listo', '1');
+});
+</script></body></html>

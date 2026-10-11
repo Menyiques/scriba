@@ -59,6 +59,14 @@ def construir(game):
     if dbaddr + len(db) > 0xFF00:
         spec, _ = nc.compile_game(c, sysm[:ge.NSYS], width=ANCHO, obj_desc=False)
         db = _db(spec)
+    # Y si ni asi cabe, la cola de la DB (temporizadores incluidos) se sale de
+    # los 64K y la pisa la pila del arnes (&FFEE): las comprobaciones planas
+    # fallan sin que el motor tenga culpa. DAS BOOT ya no cabe; el .nex de
+    # verificar_nex si es de fiar.
+    if dbaddr + len(db) > PILA_ARNES - 0x40:
+        print('AVISO: la DB acaba en &%04X y se sale del mapa plano del arnes: '
+              'las comprobaciones de la DB pueden fallar sin culpa del motor. '
+              'Pruebalo con un juego mas pequeno (apolo11).' % (dbaddr + len(db)))
 
     mem = bytearray(65536)
     mem[ORG:ORG + len(code)] = code
@@ -600,7 +608,7 @@ def _verificar_nex(game, salida, datadir=None, musicdir=None):
     n = 0
     frame = sym.get('nxframe')
     while n < 10000000 and cpu.pc != sym['read_line']:
-        if cpu.pc == sym.get('c_showpic'):
+        if cpu.pc in (sym.get('c_showpic'), sym.get('c_scrintro')):
             arranque['showpic'] += 1
         toca = False
         if frame is not None and cpu.pc == frame:
@@ -717,6 +725,9 @@ def _verificar_nex(game, salida, datadir=None, musicdir=None):
         # la actual: hay que mirar su slot aparte
         slot0 = mem[slotp + info['inicio']] if slotp else 255
         esp0 = None if slot0 == 255 else nn.BANK_IMG + slot0
+        # ...salvo que el juego traiga imagen de presentacion (intro): esa
+        if info.get('intro_banco') is not None:
+            esp0 = info['intro_banco']
         pal_ok = True
         if slot != 255:
             lid = info['imagenes'][slot]
@@ -794,7 +805,7 @@ def main():
 
     ini_txt = (game.get('metadata') or {}).get('start_message') or ''
     if info['imagenes'] and ini_txt.strip():
-        res.append(('la imagen de la intro la pone el guion (SHOWPIC), no el arranque',
+        res.append(('la imagen de la intro la pone el guion (SHOWPIC/SCRINTRO), no el arranque',
                     arranque['showpic'] >= 1))
     b = arranque.get('bordes') or []
     if b:
@@ -910,7 +921,7 @@ def main():
         res.append(('banco de imagen de la sala correcto', img['banco'] == img['esperado']))
         print('        en la presentacion: Layer 2 $69=%s, banco $12=%s, texto desde la fila %s'
               % (img['l2_intro'], img['banco_intro'], img['fila_intro']))
-        res.append(('la presentacion ya lleva la imagen de la sala inicial',
+        res.append(('la presentacion ya lleva su imagen (la de intro o la de la sala inicial)',
                     img['l2_intro'] == 128 and img['banco_intro'] == img['esp0']))
         res.append(('...y su texto empieza en la fila 8', img['fila_intro'] == nn.FILA_TEXTO))
         res.append(('paleta de la sala subida entera', img['paleta_ok']))

@@ -67,6 +67,18 @@ VERBS = {
     'CERRA': {'es': ['cerrar', 'cierra'],
               'en': ['close', 'shut'],
               'pt': ['fechar', 'fecha']},
+    # GRABAR / RECUPERAR: una sola partida grabada en memoria (el RAMSAVE y el
+    # RAMLOAD de PAWS y DAAD). Ninguno gasta turno, y lo grabado sobrevive a
+    # 'jugar otra vez'. Si una palabra choca con otra del juego (en Tifon,
+    # GUARDAR con GUARDIA y CARGAR con la CARGA de explosivo), manda la del
+    # juego y quedan las demas. GRABA es tambien el verbo de los juegos
+    # importados de DAAD, cuyas respuestas, si las tienen, van antes.
+    'GRABA': {'es': ['grabar', 'graba', 'guardar', 'salvar', 'save'],
+              'en': ['save'],
+              'pt': ['gravar', 'grava', 'guardar', 'salvar', 'save']},
+    'RECUP': {'es': ['recuperar', 'recupera', 'cargar', 'restaurar', 'load'],
+              'en': ['load', 'restore'],
+              'pt': ['recuperar', 'recupera', 'carregar', 'restaurar', 'load']},
 }
 
 # Direcciones: CANÓNICO corto (N/S/E/O/U/D) -> {idioma: [palabras]}.
@@ -98,12 +110,102 @@ PREPS = {
     'SIN':   {'es': ['sin'], 'en': ['without'], 'pt': ['sem']},
 }
 
+# Catalan y frances, aparte para no alargar cada entrada de arriba. Sin ellos,
+# un juego en esos idiomas tiraba del espanol (y en frances el SUR de serie, la
+# direccion, se comia la preposicion 'sur'). Elegidas para no chocar entre si:
+# en frances ni PORTER (porte, la puerta), ni PLACER (place, la plaza), ni
+# TIRER (tambien es disparar); en catalan TREURE va a QUITARSE, que en los
+# juegos suele cubrir tambien sacar.
+_CA_FR_VERBS = {
+    'EXAMI': (['examinar', 'examina', 'ex', 'mirar', 'mira', 'observar', 'veure'],
+              ['examiner', 'examine', 'ex', 'x', 'regarder', 'observer', 'inspecter']),
+    'COGER': (['agafar', 'agafa', 'prendre', 'recollir', 'pillar'],
+              ['prendre', 'prends', 'ramasser', 'saisir', 'attraper']),
+    'DEJAR': (['deixar', 'deixa', 'amollar', 'dipositar'],
+              ['poser', 'pose', 'lacher', 'deposer', 'laisser']),
+    # METTRE, como PONER en espanol, es ponerse: "mettre l'uniforme". Con
+    # complemento ("mettre X dans Y") el interprete lo trata como METER.
+    'PONER': (['posar', 'vestir', 'equipar'],
+              ['mettre', 'enfiler', 'revetir', 'habiller', 'endosser']),
+    'QUITA': (['treure', 'despullar', 'llevar'],
+              ['enlever', 'oter']),
+    'METER': (['ficar', 'fica', 'introduir', 'inserir'],
+              ['inserer', 'introduire', 'glisser']),
+    'SACAR': (['extreure', 'extraure'],
+              ['extraire', 'retirer']),
+    'INVEN': (['inventari', 'inv', 'i'],
+              ['inventaire', 'inv', 'i']),
+    'PUNT':  (['punts', 'puntuacio', 'score'],
+              ['score', 'points']),
+    'SALID': (['sortides', 'sortida', 'sortir', 'exits', 'exit'],
+              ['sorties', 'sortie', 'issues', 'exits', 'exit']),
+    'ACABA': (['acabar', 'abandonar', 'fi', 'quit'],
+              ['quitter', 'abandonner', 'fin', 'quit']),
+    'ABRIR': (['obrir', 'obre'],
+              ['ouvrir', 'ouvre']),
+    'VERSI': (['versio'],
+              ['version']),
+    'CERRA': (['tancar', 'tanca'],
+              ['fermer', 'ferme']),
+    'GRABA': (['desar', 'gravar', 'guardar', 'save'],
+              ['sauver', 'sauvegarder', 'enregistrer', 'save']),
+    'RECUP': (['recuperar', 'carregar', 'restaurar', 'load'],
+              ['restaurer', 'charger', 'recuperer', 'load']),
+}
+_CA_FR_DIRS = {
+    'N': (['nord', 'n'], ['nord', 'n']),
+    'S': (['sud', 's'], ['sud', 's']),
+    'E': (['est', 'e'], ['est', 'e']),
+    'O': (['oest', 'o'], ['ouest', 'o', 'w']),
+    'U': (['amunt', 'pujar', 'puja', 'u'], ['monter', 'haut', 'u']),
+    'D': (['avall', 'baixar', 'baixa', 'd'], ['descendre', 'bas', 'd']),
+}
+_CA_FR_PREPS = {
+    'EN':    (['dins', 'dintre', 'en'], ['dans', 'en', 'dedans']),
+    'CON':   (['amb'], ['avec']),
+    'A':     (['a', 'al', 'cap'], ['a', 'au', 'vers']),
+    'DE':    (['de', 'del', 'des'], ['de', 'du', 'des']),
+    'SOBRE': (['sobre', 'damunt'], ['sur', 'dessus']),
+    'BAJO':  (['sota'], ['sous', 'dessous']),
+    'PARA':  (['per'], ['pour']),
+    'ENTRE': (['entre'], ['entre']),
+    'SIN':   (['sense'], ['sans']),
+}
+for _tabla, _extra in ((VERBS, _CA_FR_VERBS), (DIRS, _CA_FR_DIRS), (PREPS, _CA_FR_PREPS)):
+    for _canon, (_ca, _fr) in _extra.items():
+        _tabla[_canon]['ca'] = _ca
+        _tabla[_canon]['fr'] = _fr
+
+# Las palabras de TODO ("COGER TODO", "DEJAR TODO") por idioma. TODO y ALL
+# valen siempre, como hasta ahora.
+TODO = {'es': ['todo'], 'en': ['all'], 'pt': ['tudo'],
+        'ca': ['tot', 'tots'], 'fr': ['tout', 'tous']}
+
+
+def todo(lang='es'):
+    """Las palabras que significan TODO en el idioma del juego (+ todo, all)."""
+    out = []
+    for w in TODO.get(norm_lang(lang), []) + ['todo', 'all']:
+        if w not in out:
+            out.append(w)
+    return out
+
+# Las claves de los verbos de direccion de los juegos son identificadores en
+# espanol (NORTE, ARRIB...) o en ingles: son direccion en cualquier idioma, no
+# solo cuando coinciden con una palabra de direccion del idioma del juego.
+CLAVES_DIRECCION = {
+    'NORTE': 'N', 'NORTH': 'N', 'SUR': 'S', 'SOUTH': 'S',
+    'ESTE': 'E', 'EAST': 'E', 'OESTE': 'O', 'WEST': 'O',
+    'ARRIBA': 'U', 'ARRIB': 'U', 'UP': 'U', 'SUBIR': 'U',
+    'ABAJO': 'D', 'DOWN': 'D', 'BAJAR': 'D',
+}
+
 # Etiquetas legibles para el editor.
 LABELS = {
     'EXAMI': 'Examinar', 'COGER': 'Coger', 'DEJAR': 'Dejar', 'PONER': 'Ponerse',
     'QUITA': 'Quitarse', 'METER': 'Meter', 'SACAR': 'Sacar', 'INVEN': 'Inventario',
     'PUNT': 'Puntuación', 'SALID': 'Salidas', 'ACABA': 'Acabar', 'ABRIR': 'Abrir',
-    'CERRA': 'Cerrar',
+    'CERRA': 'Cerrar', 'GRABA': 'Grabar partida', 'RECUP': 'Recuperar partida',
     'N': 'Norte', 'S': 'Sur', 'E': 'Este', 'O': 'Oeste', 'U': 'Arriba', 'D': 'Abajo',
     'EN': 'en / in', 'CON': 'con / with', 'A': 'a / to', 'DE': 'de / from',
     'SOBRE': 'sobre / on', 'BAJO': 'bajo / under', 'PARA': 'para / for',
@@ -113,7 +215,15 @@ LABELS = {
 
 def norm_lang(lang):
     s = str(lang or 'es').strip().lower()
-    return 'pt' if s.startswith(('pt', 'por')) else 'en' if s.startswith('en') else 'es'
+    if s.startswith(('pt', 'por')):
+        return 'pt'
+    if s.startswith('en'):
+        return 'en'
+    if s.startswith('ca'):            # ca, cat, catala
+        return 'ca'
+    if s.startswith('fr'):            # fr, fra, francais
+        return 'fr'
+    return 'es'
 
 
 def _corta5(lst):

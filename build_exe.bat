@@ -12,6 +12,12 @@ REM  Nombre del .exe derivado de SCRIBA_VERSION en editor.py (1.2 -> Scriba_v_1_
 for /f "usebackq tokens=2 delims='" %%v in (`findstr /b "SCRIBA_VERSION" scriba_info.py`) do set SVER=%%v
 set SNAME=Scriba_v_%SVER:.=_%
 
+REM  Pone al dia NOVEDADES_distribucion.md (las novedades que van en el zip de
+REM  Scriba): la version del titulo y la lista de "Ultimos cambios", sacada de
+REM  NOVEDADES.md. Si falla, se avisa y se compila igual.
+python novedades_distribucion.py
+if errorlevel 1 echo  AVISO: no se pudo poner al dia NOVEDADES_distribucion.md.
+
 python -m PyInstaller --noconfirm --onefile --windowed --name %SNAME% ^
   --add-data "scriba_logo.png;." ^
   --add-data "Scriba_Manual.pdf;." ^
@@ -60,8 +66,11 @@ python -m PyInstaller --noconfirm --onefile --windowed --name %SNAME% ^
   --hidden-import PIL.ImageTk ^
   --hidden-import PIL._tkinter_finder ^
   --hidden-import msx2_nativo ^
+  --hidden-import ddb2scriba ^
+  --hidden-import daad_ddb ^
   --hidden-import pcw_nativo ^
   editor.py
+set PYIERR=%ERRORLEVEL%
 
 REM  Copia el .exe versionado a Scriba.exe para que Scriba.exe sea SIEMPRE la
 REM  ultima version compilada.
@@ -72,11 +81,22 @@ if exist "dist\%SNAME%.exe" (
   echo  AVISO: no se genero dist\%SNAME%.exe; no se actualizo Scriba.exe.
 )
 
+REM  Monta el paquete de distribucion "Scriba v%SVER%.zip": Scriba.exe, el
+REM  manual, NOVEDADES_distribucion.md y los ejemplos. Solo si PyInstaller ha
+REM  terminado bien, para no empaquetar un .exe viejo.
+if "%PYIERR%"=="0" (
+  python paquete_distribucion.py
+  if errorlevel 1 echo  AVISO: no se pudo montar el paquete de distribucion.
+) else (
+  echo  AVISO: PyInstaller ha fallado; no se monta el paquete de distribucion.
+)
+
 echo.
 echo ------------------------------------------------------------
 echo  Listo. Ejecutables en:
 echo     dist\%SNAME%.exe   (versionado)
 echo     dist\Scriba.exe    (siempre la ultima version)
+echo     Scriba v%SVER%.zip  (paquete de distribucion)
 echo  (scriba_build.json se creara junto al .exe la primera vez.)
 echo ------------------------------------------------------------
 pause

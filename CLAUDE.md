@@ -120,6 +120,21 @@ caché de imágenes son ranuras a medida en lo que deja el texto en los bancos.
 `z80asm.py` ensambla (incluye Z80N) y `z80.py` simula (incluye Z80N, puertos y
 NextRegs). Eso permite verificar el motor entero sin emulador.
 
+**GRABAR / RECUPERAR (`RAMSAVE` 62 / `RAMLOAD` 63).** La partida grabada va en
+`SNAPBUF` (`defs 417+LOCSCRN`, al final de las variables del motor) y la copia
+`snap_copia` trozo a trozo según `snaptab`: **si se añade al motor estado que
+deba volver con RECUPERAR, hay que añadirlo a `snaptab` y al tamaño de
+`SNAPBUF`.** `snapok` está en el binario y `init` no lo toca, así que lo grabado
+sobrevive a «jugar otra vez». `noturn` hace que `mainloop` se salte
+`after_turn` y los temporizadores. El 48K (`_engine_48(grabar=False)`) no tiene
+sitio: `SNAPBUF equ 0` y GRABAR dice que no puede.
+
+El borde de arranque sale de `next_nativo.borde_inicial(game)`:
+`metadata.border` (el combo del editor), si no el primer `BORDER` del
+`on_start`, si no 7. Lo usan el cargador del .tap (48K/128K), la cabecera del
+.nex y `NXBORDE` (Spectrum, Next, MSX2); el CPC lo recibe en
+`assemble_engine(borde=)` ya pasado a color del firmware (sin él, el del papel).
+
 `font42.py` lo genera `genera_font42.py`. **No editarlo a mano.**
 
 ---
@@ -240,6 +255,12 @@ se comprueba como `$ PILASCARGA`), que es como los indexa el motor.
 | `img/Spectrum/<id>.scr` | 48/128K | 6912 o 2304 bytes |
 | `img/Spectrum/<id>.jpg\|png\|bmp` | 48/128K | **4:1** (256×64); se convierte **sin** autocontraste |
 | `temp/Next/data/<id>.nxi` | Next | Layer 2, lo genera el editor; manda la grafía **con** arroba |
+
+**`intro.*` es la imagen de la presentación**, en cualquiera de esas carpetas
+y siempre en tira 4:1. Si está, sale con el mensaje inicial en vez de la de la
+sala inicial: cada exportador la busca a su manera, se lo dice a
+`compile_game(intro_scr=...)` y esta la añade al final de las pantallas del
+`SCR` y emite `SCRINTRO` (61) en vez de `SHOWPIC`. En 4:3 se ignora con aviso.
 
 El nombre vale **con arroba y sin ella** (`@playa.jpg` = `playa.jpg`): los
 másteres se guardan con la del id y el arte de `img/Spectrum`, históricamente,
@@ -388,6 +409,29 @@ máquina (pero **no comprueba la suma**; la del cargador la asegura un `assert`)
   respuesta se ejecuta con un final absurdo y la regla parece no casar. Costó
   una tarde y no da ningún error, solo «No entiendo eso».
 
+- **El parser nativo busca 5 letras exactas y, si nada casa, 4; en cada pasada
+  gana la PRIMERA entrada de la tabla.** Hasta la 3.0 solo comparaba 4 y en los
+  juegos traducidos se perdían palabras del camino principal: PRISONER era
+  PRISE, PASSE era PASSAR, MONTRE era MONTER (los verbos van antes en la
+  tabla). La vuelta a 4 es lo de antes, así que EXAM sigue siendo EXAMINAR. La
+  tabla guarda 5 letras + id + tipo (7 bytes por palabra) y `build_game_db`
+  poda las entradas que no cambian ninguna búsqueda. Sigue habiendo choques de
+  5 letras (CERRADURA = CERRAR en español). El orden de la tabla es el de
+  `c.verbalias` en `spectrum_export.recolecta`: las claves internas de los
+  verbos van al final a propósito. Para comprobar órdenes en nativo sin
+  simulador, imitar `vocab_lookup` sobre `nativecc.compile_game(...)['vocab']`.
+
+- **`#objeto.propiedad` llega a `nativecc` como `('var', '#obj.prop')`.**
+  `paws_lang` no distingue una propiedad de una variable; si algo la manda a
+  `ctx.var()`, se crea una variable nueva que vale 0 y la condición no se
+  cumple nunca, sin error (pasó hasta la 3.0). `_prop_rpn` y el `cmp` de
+  `cond_rpn` la interceptan antes. Cualquier sitio nuevo que compile
+  expresiones tiene que pasar por `expr_rpn`, no por `ctx.var()`.
+
+- **La ubicación inicial de un objeto en `compile_game` tiene su propio
+  `if`**, distinto de `recolecta.locval` y de `_destval`: `@INVEN`/`INVEN` y
+  `@ONME`/`PUESTO` también tienen que estar ahí (no lo estaban hasta la 3.0).
+
 - **Comodines de sustantivo (manual):** `_` = hueco vacío, o sea que NO puede
   haber palabra; `*` = cualquier palabra o ninguna. En la tabla de respuestas
   se codifican 254 y 255, y 0 es la ranura que la regla no declara.
@@ -400,6 +444,18 @@ máquina (pero **no comprueba la suma**; la del cargador la asegura un `assert`)
   `scriba_info.py`.
 
 - **`scriba_info.py` es la única fuente de la versión.** No repartirla.
+
+- **Dos registros de cambios.** `NOVEDADES.md` es el completo, para
+  desarrollo. `NOVEDADES_distribucion.md` es el del zip de Scriba, escrito a
+  mano para el usuario (sin pruebas, scripts ni módulos). `build_exe.bat` lo
+  pone al día con `novedades_distribucion.py`: versión del título y sección
+  «Últimos cambios» (títulos de `NOVEDADES.md` posteriores a la marca
+  `AUTO:INICIO desde="..."`). Al reescribir a mano las novedades de una versión,
+  mover el `desde` a la cabecera de `NOVEDADES.md` que ya cubre el texto.
+  Al final, si PyInstaller ha ido bien, `paquete_distribucion.py` monta
+  `Scriba vX.Y.zip` en la raíz: `Scriba.exe`, `Scriba_Manual.pdf` (como
+  `Scriba manual vX.Y.pdf`), esas novedades y los ejemplos (`el_faro.yaml` y la
+  demo de DAS BOOT sin `temp/` ni `dist/`).
 
 - **Las ubicaciones internas llevan `@`**: `@INVEN`, `@ONME`, `@NOWHERE`.
   `spectrum_export.locval()` y `nativecc._destval()` tienen que aceptar las dos

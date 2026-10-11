@@ -462,9 +462,16 @@ def compila(game, game_dir, ancho=COLS, org=ORG, guion=None):
     psg_bruto, psg_nom = ((b'', None) if not hay_portada
                           else nx._musica(os.path.join(game_dir, 'music')))
 
+    # La imagen de la presentacion (intro.*), si la hay y es una tira.
+    import capabilities
+    f_intro = sx.filas_pantalla_spectrum(img_dir, capabilities.INTRO) if hay_imgs else 0
+    av_intro = (['  - intro: es de pantalla entera; la presentacion usa la '
+                 'imagen de la sala inicial'] if f_intro == 24 else [])
+
     ficha = scriba_info.ficha(game, 'spectrum128', scriba_info.ahora())
     spec, _ = nc.compile_game(c, sysm[:ge.NSYS], width=ancho, filas=0,
-                              ficha=ficha, imagen_intro=hay_imgs)
+                              ficha=ficha, imagen_intro=hay_imgs,
+                              intro_scr=(f_intro == 8))
     idioma = str((game.get('metadata') or {}).get('language', '') or 'es')
     borde = nx.borde_inicial(game)
     nlocs = len(spec['locations'])
@@ -481,12 +488,13 @@ def compila(game, game_dir, ancho=COLS, org=ORG, guion=None):
             proc_after=spec['proc_after'], proc_onstart=spec['proc_onstart'],
             hdrbuf=0, imgbuf=0, loc_slot=b'', vall=spec['vall'],
             font_acc=spec['font_acc'], timers=spec['timers'],
-            llevarmax=spec['llevarmax'], fx=fx_blob, texto=texto)
+            llevarmax=spec['llevarmax'], fx=fx_blob, texto=texto,
+            exit_names=_sal)
 
     # Los bancos de texto no dependen de donde caiga la DB; la musica va detras,
     # entera (cabe un banco), en el hueco que deje el texto.
     bancos_texto = [bytearray(b) for b in _db(org)[1]['bancos_texto']]
-    avisos = []
+    avisos = list(av_intro)
     psg = b''
     psg_pos = None
     if psg_bruto:

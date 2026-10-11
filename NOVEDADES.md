@@ -11,6 +11,114 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
 ## [Sin publicar]
 
 ### Novedades
+- (añade aquí lo que vaya entrando para la próxima versión)
+- **`build_exe.bat` pone al día `NOVEDADES_distribucion.md`**, las novedades
+  para el usuario que van en el zip de Scriba (`novedades_distribucion.py`): la
+  versión del título sale de `scriba_info.py`, y una sección «Últimos cambios»
+  lista los títulos de las entradas de este registro posteriores a lo que ya
+  cuenta el texto escrito a mano (la marca `AUTO:INICIO desde="..."`), sin las
+  internas (pruebas, scripts, módulos). Y al terminar, si PyInstaller ha ido
+  bien, monta el paquete `Scriba vX.Y.zip` (`paquete_distribucion.py`): el
+  `.exe`, el manual, esas novedades y los ejemplos, comprobado fichero a
+  fichero.
+
+### Correcciones
+- (…)
+
+---
+
+## 3.0 — 2026-10-12 — La distribución: Amstrad PCW, catalán y francés, grabar y recuperar, y exportarlo todo de una vez
+
+### Novedades
+- **El analizador nativo distingue 5 letras.** En 48K, 128K, Next, CPC, MSX2 y
+  PCW el motor solo comparaba las 4 primeras letras de cada palabra y se
+  quedaba con la primera de la tabla, donde van los verbos antes que los
+  nombres. En los juegos traducidos eso dejaba sin entender palabras del
+  camino principal: en DAS BOOT, PRISONER se leía como PRISE (abrir), el PASSE
+  portugués y el PASSI catalán como PASSAR (dar), y en francés CARTE, PLAN y
+  MONTRE como CARTA, PLANQUER y MONTER, así que la partida no se podía acabar
+  en esas máquinas. En español también se perdían LIBROS, AGUA, BOLSA y
+  CONTRASEÑA. Ahora el motor busca primero las 5 letras exactas y, si ninguna
+  casa, las 4 de antes, así que todo lo que ya se entendía (EXAM, por ejemplo)
+  se sigue entendiendo igual. La tabla de vocabulario ocupa un byte más por
+  palabra (de 240 a 350 bytes más en DAS BOOT). Queda algún choque de 5 letras:
+  en español CERRADURA sigue siendo CERRAR (CANDADO sí vale).
+- **Nombre de los ficheros exportados** (Metadatos, «Nombre de los ficheros»,
+  `metadata.nombre_export`). Si está relleno, es el principio del nombre de todo
+  lo que se exporta a `dist/`, en vez del nombre del .yaml: con `DAS-BOOT` salen
+  `DAS-BOOT_128kb_es.tap`, `DAS-BOOT_next_ca.nex`, `DAS-BOOT_windows_en.zip`…,
+  también desde «Exportar todos los idiomas y máquinas». Vacío, todo sigue
+  como antes (y no se guarda en el YAML). Se quitan los caracteres que Windows
+  no admite en un nombre de fichero. DAS BOOT lo trae puesto (`DAS-BOOT`).
+- **Exportar todos los idiomas y máquinas** (menú Archivo). Un diálogo con los
+  idiomas del juego y las nueve exportaciones (48K, 128K, Next, CPC Modo 1 y 2,
+  MSX2, PCW 8256 y 8512, Windows), todo marcado de entrada; recuerda las
+  máquinas elegidas mientras dure la sesión. Los idiomas son el del juego
+  abierto, uno por cada CSV traducido `<juego>_textos_<idioma>.csv` que haya
+  junto al YAML (se aplica al juego tal como está en el editor, así que sale
+  siempre al día) y, de los idiomas sin CSV, los YAML hermanos
+  `<juego>_<idioma>.yaml` (como los de apolo11). Lo exporta todo a `dist/` en
+  segundo plano, con barra de progreso y un botón para parar, con los mismos
+  nombres que cada opción suelta; en Windows, cada `.exe` lleva el idioma en
+  el nombre (`DAS BOOT_es.exe`, `DAS BOOT_ca.exe`…) para no pisarse. Un fallo (un juego que no cabe en 48K) no para el resto: el informe
+  final dice, por idioma y máquina, el fichero o el error, y lo que cada
+  máquina no soporta.
+- **El borde de Metadatos es el de la partida, en todas las máquinas.** Hasta
+  ahora el combo «Borde (loader)» solo llegaba al cargador del export en BASIC;
+  los motores nativos lo ignoraban y arrancaban con el `BORDER` del `on_start`
+  o en blanco. Ahora `metadata.border` es el borde del cargador del .tap (48K y
+  128K), de la cabecera del .nex, del arranque del motor (Spectrum, Next, MSX2)
+  y del CPC (convertido a su color del firmware; sin él, el del papel, como
+  antes). El PCW no tiene borde de color y en Windows no hay borde. Un `BORDER`
+  en el `on_start` sigue mandando después: es código del autor. El combo se
+  llama ahora «Borde», se aplica nada más elegirlo (antes había que pulsar
+  «Aplicar metadata» o se exportaba con el de antes) y avisa si el `on_start`
+  pone otro.
+- **Catalán y francés.** El vocabulario de serie (`vocab_base.py`: verbos,
+  direcciones y preposiciones) y los mensajes propios del intérprete de PC
+  tienen ya versión catalana (`ca`) y francesa (`fr`); antes un juego en esos
+  idiomas tiraba del español (y en francés el SUR de serie, la dirección, se
+  comía la preposición *sur*). En las máquinas nativas, las letras francesas y
+  catalanas sin glifo propio se escriben sin acento en vez de con «?» (À, Ê,
+  Ô, Ù, Ï, œ → A, E, O, U, I, oe…), y la ele geminada sale como «l.l».
+- **Traducciones: los textos de los temporizadores.** `traduccion.py` exporta
+  e importa también los literales del `on_expire` de cada temporizador
+  (`tim.<id>.on_expire#n`), que en muchos juegos son los finales.
+- **GRABAR y RECUPERAR la partida** (el RAMSAVE y el RAMLOAD de PAWS y DAAD),
+  en el intérprete de PC y en las máquinas nativas salvo el 48K. GRABAR guarda
+  una sola partida en memoria (variables, objetos, temporizadores, la sala y
+  las pantallas puestas con `SCR @sala`), y RECUPERAR la devuelve y describe la
+  sala. Ninguna de las dos gasta turno (ni `after_turn` ni temporizadores), y
+  lo grabado sobrevive a «jugar otra vez», así que se puede recuperar después
+  de un final malo. Palabras de serie: GRABAR, GUARDAR, SALVAR y SAVE;
+  RECUPERAR, CARGAR, RESTAURAR y LOAD (en inglés SAVE y LOAD/RESTORE; en
+  portugués GRAVAR y CARREGAR). Si una choca con una palabra del juego, manda la
+  del juego. Los mensajes están en el catálogo (`grabada`, `no_grabar`,
+  `recuperada`, `sin_grabar`). En el motor son los condacts `RAMSAVE` (62) y
+  `RAMLOAD` (63), con la copia (unos 440 bytes, `SNAPBUF`) dentro del propio
+  motor; el 48K no tiene sitio y GRABAR dice que esa versión no puede. En el
+  reproductor de Windows, al acabar la partida ENTER empieza otra (antes se
+  quedaba sin entrada), como en las máquinas nativas.
+- **Imagen de presentación (`intro`)**. Si el juego trae una imagen `intro` en
+  tira, como las de las salas (`img/Original/intro.jpg`, o la de cada máquina en
+  `img/Spectrum/`, `img/AmstradCPC/`, `img/MSX/` o `img/PCW/`; en el Next la
+  convierte el editor a `temp/Next/data/intro.nxi`), la presentación la pinta
+  con el mensaje inicial en vez de la imagen de la sala inicial. Si no la hay,
+  todo sigue como siempre. Es una pantalla suelta más: va la última de la lista
+  de `SCR` (o reutiliza la suya si el guion ya usa `SCR intro`) y la pinta el
+  condact nuevo `SCRINTRO` (61), que en una máquina que no la tenga cae en la
+  imagen de la sala. Una intro de pantalla entera (4:3) se ignora, con aviso al
+  exportar. En el reproductor de Windows, con intro la partida espera ENTER
+  después del mensaje inicial, como el `PAUSE 0` de las nativas (sin intro no
+  se para). En 48K no hay imagen de presentación. El editor la enseña en
+  Metadatos, debajo de la de menú, como saldrá en la plataforma elegida (o la
+  de la sala inicial, si no hay intro o no vale, con una nota que lo dice).
+- **Importar DAAD (.ddb → YAML)**, en el menú Archivo (`ddb2scriba.py`,
+  `daad_ddb.py`). Trae vocabulario, localizaciones con sus salidas, objetos,
+  mensajes y la lógica: el proceso 0 como respuestas y el 1 y el 2 como
+  before/after_turn; las llamadas PROCESS de cola se aplanan en bloques ON.
+  Lo que no tiene equivalente (ventanas, gráficos, PARSE, DOALL, `@flag`,
+  SAVE/LOAD) queda como REM y el informe lo cuenta. DAAD 1 y 2 de 8 bits.
 - **Un clic ligero al teclear**, en todas las máquinas. Cada tecla que acepta la
   línea de órdenes (letras, BORRAR y ENTER) hace un clic corto; la pausa de
   «pulsa una tecla» y la portada quedan en silencio. En el Spectrum 48K/128K y
@@ -55,6 +163,94 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
   no se toca.
 
 ### Correcciones
+- **Máquinas nativas: `#objeto.propiedad` no funcionaba.** `IF #pilas.carried`,
+  `IF #linterna.lit` o `IF #caja.open` se compilaban como una variable nueva que
+  valía siempre 0 (el motor nativo nunca aprendió lo que hacía el exportador a
+  BASIC), y `LET #obj.lit = 1` ni siquiera compilaba. El validador no decía nada
+  y en PC funcionaba. Ahora `carried`, `worn`, `present`, `open` e `isat` (con =
+  y <> contra @sala, @INVEN, @ONME, @NOWHERE o #contenedor) van a los predicados
+  del motor; `lit` y `locked`, a dos operaciones nuevas del evaluador (`OBJLIT`
+  32 y `OBJLOCK` 33); y `fixed`, `weight`, `light_source`, `openable` y
+  `wearable`, que en nativo no cambian, valen lo que diga el YAML. `LET
+  #obj.lit|open|locked = 0/1` usa LIT/UNLIT, OPEN/CLOSE y LOCK/UNLOCK; las demás
+  asignaciones dan un error claro al exportar. Comprobado propiedad a propiedad
+  contra el intérprete de PC, antes y después de cambiarlas.
+- **Máquinas nativas: un objeto que empezaba en el inventario (`location:
+  '@INVEN'`) o puesto (`@ONME`) empezaba en ninguna parte.** El compilador solo
+  miraba el campo `worn`. La linterna de El Faro no estaba en el inventario y,
+  con lo anterior, El Faro no se podía acabar en ninguna máquina nativa.
+- **Los ejemplos, al día para la 3.0.** El Faro y la demo de DAS BOOT ya no
+  declaran el verbo SALIR (ahora SALIR enseña las salidas y ACABAR abandona) y
+  su AYUDA lo dice; la demo, además, pasa a la convención de prefijos (`@sala`,
+  `#objeto`, `_variable`). Los dos se juegan enteros en PC y en las siete
+  máquinas nativas.
+- **128K, Next, MSX2, PCW y 48K: las salidas de un juego traducido salían en
+  español.** Los exportadores recogían los nombres de salida del catálogo de
+  mensajes (`dir_n`…`dir_d`, que las traducciones traen) y no se los pasaban a
+  la base de datos, así que salía la línea de serie: en inglés «Exits: O Bajar»
+  en vez de «Exits: W Down», y quien tecleaba lo que veía recibía «I don't
+  understand that». Ahora todos los pasan, como ya hacía el CPC. En español no
+  cambia nada (los nombres de serie son esos): el .tap español sale idéntico.
+- **Windows: una pantalla de `SCR` pedida sin arroba no salía** si el fichero
+  la lleva (`SCR @sala_enigma morfina` con `@morfina.jpg`): el reproductor solo
+  probaba el nombre tal cual. Ahora prueba con arroba y sin ella, como las
+  máquinas nativas.
+- **48K y 128K: VERSION decía «Sistema: spectrum128»** (o «spectrum48») en vez
+  de «ZX Spectrum 128K»: los exportadores llaman a `scriba_info.ficha` con una
+  clave que no estaba en su tabla.
+- **Máquinas nativas: «Pulsa una tecla para jugar otra vez» salía en español
+  en todos los idiomas.** No está en el catálogo de mensajes; ahora, si el juego
+  no lo redefine, sale en el idioma del juego (es, en, pt, ca, fr).
+- **Máquinas nativas, juegos traducidos: QUIT no abandonaba la partida.** El
+  motor compara las 4 primeras letras y se queda con la primera entrada de la
+  tabla de vocabulario que casa. Las claves de los verbos (identificadores
+  internos, en español: QUITA, DECIR, COGER…) iban delante de las palabras de
+  serie, y en DAS BOOT en inglés, portugués, catalán y francés, y en apolo11 en
+  inglés y portugués, QUIT era QUITARSE una prenda («I don't understand that»).
+  Ahora las claves que no son también una palabra de su lista van al final de la
+  tabla (`spectrum_export.recolecta`): solo cambia el orden, no a qué verbo va
+  cada palabra. En los juegos en español no cambia nada (comprobado combinación
+  a combinación de 4 letras en DAS BOOT, apolo11, la demo y La aventura
+  original). En inglés, además, DECIPHER (DECI) era DECIR y ahora es USAR, como
+  dice el juego. En español QUIT sigue siendo QUITAR, que es palabra del juego,
+  y por eso ya no sale en el manual.
+- **Los ficheros exportados de un juego en catalán o francés se llamaban
+  `_es`.** El nombre (`{juego}_{plataforma}_{idioma}`) solo conocía es, en y pt:
+  `Operacion Tifon Negro_ca` salía como `Operacion Tifon Negro_ca_128kb_nativo_es.tap`.
+  Ahora el idioma sale de `vocab_base.norm_lang` (también ca y fr) y el sufijo
+  de idioma del nombre del juego se quita igual: `Operacion Tifon Negro_128kb_ca.tap`.
+  Además, los `.tap` ya no llevan `_nativo` (todo es nativo desde que se fue
+  Boriel): `_128kb_es.tap` y `_48kb_es.tap`.
+- **Juegos traducidos: lo que dependía de palabras en español.** Al traducir
+  DAS BOOT a cuatro idiomas salieron varias cosas que solo iban en español:
+  - las direcciones: las claves de los verbos de dirección del juego (NORTE,
+    ARRIB…) solo eran dirección si coincidían con una palabra del idioma del
+    juego, así que en un juego traducido `ON ARRIB` no casaba al escribir
+    AMUNT o MONTER. Ahora esas claves (`vocab_base.CLAVES_DIRECCION`) son
+    dirección en cualquier idioma, en PC y en nativo;
+  - COGER TODO: la palabra TODO es la de cada idioma (ALL, TUDO, TOT/TOTS,
+    TOUT/TOUS; TODO y ALL valen siempre), en PC y en nativo;
+  - los apóstrofos y guiones separan palabras (`posa't l'uniforme`,
+    `mettre l'uniforme`, `prends-la`), en PC y en las máquinas nativas, y el
+    intérprete de PC compara sin acentos (PÊCHEUR = PECHEUR);
+  - la línea de salidas traducida sin `{dirs}` se quedaba sin las direcciones.
+- **Dos sinónimos del mismo nombre ya no son dos nombres.** ABRIR CAJA FUERTE
+  (CAJA y FUERTE son el mismo nombre) llegaba con ese nombre dos veces y no
+  casaba con la respuesta de abrir la caja; ahora el repetido se descarta, en
+  PC y en nativo.
+- **PC: PONER X EN Y es METER X EN Y.** Con un segundo nombre, PONER se
+  trataba como ponerse una prenda.
+- **Traducciones: los objetos no se importaban.** Las claves de objeto llevan
+  el `#` de su id (`obj.#linterna.name`) y el importador lo tomaba por el
+  número de literal de un guion: ninguna traducción de nombre, descripción o
+  mensaje inicial de objeto llegaba al juego. Ahora solo cuenta un `#` seguido
+  de un número.
+- **Máquinas nativas: un verbo de serie podía quitarle la palabra a un nombre
+  del juego.** En el compilador nativo los verbos y los nombres van en tablas
+  separadas, y si una palabra de serie coincidía con un nombre (en Tifón,
+  CERRAR con la «cerra»dura del candado), el verbo se la quedaba y las
+  respuestas con ese nombre dejaban de casar. Ahora manda la palabra del juego,
+  como ya pasaba en el intérprete de PC.
 - **Windows y CPC: a oscuras se veía la imagen de la sala.** El reproductor
   del .exe y el motor del CPC la pintaban igual; ahora, como en Spectrum,
   Next, MSX2 y PCW, una sala oscura sin luz no enseña su imagen, y aparece

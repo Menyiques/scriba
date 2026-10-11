@@ -74,6 +74,11 @@ CATALOGO = [
     ('abandona',        "Abandonas la aventura.",                   {}, "Comando FIN/QUIT"),
     ('puntuacion',      "Puntuacion: {p}/{max}",        {'p': 'STR$(VvPUNTOS)'}, "Mostrar puntuacion"),
     ('fin_juego',       "== FIN DEL JUEGO - Puntuacion: {p}/{max} ==", {'p': 'STR$(VvPUNTOS)'}, "Mensaje de fin de juego"),
+    # ── grabar / recuperar la partida (una sola, en memoria) ──
+    ('grabada',         "Partida grabada.",                         {}, "GRABAR: partida grabada en memoria"),
+    ('no_grabar',       "Esta version no puede grabar la partida.", {}, "GRABAR en una maquina sin sitio (48K)"),
+    ('recuperada',      "Partida recuperada.",                      {}, "RECUPERAR: vuelve la partida grabada"),
+    ('sin_grabar',      "No hay ninguna partida grabada.",          {}, "RECUPERAR sin haber grabado antes"),
     # ── salidas (la linea "Salidas: N S E ...") ──
     ('salidas',         "Salidas:",                                 {}, "Etiqueta de la lista de salidas (ingles: Exits:)"),
     ('dir_n',           " N",                                       {}, "Salida Norte (conserva el espacio inicial)"),

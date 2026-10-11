@@ -1891,11 +1891,26 @@ def _datos_asm(etiqueta, datos):
     return chr(10).join(L)
 
 
+def borde_metadata(game):
+    """El color de borde (0-7) que el autor elige en el editor (metadata
+    'border'), o None si el juego no lo trae."""
+    b = (game.get('metadata') or {}).get('border')
+    try:
+        return None if b is None or b == '' else int(b) & 7
+    except (TypeError, ValueError):
+        return None
+
+
 def borde_inicial(game, por_defecto=7):
-    """Color de borde con el que arrancar, sacado del BORDER que el on_start del
-    autor pone (si lo pone). Se usa para la cabecera del .nex y para el arranque
-    del motor, de modo que la portada salga ya con SU borde: si no, se ve blanco
-    durante el titulo y cambia de golpe en cuanto corre on_start."""
+    """Color de borde con el que arrancar: el de la metadata (el combo Borde del
+    editor) y, si no lo hay, el del BORDER que el on_start del autor pone (si lo
+    pone). Se usa para el cargador, la cabecera del .nex y el arranque del
+    motor, de modo que la portada salga ya con SU borde: si no, se ve blanco
+    durante el titulo y cambia de golpe en cuanto corre on_start. Un BORDER en
+    el on_start sigue mandando despues: es codigo del autor y se ejecuta."""
+    b = borde_metadata(game)
+    if b is not None:
+        return b
     guion = str(((game.get('condacts') or {}).get('on_start') or ''))
     m = re.search(r'(?mi)^\s*BORDER\s+(\d+)', guion)
     return (int(m.group(1)) & 7) if m else por_defecto
@@ -2083,8 +2098,15 @@ def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None,
     # espera tecla al desplazar, asi que el texto sube seguido como en 128K.
     import scriba_info
     ficha = scriba_info.ficha(game, 'next', scriba_info.ahora())
+    # La imagen de la presentacion (intro.nxi, la convierte el editor), si la
+    # hay y es una tira; una de pantalla entera se ignora con aviso.
+    import capabilities
+    f_intro = _pantalla_next(datadir, capabilities.INTRO)[2]
+    aviso_intro = ('intro es de pantalla entera; la presentacion usa la imagen '
+                   'de la sala inicial' if f_intro == 24 else None)
     spec, _ = nc.compile_game(c, sysm[:ge.NSYS], width=ancho, filas=0,
-                              ficha=ficha, imagen_intro=True)
+                              ficha=ficha, imagen_intro=True,
+                              intro_scr=(f_intro == 8))
 
     idioma = str((game.get('metadata') or {}).get('language', '') or 'es')
     # la tabla loc_slot dice, por localizacion, que slot de imagen le toca (255 =
@@ -2114,7 +2136,8 @@ def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None,
             proc_after=spec['proc_after'], proc_onstart=spec['proc_onstart'],
             hdrbuf=0, imgbuf=0, loc_slot=bytes(loc_slot), vall=spec['vall'],
             font_acc=spec['font_acc'], timers=spec['timers'],
-            llevarmax=spec['llevarmax'], fx=fx_blob, texto=texto)
+            llevarmax=spec['llevarmax'], fx=fx_blob, texto=texto,
+            exit_names=_sal)
 
     # Los bancos de texto no dependen de donde caiga la DB: se sacan de una
     # primera construccion y la musica se pone detras, en el hueco que dejen.
@@ -2151,6 +2174,13 @@ def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None,
         pant_banco += len(datos) // 16384
         pant_slot += 1
     npant = pant_banco - (banco_texto(len(imgs), con_titulo) + ntxt)
+    # el banco de la imagen de la presentacion, si la lleva (para las pruebas)
+    intro_banco = None
+    if f_intro == 8:
+        _bajas = [str(n).lower() for n in (spec.get('pantallas') or [])]
+        if capabilities.INTRO in _bajas:
+            _t = pant_tabla[_bajas.index(capabilities.INTRO)]
+            intro_banco = _t[0] if _t[2] else None
 
     def _ensambla(base):
         return assemble_engine_next(org=org, db_base=base, idioma=idioma,
@@ -2173,6 +2203,7 @@ def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None,
     extras = {'imgs': imgs, 'datadir': datadir, 'fx': fx_blob, 'borde': borde,
               'titulo': titulo_bin, 'titulo_pal': titulo_pal, 'paletas': paletas,
               'psg': psg, 'psg_nom': psg_nom, 'aviso_psg': aviso_psg,
+              'aviso_intro': aviso_intro, 'intro_banco': intro_banco,
               'guion': None if guion is None else bytes(guion) + b'\x00',
               'muestras': smp_blob, 'nsmpbanco': nsmpbanco,
               'smptab': smptab,
@@ -2293,6 +2324,8 @@ def export_nex(game, salida, ancho=COLS, org=ORG, borde=None, datadir=None,
             'titulo': ex['titulo'] is not None,
             'psg': len(ex['psg']), 'psg_nom': ex['psg_nom'],
             'aviso_psg': ex['aviso_psg'],
+            'aviso_intro': ex['aviso_intro'],
+            'intro_banco': ex['intro_banco'],
             'localizaciones': len(spec['locations']),
             'objetos': len(spec['objects']),
             'presupuesto': presupuesto.informe()}
@@ -2355,6 +2388,8 @@ def main():
              info['fx']))
     if info['aviso_psg']:
         print('  aviso: ' + info['aviso_psg'])
+    if info['aviso_intro']:
+        print('  aviso: ' + info['aviso_intro'])
     print('  portada: %s   musica: %s'
           % ('si (3 bancos)' if info['titulo'] else 'no',
              ('%s, %d bytes' % (info['psg_nom'], info['psg'])) if info['psg'] else 'no'))
