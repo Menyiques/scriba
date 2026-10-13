@@ -66,6 +66,10 @@ MSGS = {
     'no_entiendo_ayuda': ("No entiendo eso. Escribe AYUDA para ver los comandos.",
                           "I don't understand that. Type HELP for the commands.",
                           "Não percebo isso. Escreve AJUDA para ver os comandos."),
+    # el de las ordenes que no se entienden: el del catalogo (no_entiendo), que
+    # el autor cambia en el editor; no_entiendo_ayuda solo si el autor lo
+    # escribe (Scriba no trae un verbo AYUDA de serie)
+    'no_entiendo':    ("No entiendo eso.", "I don't understand that.", "Não percebo isso."),
     'no_hacer':       ("No puedes hacer eso.", "You can't do that.", "Não podes fazer isso."),
     'no_direccion':   ("No puedes ir en esa dirección.", "You can't go that way.", "Não podes ir nessa direção."),
     'pasa_tiempo':    ("Pasa el tiempo...", "Time passes...", "O tempo passa..."),
@@ -149,6 +153,7 @@ MSGS = {
 MSGS_CA_FR = {
     'no_entiendo_ayuda': ("No ho entenc. Escriu AJUDA per veure les ordres.",
                           "Je ne comprends pas. Tapez AIDE pour voir les commandes."),
+    'no_entiendo':     ("No ho entenc.", "Je ne comprends pas."),
     'pasa_tiempo':     ("Passa el temps...", "Le temps passe..."),
     'sin_salidas':     ("No hi ha sortides visibles.", "Aucune sortie visible."),
     'contiene_inline': ("(conté: {c})", "(contient : {c})"),
@@ -314,11 +319,21 @@ class PAWSBasic:
         self.lines = []
         self.pos = 0
         self._stop = False
-        self._current_verb = None
-        self._current_noun1 = None
-        self._current_noun2 = None
+        # Las palabras del turno (las que ha dejado _partida tras analizar la
+        # orden): before_turn, los temporizadores y after_turn tambien las ven,
+        # como en las maquinas. Las respuestas las ponen ellas mismas.
+        (self._current_verb, self._current_noun1,
+         self._current_noun2) = getattr(interp, '_palabras', None) or (None, None, None)
         # Hook de debug: callable(line_text, condition_result=None) o None
         self.pre_exec_hook = None
+        # Subrutinas: RETURN acaba este script (el de la SUB) y _depth cuenta
+        # las llamadas CALL que hay por encima
+        self._ret = False
+        self._depth = 0
+        # DOALL: el objeto de la vuelta en curso (#DOALL) y cuantos hay en
+        # marcha, uno dentro de otro
+        self._doall = None
+        self._doall_depth = 0
 
     def run(self, script):
         """Ejecuta un script BASIC (string o lista de strings)."""
@@ -352,14 +367,37 @@ class PAWSBasic:
 
     def _run_block(self):
         """Ejecuta líneas hasta ELSE, ENDIF, ENDON o fin de script."""
-        while self.pos < len(self.lines) and self.interp.running and not self._stop:
+        while self.pos < len(self.lines) and self.interp.running and not self._stop \
+                and not self._ret:
             line = self.lines[self.pos]
+            if self._doall:                # #DOALL es el objeto de esta vuelta
+                line = _RE_DOALL.sub(lambda m: self._doall, line)
             upper = line.upper().strip()
 
             if upper in ('ENDIF', 'ELSE', 'ENDON'):
                 return  # el padre leerá este token
 
             self.pos += 1
+
+            # DOALL destino ... ENDDOALL: el cuerpo, una vez por objeto
+            primera = upper.split()[0] if upper.split() else ''
+            if primera == 'DOALL':
+                if self.pre_exec_hook:
+                    self.pre_exec_hook(line, None)
+                cuerpo, fin = self._gather_doall()
+                partes = line.split()
+                self._doall_run(partes[1] if len(partes) > 1 else '', cuerpo)
+                self.pos = fin
+                continue
+            if primera == 'ENDDOALL':
+                continue
+
+            # SUB nombre ... ENDSUB: se define, no se ejecuta (CALL la llama)
+            if paws_lang.es_sub(line):
+                while self.pos < len(self.lines) and not paws_lang.es_endsub(self.lines[self.pos]):
+                    self.pos += 1
+                self.pos += 1
+                continue
 
             if upper == 'REM' or upper.startswith('REM '):
                 if self.pre_exec_hook:
@@ -398,6 +436,46 @@ class PAWSBasic:
                 if self.pre_exec_hook:
                     self.pre_exec_hook(line, None)
                 self._execute_statement(line)
+
+    def _gather_doall(self):
+        """Las lineas del cuerpo del DOALL que empieza en self.pos (con los
+        DOALL de dentro) y el indice detras de su ENDDOALL."""
+        depth, i, cuerpo = 0, self.pos, []
+        while i < len(self.lines):
+            w = (self.lines[i].strip().split() or [''])[0].upper()
+            if w == 'DOALL':
+                depth += 1
+            elif w == 'ENDDOALL':
+                if depth == 0:
+                    return cuerpo, i + 1
+                depth -= 1
+            cuerpo.append(self.lines[i])
+            i += 1
+        return cuerpo, i
+
+    def _doall_run(self, dest, cuerpo):
+        """Ejecuta el cuerpo una vez por cada objeto que este en el destino
+        (@sala, INVEN, PUESTO, NADA, AQUI o #contenedor), en el orden del juego.
+        Se mira al llegar a cada objeto: lo que el cuerpo mueva cuenta ya, como
+        en las maquinas (c_doall)."""
+        interp = self.interp
+        if self._doall_depth >= paws_lang.DOALL_MAX:
+            print(f"[BASIC: DOALL {dest}: más de {paws_lang.DOALL_MAX} uno dentro "
+                  f"de otro; no se hace]")
+            return
+        guarda = (self.lines, self.pos, self._doall)
+        self._doall_depth += 1
+        try:
+            for oid in list(interp.objects):
+                if self._stop or self._ret or not interp.running:
+                    break
+                if not interp.obj_isat(oid, dest):
+                    continue
+                self.lines, self.pos, self._doall = cuerpo, 0, oid
+                self._run_block()
+        finally:
+            self.lines, self.pos, self._doall = guarda
+            self._doall_depth -= 1
 
     def _skip_to_else_or_endif(self):
         """Salta hasta ELSE o ENDIF al nivel actual (IFs anidados aumentan nivel)."""
@@ -517,19 +595,18 @@ class PAWSBasic:
         """Resuelve una condición-palabra-clave. VERB/NOUN1/NOUN2 acceden al
         estado del parser (verbo/nombres del turno); el resto se delega a
         interp.check_condition (AT, CARRIED, ISAT, DARK, CHANCE, TIMER...)."""
-        if name == 'VERB':
+        # La palabra del autor se compara en su forma canónica, como en los
+        # ON: VERB EXAMINAR = VERB EXAMI, NOUN1 #arena = el nombre de la arena.
+        # '_' es "ninguna" (VERB _: PARSE de una orden sin verbo).
+        if name in ('VERB', 'NOUN1', 'NOUN2'):
             pattern = args[0].upper() if args else '*'
-            return pattern == '*' or self._current_verb == pattern
-        if name == 'NOUN1':
-            pattern = args[0].upper() if args else '*'
+            actual = {'VERB': self._current_verb, 'NOUN1': self._current_noun1,
+                      'NOUN2': self._current_noun2}[name]
+            if pattern == '*':
+                return True
             if pattern == '_':
-                return self._current_noun1 is None
-            return pattern == '*' or self._current_noun1 == pattern
-        if name == 'NOUN2':
-            pattern = args[0].upper() if args else '*'
-            if pattern == '_':
-                return self._current_noun2 is None
-            return pattern == '*' or self._current_noun2 == pattern
+                return actual is None
+            return actual is not None and actual == self._canon_slot([pattern])[0]
         return self.interp.check_condition({"condition": name, "args": args})
 
     def _getvar(self, n):
@@ -540,8 +617,15 @@ class PAWSBasic:
             return 0
         if n[0] == '#':
             return self.interp.obj_prop(n) if '.' in n else n
-        if n[0] == '@':
+        if n[0] == '@' and n.upper() != '@AQUI':
             return norm_loc(n)   # @INVEN/@ONME/@NOWHERE -> forma interna; @loc intacto
+        # los destinos sin arroba, como en las maquinas (#obj.isat = INVEN), y
+        # AQUI, la sala del jugador
+        u = n.upper()
+        if u in ('INVEN', 'PUESTO', 'NADA'):
+            return u
+        if u in ('AQUI', '@AQUI'):
+            return self.interp.player_location
         return self.interp.variables.get(norm_var(n), 0)
 
     def _eval_condition(self, cond_str):
@@ -586,8 +670,18 @@ class PAWSBasic:
         """
         text = self._extract_str(s)
         def replace(m):
+            # las del sistema (_PUNTOS, _LLEVAR_MAX...) se guardan sin el
+            # guion bajo: sin norm_var salian siempre a 0
             name = m.group(1)
-            return str(self.interp.variables.get(name, 0))
+            return str(self.interp.variables.get(norm_var(name), 0))
+        # {#objeto}: su nombre (con DOALL, PRINT "Llevas {#DOALL}.")
+        def nombre(m):
+            oid = self.interp.resolve_obj(m.group(1))
+            obj = self.interp.objects.get(oid)
+            return str(obj.get('name') or '') if obj else m.group(0)
+        if self._doall:
+            text = _RE_DOALL.sub(lambda m: self._doall, text)
+        text = re.sub(r'\{(#[A-Za-z0-9_]+)\}', nombre, text)
         return re.sub(r'\{([A-Z_][A-Z0-9_]*)\}', replace, text)
 
     # ── Ejecución de comandos ────────────────────────────────────────────────
@@ -647,6 +741,22 @@ class PAWSBasic:
         elif cmd == 'MATCH':
             self._stop = True          # respuesta manejada, no seguir ON blocks
 
+        elif cmd == 'CALL':
+            self._call(rest.split()[0] if rest.split() else '')
+
+        elif cmd == 'RETURN':
+            self._ret = True           # sale de la subrutina (ver _call)
+
+        elif cmd == 'PARSE':
+            # la orden del jugador pasa a ser la frase: VERB, NOUN1 y NOUN2
+            # son los suyos durante el resto de este script
+            o = getattr(interp, 'orden', None)
+            if o is None:
+                v = n1 = n2 = None
+            else:
+                v, n1, n2 = interp.parse(o, orden=False)
+            self._current_verb, self._current_noun1, self._current_noun2 = v, n1, n2
+
         elif cmd == 'QUIT':
             interp.running = False
 
@@ -688,11 +798,57 @@ class PAWSBasic:
 
         elif cmd in ('CREATE', 'PUTIN', 'TAKEOUT', 'PUT'):
             args = rest.split()
+            # AQUI: la sala del jugador
+            if cmd in ('CREATE', 'PUT') and len(args) > 1 and args[1].upper() in ('AQUI', '@AQUI'):
+                args[1] = interp.player_location
             interp.execute_action({"action": cmd, "args": args[:2]})
 
         else:
             # Antes se ignoraba en silencio; avisar ayuda a depurar el juego
             print(f"[BASIC: comando desconocido '{cmd}']")
+
+    def _call(self, nombre):
+        """CALL nombre: ejecuta el cuerpo de SUB nombre ... ENDSUB con el mismo
+        verbo y nombres del turno. MATCH dentro de la subrutina corta también a
+        quien la llamó (como en las máquinas); RETURN solo a ella."""
+        cuerpo = self.interp.subrutinas().get(nombre.upper())
+        if cuerpo is None:
+            print(f"[BASIC: no hay ninguna SUB '{nombre}']")
+            return
+        if self._depth >= paws_lang.CALL_MAX:
+            # las máquinas tampoco la hacen: su pila de llamadas no da más
+            print(f"[BASIC: CALL {nombre}: más de {paws_lang.CALL_MAX} "
+                  f"llamadas una dentro de otra; no se hace]")
+            return
+        sub = PAWSBasic(self.interp)
+        sub._current_verb = self._current_verb
+        sub._current_noun1 = self._current_noun1
+        sub._current_noun2 = self._current_noun2
+        sub.pre_exec_hook = self.pre_exec_hook
+        sub._depth = self._depth + 1
+        sub._doall = self._doall
+        sub._doall_depth = self._doall_depth
+        # el depurador del editor sabe en que pestana esta por su _cur_section:
+        # mientras corre la subrutina, la suya
+        dep = getattr(self.pre_exec_hook, '__self__', None)
+        antes = getattr(dep, '_cur_section', None)
+        if antes is not None:
+            dep._cur_section = self.interp._subs_sec.get(nombre.upper(), antes)
+        try:
+            sub.run(cuerpo)
+        finally:
+            if antes is not None:
+                dep._cur_section = antes
+        if sub._stop:
+            self._stop = True
+        # un PARSE dentro de la subrutina vale tambien para quien la llamo
+        self._current_verb = sub._current_verb
+        self._current_noun1 = sub._current_noun1
+        self._current_noun2 = sub._current_noun2
+
+
+_RE_DOALL = re.compile(r'(?i)#DOALL\b')
+
 
 class PAWSInterpreter:
     def play_sample(self, n):
@@ -937,12 +1093,29 @@ class PAWSInterpreter:
 
     # ─── PARSER ──────────────────────────────────────────────────────────────
 
-    def parse(self, text: str) -> tuple:
+    def parse(self, text: str, orden: bool = True) -> tuple:
         """
         Parsea la entrada del jugador.
         Devuelve (verb, noun1, noun2) en forma canónica de 5 letras,
         o None si no se reconoce.
+
+        Una orden a un personaje (JUAN, COGE LA LLAVE o DECIR A JUAN "COGE LA
+        LLAVE") se queda aparte en self.orden para PARSE, y lo que se devuelve
+        es la frase de delante (paws_lang.separa_orden). orden=False analiza
+        el texto tal cual: es lo que hace PARSE con la orden.
         """
+        if orden:
+            self.orden = None
+            delante, ordn, coma = paws_lang.separa_orden(text)
+            if ordn is not None:
+                v, n1, n2 = self.parse(delante, orden=False)
+                if not coma:
+                    self.orden = ordn
+                    return v, n1, n2
+                if v is None and n1 is not None:
+                    self.orden = ordn
+                    return 'DECIR', n1, n2
+                text = delante + ' ' + ordn        # la coma era una coma
         # Sin tildes (el vocabulario va sin ellas: "pêcheur", "três") y con el
         # apostrofo y el guion como separadores ("l'uniforme", "esconde-te"),
         # como hace el motor nativo.
@@ -1050,6 +1223,8 @@ class PAWSInterpreter:
         obj = self.objects.get(self.resolve_obj(obj_arg))
         if obj is None:
             return False
+        if str(dest_arg).upper() in ('AQUI', '@AQUI'):     # la sala del jugador
+            return obj.get('location') == self.player_location
         dest = norm_loc(dest_arg)
         # Prioridad: localizacion > centinela > contenedor (por id o nombre),
         # igual que antes de v2.43, pero admitiendo tambien @INVEN/@ONME/@NOWHERE.
@@ -1148,6 +1323,23 @@ class PAWSInterpreter:
                 if o.get("location") == obj_id:
                     weight += self.get_object_weight(oid, _visited)
         return weight
+
+    def _peso_max(self):
+        """LLEVAR_MAX, o None si no hay limite de peso: el juego no la declara
+        o vale 0. Igual en las maquinas (wlimite). Hasta la 3.0 el PC ponia 50
+        sin variable y con 0 no dejaba coger nada que pesara."""
+        try:
+            m = int(self.variables.get('LLEVAR_MAX'))
+        except (TypeError, ValueError):
+            return None
+        return m if m > 0 else None
+
+    def _no_entiendo(self):
+        """Una orden que no se entiende: no_entiendo_ayuda si el autor la ha
+        escrito (era el de siempre del PC, que mandaba a un AYUDA que no hay de
+        serie) y si no, no_entiendo, el mismo que las maquinas."""
+        ov = (self.meta.get('mensajes') or {}).get('no_entiendo_ayuda')
+        return str(ov) if ov else self._t('no_entiendo')
 
     def recalc_weight(self) -> int:
         """
@@ -1298,8 +1490,8 @@ class PAWSInterpreter:
                     print(self._t('no_coger'))
                 else:
                     new_weight = self.recalc_weight() + self.get_object_weight(obj_id)
-                    max_w = self.variables.get("LLEVAR_MAX", 50)
-                    if new_weight > max_w:
+                    max_w = self._peso_max()
+                    if max_w is not None and new_weight > max_w:
                         print(self._t('peso_max'))
                     else:
                         obj["location"] = "INVEN"
@@ -1495,6 +1687,23 @@ class PAWSInterpreter:
             self.execute_action(action_def)
 
 
+    def subrutinas(self):
+        """{NOMBRE: [líneas]} de los bloques SUB de los condacts. Se vuelve a
+        sacar si el autor cambia el código mientras prueba."""
+        clave = tuple((k, v if isinstance(v, str) else repr(v))
+                      for k, v in (self.condacts or {}).items())
+        if clave != getattr(self, '_subs_clave', None):
+            self._subs_clave = clave
+            self._subs = paws_lang.subs_del_juego({'condacts': self.condacts})
+            # la seccion de cada una, para que el depurador del editor marque
+            # la linea en su pestana
+            self._subs_sec = {}
+            for sec, script in (self.condacts or {}).items():
+                if isinstance(script, (str, list)):
+                    for nom in paws_lang.separa_subs(script)[1]:
+                        self._subs_sec.setdefault(nom, sec)
+        return self._subs
+
     def execute_condact_blocks(self, script):
         """
         Ejecuta condacts en formato BASIC (str o lista de str)
@@ -1644,9 +1853,10 @@ class PAWSInterpreter:
                 obj = self.objects.get(oid, {})
                 print(f"  - {obj.get('name', oid)}")
 
-        peso = self.variables.get("PESO_ACT", 0)
-        max_peso = self.variables.get("LLEVAR_MAX", 50)
-        print(self._t('peso_inv', p=peso, m=max_peso))
+        # el peso, solo si hay limite (como en las maquinas)
+        max_peso = self._peso_max()
+        if max_peso is not None:
+            print(self._t('peso_inv', p=self.variables.get("PESO_ACT", 0), m=max_peso))
 
     # ─── TIMERS ──────────────────────────────────────────────────────────────
 
@@ -1718,8 +1928,8 @@ class PAWSInterpreter:
             print(self._t('no_coger'))
             return
         new_w = self.recalc_weight() + self.get_object_weight(obj_id)
-        max_w = self.variables.get("LLEVAR_MAX", 50)
-        if new_w > max_w:
+        max_w = self._peso_max()
+        if max_w is not None and new_w > max_w:
             print(self._t('no_cabe_peso'))
             return
         obj["location"] = "INVEN"
@@ -2034,7 +2244,8 @@ class PAWSInterpreter:
             # contenedor ya lo llevaba el jugador, el peso total no cambia.
             prev_loc = obj.get("location")
             obj["location"] = "INVEN"
-            if self.recalc_weight() > self.variables.get("LLEVAR_MAX", 50):
+            max_w = self._peso_max()
+            if max_w is not None and self.recalc_weight() > max_w:
                 obj["location"] = prev_loc
                 self.recalc_weight()
                 print(self._t('peso_sacar'))
@@ -2144,6 +2355,7 @@ class PAWSInterpreter:
         """Una partida, de la presentacion al final."""
         title = self.meta.get("title", "Aventura sin título")
         print(f"\n{title}")
+        self._palabras = (None, None, None)   # on_start: aun no hay orden
 
         start_msg = self.meta.get("start_message", "")
 
@@ -2186,18 +2398,23 @@ class PAWSInterpreter:
             self.turns += 1
             self._sin_turno = False
 
+            # Parsear, y luego before_turn: como en las maquinas (y en PAWS),
+            # before_turn ya ve VERB, NOUN1 y NOUN2 de la orden, y los ven
+            # tambien los temporizadores y after_turn. Hasta la 3.0 el PC
+            # corria before_turn antes de analizar y ninguno de los tres veia
+            # las palabras.
+            verb, noun1, noun2 = self.parse(raw)
+            self._palabras = (verb, noun1, noun2)
+
             # CONDACTS before_turn
             self.execute_condact_blocks(self.condacts.get("before_turn", []))
             if not self.running:
                 break
 
-            # Parsear
-            verb, noun1, noun2 = self.parse(raw)
-
             if vacia:
-                print(self._t('linea_vacia') or self._t('no_entiendo_ayuda'))
+                print(self._t('linea_vacia') or self._no_entiendo())
             elif not verb:
-                print(self._t('no_entiendo_ayuda'))
+                print(self._no_entiendo())
                 # El turno cuenta igualmente: before_turn ya corrió, así que
                 # timers y after_turn también deben correr (antes se saltaban
                 # y el reloj de misión se congelaba con entradas no válidas).

@@ -43,11 +43,13 @@ CONDACTS = {
     'TIMER_START', 'TIMER_STOP', 'TIMER_RESET',
     'PLAY', 'SAMPLE',
     'END', 'MATCH', 'QUIT',
+    'CALL', 'RETURN', 'PARSE',
     # particulares de hardware (pantalla/sonido): no rompen la paridad lógica
     'INK', 'PAPER', 'BORDER', 'PAUSE', 'CLS', 'BRIGHT', 'BEEP', 'SOUND',
     'FLASH', 'INVERSE', 'SCR',
 }
-STRUCTURAL = {'IF', 'ELSE', 'ENDIF', 'ON', 'ENDON', 'THEN', 'REM', 'JMP'}
+STRUCTURAL = {'IF', 'ELSE', 'ENDIF', 'ON', 'ENDON', 'THEN', 'REM', 'JMP',
+              'SUB', 'ENDSUB', 'DOALL', 'ENDDOALL'}
 
 # Condacts particulares de hardware: si un target no los tiene, NO se avisa como
 # rotura de paridad (es una diferencia de máquina esperada).

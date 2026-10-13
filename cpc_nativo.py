@@ -43,9 +43,26 @@ def _sys_msgs_y_salidas(meta):
     except Exception:
         return list(SYS_MSGS), None
     ov = (meta or {}).get('mensajes') or {}
+    # El mismo texto que el interprete de PC (PAWSInterpreter._t): el del autor
+    # y, si no, el de serie del idioma del juego (interpreter.MSGS); el del
+    # catalogo, en espanol, solo para lo que el PC no tiene. Hasta la 3.0 aqui
+    # iba directamente el del catalogo: un juego en ingles sin la traduccion
+    # de los mensajes salia en las maquinas con "No entiendo eso".
+    try:
+        from interpreter import MSGS
+    except Exception:
+        MSGS = {}
+    lng = str((meta or {}).get('language') or 'es').strip().lower()
+    idx = (2 if lng.startswith(('pt', 'por')) else 1 if lng.startswith('en')
+           else 3 if lng.startswith('ca') else 4 if lng.startswith('fr') else 0)
 
     def t(mid):
-        return str(ov.get(mid) or defs.get(mid) or '')
+        if ov.get(mid):
+            return str(ov[mid])
+        row = MSGS.get(mid)
+        if row:
+            return str(row[idx] if idx < len(row) else row[0])
+        return str(defs.get(mid) or '')
 
     def prefix(mid):
         s = t(mid)
@@ -81,7 +98,8 @@ def _sys_msgs_y_salidas(meta):
         lang = vocab_base.norm_lang((meta or {}).get('language'))
     except Exception:
         lang = 'es'
-    msgs.append(t('otra_partida') or OTRA_PARTIDA.get(lang, OTRA_PARTIDA['es']))
+    # (el del PC dice ENTER: aqui vale cualquier tecla)
+    msgs.append(str(ov.get('otra_partida') or '') or OTRA_PARTIDA.get(lang, OTRA_PARTIDA['es']))
     # SNADAC / SNADAD / SOSCHAY: COGER TODO y DEJAR TODO sin nada, y COGER
     # TODO a oscuras (v2.13; antes daban "No ves eso aqui" / "No llevas eso").
     msgs += [t('nada_coger'), t('nada_dejar'), t('oscuro_hay')]
@@ -578,19 +596,24 @@ def export_native(game, dsk_path, modo=1, img_dir=None):
     bmeta = nx.borde_metadata(game)
     borde = None if bmeta is None else _ZX2CPC[bmeta]
 
+    # la partida grabada (SNAPBUF) va detras de MTABLE, fuera del motor
+    SNAPTAM = spec['nvars'] + 5 * len(spec['objects']) + 33 + max(1, len(spec['locations']))
+
     def _motor(dbaddr, slots, tbufn, mtable):
         slots = list(slots) + [(0xC0, 0x4000)] * (nranuras - len(slots))
         return ge.assemble_engine(org=org, db_base=dbaddr, nloc=len(spec['locations']),
+                                  nobj=len(spec['objects']), nvar=spec['nvars'],
                                   pantallas=pant_tabla, modo=modo, tintas=tintas,
                                   slots=slots, tbufn=tbufn, mtable=mtable,
-                                  imgtop=IMGTOP, aviso128=aviso, borde=borde)
+                                  imgtop=IMGTOP, aviso128=aviso, borde=borde,
+                                  snapbuf=mtable + MTABLE_TAM)
 
     def _mkdb(dbaddr, hb=0, texto=None, loc_slot=b''):
         return ge.build_game_db(
             spec['messages'], spec['locations'], spec['vocab'], spec['objects'],
             spec['responses'], spec['startloc'], spec['sysverbs'], spec['width'],
             load=dbaddr, proc_before=spec['proc_before'],
-            proc_after=spec['proc_after'], proc_onstart=spec['proc_onstart'],
+            proc_after=spec['proc_after'], proc_onstart=spec['proc_onstart'], subs=spec.get('subs', ()), plantillas=spec.get('plantillas', ()), proc_onenter=spec.get('proc_onenter', b''), pesoact=spec.get('pesoact', 0),
             title_pal=title_pal, has_music=info['music'],
             has_title=(title is not None), hdrbuf=hb, imgbuf=IMGBUF,
             loc_slot=loc_slot or bytes([255] * len(spec['locations'])),
@@ -622,7 +645,7 @@ def export_native(game, dsk_path, modo=1, img_dir=None):
         fin = dbaddr + db_len
         hb = max(0x4000, (fin + 0xFF) & ~0xFF)
         mt = hb + HDRBUF_TAM
-        return hb, mt, mt + MTABLE_TAM <= IMGBUF
+        return hb, mt, mt + MTABLE_TAM + SNAPTAM <= IMGBUF
 
     def _banca(plano):
         return dict(ventana=0x4000, tam=16384, ids=list(BANCOS),
@@ -661,7 +684,7 @@ def export_native(game, dsk_path, modo=1, img_dir=None):
                 _usados = sorted(capabilities.used_fx(game))
                 fx_blob = b''
                 sin = len(_mkdb(dbaddr, texto=_banca(()))[0])
-                hueco = IMGBUF - MTABLE_TAM - HDRBUF_TAM - 0xFF - (dbaddr + sin)
+                hueco = IMGBUF - MTABLE_TAM - SNAPTAM - HDRBUF_TAM - 0xFF - (dbaddr + sin)
                 dentro, mejor = set(), b''
                 for i in _usados:
                     cand = _fe.pack_ay_fx(game.get('fx', []) or [], dentro | {i},
@@ -675,7 +698,7 @@ def export_native(game, dsk_path, modo=1, img_dir=None):
         # cuanto texto cabe plano: lo que queda libre con todo en bancos (si
         # se ha vuelto a compilar sin descripciones, los mensajes son otros)
         msg_tam = _i['msg_tam']
-        libre = IMGBUF - MTABLE_TAM - HDRBUF_TAM - 0xFF - (dbaddr + len(todo_banco))
+        libre = IMGBUF - MTABLE_TAM - SNAPTAM - HDRBUF_TAM - 0xFF - (dbaddr + len(todo_banco))
         plano, usado = [], 0
         for i, t in enumerate(msg_tam):
             if usado + t > libre:

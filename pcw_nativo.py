@@ -1222,8 +1222,9 @@ def _rowcan():
             [0x4000 + i * FILA_BYTES for i in range(10)])
 
 
-def prefijo(org, db_base, borde=7, nloc=256, nscr=0):
-    return (nx.prefijo(org, db_base, nimg=0, titulo=False, borde=borde, nloc=nloc) +
+def prefijo(org, db_base, borde=7, nloc=256, nscr=0, nobj=ge.NRAM, nvar=ge.NRAM):
+    return (nx.prefijo(org, db_base, nimg=0, titulo=False, borde=borde, nloc=nloc,
+                       nobj=nobj, nvar=nvar) +
             'S48SP equ &%04X\n' % SPPCW +
             'FILATXT equ %d\n' % FILA_TEXTO +
             'NSCR equ %d\n' % nscr +
@@ -1233,7 +1234,7 @@ def prefijo(org, db_base, borde=7, nloc=256, nscr=0):
 
 
 def ensambla(org=ORG, db_base=None, idioma='es', nloc=256, locimg=None,
-             titulo=None, pantallas=None, guion_bk=None):
+             titulo=None, pantallas=None, guion_bk=None, nobj=ge.NRAM, nvar=ge.NRAM):
     """locimg: {loc: (id, dir)}; titulo: (idA, dirA, idB, dirB);
     pantallas: [(filas, idA, dirA, idB, dirB)]."""
     if db_base is None:
@@ -1267,7 +1268,8 @@ def ensambla(org=ORG, db_base=None, idioma='es', nloc=256, locimg=None,
     partes.append('ROWCAN: defw ' + ','.join('&%04X' % a for a in _rowcan()))
     partes.append(nx.PSG_ASM_VACIO)
     partes.append(nx.SMP_ASM_VACIO)
-    fuente = (prefijo(org, db_base, nloc=nloc, nscr=len(pantallas or ())) +
+    fuente = (prefijo(org, db_base, nloc=nloc, nscr=len(pantallas or ()),
+                      nobj=nobj, nvar=nvar) +
               _engine_pcw(bool(locimg), bool(titulo)) +
               chr(10).join(partes) + chr(10) +
               nx._font_asm(idioma) + chr(10))
@@ -1493,7 +1495,7 @@ def compila(game, game_dir=None, guion=None, imagenes=True, modelo='8256'):
             spec['messages'], spec['locations'], spec['vocab'], spec['objects'],
             spec['responses'], spec['startloc'], spec['sysverbs'], spec['width'],
             load=dbaddr, proc_before=spec['proc_before'],
-            proc_after=spec['proc_after'], proc_onstart=spec['proc_onstart'],
+            proc_after=spec['proc_after'], proc_onstart=spec['proc_onstart'], subs=spec.get('subs', ()), plantillas=spec.get('plantillas', ()), proc_onenter=spec.get('proc_onenter', b''), pesoact=spec.get('pesoact', 0),
             hdrbuf=0, imgbuf=0, loc_slot=b'', vall=spec['vall'],
             font_acc=spec['font_acc'], timers=spec['timers'],
             llevarmax=spec['llevarmax'], fx=fx_blob, texto=texto,
@@ -1576,7 +1578,8 @@ def compila(game, game_dir=None, guion=None, imagenes=True, modelo='8256'):
         def _asm(base, gbk=None):
             return ensambla(org=ORG, db_base=base, idioma=idioma, nloc=nlocs,
                             locimg=locimg, titulo=titulo, pantallas=scrs,
-                            guion_bk=gbk)
+                            guion_bk=gbk, nobj=len(spec['objects']),
+                            nvar=spec['nvars'])
         gbk = None if guion is None else 0x80 + BLK0 + len(bk)
         code, _s = _asm(ORG, gbk)
         dbaddr = ORG + len(code)

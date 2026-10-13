@@ -10,7 +10,7 @@ saca de aqui SCRIBA_VERSION para nombrar el ejecutable, asi que la linea
 
 import datetime
 
-SCRIBA_VERSION = '3.0'
+SCRIBA_VERSION = '3.1'
 
 PLATAFORMA = {
     'pc':      'PC (interprete)',

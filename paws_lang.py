@@ -443,3 +443,114 @@ def on_slot_matches(slot, value):
     if value is None:
         return False
     return value in slot          # slot es lista de alternativas
+
+
+# ─── Subrutinas: SUB nombre ... ENDSUB ──────────────────────────────────────
+#
+# Un bloque con nombre que se llama con CALL nombre desde cualquier script
+# (respuestas, before/after_turn, on_start, on_enter, temporizadores y otras
+# subrutinas). Se escriben al nivel de arriba de cualquier seccion de condacts,
+# fuera de los ON; lo normal es dejarlas al final de las respuestas. RETURN
+# sale de la subrutina antes de su final; MATCH y END, como siempre, cortan
+# todo lo que se este ejecutando.
+#
+# Los nombres no distinguen mayusculas. Todas las maquinas admiten como mucho
+# CALL_MAX llamadas una dentro de otra: la que se pasa no se hace (el probador
+# de PC lo dice), asi que una subrutina que se llame a si misma sin parar no
+# cuelga la partida.
+
+CALL_MAX = 8
+SUB_MAX = 256
+# DOALL dentro de DOALL (tambien a traves de CALL): el que se pasa no se hace
+DOALL_MAX = 4
+
+_RE_SUB = re.compile(r'(?i)^SUB\s+([A-Za-z_][A-Za-z0-9_]*)\s*$')
+
+
+def _codigo(linea):
+    """La linea sin espacios ni el numero de linea opcional del principio."""
+    code = (linea or '').strip()
+    parts = code.split(None, 1)
+    if parts and parts[0].isdigit():
+        code = parts[1].strip() if len(parts) > 1 else ''
+    return code
+
+
+def es_sub(linea):
+    """Nombre (en MAYUS) si la linea abre una subrutina, si no None."""
+    m = _RE_SUB.match(_codigo(linea))
+    return m.group(1).upper() if m else None
+
+
+def es_endsub(linea):
+    return _codigo(linea).upper() == 'ENDSUB'
+
+
+def separa_subs(texto):
+    """Parte un script en (lineas_sin_subrutinas, {NOMBRE: [lineas]}).
+    Acepta str o lista de str. Un SUB sin ENDSUB llega hasta el final."""
+    if isinstance(texto, (list, tuple)):
+        lineas = [str(x) for x in texto]
+    else:
+        lineas = str(texto or '').split('\n')
+    resto, subs = [], {}
+    i = 0
+    while i < len(lineas):
+        nom = es_sub(lineas[i])
+        if nom is None:
+            resto.append(lineas[i])
+            i += 1
+            continue
+        i += 1
+        cuerpo = []
+        while i < len(lineas) and not es_endsub(lineas[i]):
+            cuerpo.append(lineas[i])
+            i += 1
+        i += 1                                  # el ENDSUB
+        subs.setdefault(nom, cuerpo)            # repetida: vale la primera
+    return resto, subs
+
+
+def subs_del_juego(game):
+    """{NOMBRE: [lineas]} de todas las secciones de condacts, en orden."""
+    subs = {}
+    for _sec, script in ((game or {}).get('condacts') or {}).items():
+        if isinstance(script, (list, tuple)) and script and not isinstance(script[0], str):
+            continue                            # formato JSON antiguo
+        for nom, cuerpo in separa_subs(script or '')[1].items():
+            subs.setdefault(nom, cuerpo)
+    return subs
+
+
+def _codigo_lineas(script):
+    """Las lineas de un script (str o lista de str); nada si es JSON antiguo."""
+    if isinstance(script, (list, tuple)):
+        if script and not isinstance(script[0], str):
+            return []
+        return [str(x) for x in script]
+    return str(script or '').split('\n')
+
+
+# ─── Órdenes a personajes: JUAN, COGE LA LLAVE / DECIR A JUAN "COGE..." ─────
+#
+# La frase del jugador se parte por el primer signo de comillas o, si no hay,
+# por la primera coma. Lo de delante es la frase del turno; lo de detrás, la
+# orden, que el autor analiza con PARSE (VERB, NOUN1 y NOUN2 pasan a ser los
+# de la orden). Con coma, solo es una orden si delante hay un nombre y ningún
+# verbo, y el verbo del turno es entonces DECIR; si no, la coma es un espacio.
+# El motor nativo hace lo mismo en su parser (pa_go); allí solo hay " y ,.
+
+COMILLAS = '"\u201c\u201d\u00ab\u00bb'
+
+
+def separa_orden(texto):
+    """(delante, orden, con_coma). orden es None si la frase no lleva."""
+    t = texto or ''
+    for i, ch in enumerate(t):
+        if ch in COMILLAS:
+            resto = t[i + 1:]
+            j = next((k for k, c in enumerate(resto) if c in COMILLAS), len(resto))
+            return t[:i], resto[:j], False
+        if ch == ',':
+            return t[:i], t[i + 1:], True
+    return t, None, False

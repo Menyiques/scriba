@@ -43,14 +43,20 @@ def entradas_nuevas(registro, desde):
         if cab.startswith(desde):
             hallada = True
             break
-        grupo = None
+        # cada entrada es su linea '- ' mas las que siguen sangradas: el titulo
+        # en negrita puede partirse en dos lineas
+        grupo, entradas = None, []
         for linea in sec.split('\n')[1:]:
             if linea.startswith('### '):
                 grupo = linea[4:].strip() if linea[4:].strip() in out else None
-                continue
-            m = re.match(r'- \*\*(.+?)\*\*', linea)
+            elif linea.startswith('- '):
+                entradas.append((grupo, linea))
+            elif linea.startswith('  ') and entradas and entradas[-1][0] == grupo:
+                entradas[-1] = (grupo, entradas[-1][1] + ' ' + linea.strip())
+        for grupo, texto in entradas:
+            m = re.match(r'- \*\*(.+?)\*\*', texto, re.S)
             if grupo and m and not INTERNO.search(m.group(1)):
-                titulo = m.group(1).strip()
+                titulo = ' '.join(m.group(1).split())
                 if titulo not in out[grupo]:
                     out[grupo].append(titulo)
     if not hallada:

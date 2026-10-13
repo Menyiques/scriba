@@ -121,7 +121,7 @@ def _tecleable(orden):
            'ú': 'u', 'ñ': 'n', 'ü': 'u', 'ç': 'c'}
     out = [acc.get(ch, ch) for ch in str(orden).lower()]
     return ''.join(c for c in out
-                   if c in 'abcdefghijklmnopqrstuvwxyz0123456789 ').strip()
+                   if c in 'abcdefghijklmnopqrstuvwxyz0123456789 ,"').strip()
 
 
 def ordenes_de(path):

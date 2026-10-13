@@ -1274,9 +1274,10 @@ def _engine_msx(con_imagenes, con_titulo):
     return src
 
 
-def prefijo(org, db_base, sp, borde=7, nloc=256, titulo_bk=0, nscr=0):
+def prefijo(org, db_base, sp, borde=7, nloc=256, titulo_bk=0, nscr=0,
+            nobj=ge.NRAM, nvar=ge.NRAM):
     return (nx.prefijo(org, db_base, nimg=0, titulo=False, borde=borde,
-                       nloc=nloc) +
+                       nloc=nloc, nobj=nobj, nvar=nvar) +
             'S48SP equ &%04X\n' % sp +
             'MSXSP equ &%04X\n' % sp +
             'FILATXT equ %d\n' % FILA_TEXTO +
@@ -1288,7 +1289,7 @@ def prefijo(org, db_base, sp, borde=7, nloc=256, titulo_bk=0, nscr=0):
 
 def ensambla(org=ORG, db_base=None, sp=0xF000, idioma='es', borde=7,
              nloc=256, imagenes=None, titulo=None, psg_pos=None, guion_bk=None,
-             pantallas=None):
+             pantallas=None, nobj=ge.NRAM, nvar=ge.NRAM):
     """Motor + capa MSX2. Devuelve (bytes, simbolos).
     imagenes: (tabla {loc: (banco, mitad)}, paletas {loc: 16 bytes}) o None.
     titulo:   (banco, paleta de 32 bytes) o None.
@@ -1335,7 +1336,7 @@ def ensambla(org=ORG, db_base=None, sp=0xF000, idioma='es', borde=7,
             partes.append(nx.PSG_ASM_VACIO)
     partes.append(nx._datos_asm('PALFIJA', _pal_bytes(PALETA_FIJA + PALETA_BRILLO)))
     partes.append(nx.SMP_ASM_VACIO)
-    fuente = (prefijo(org, db_base, sp, borde, nloc=nloc,
+    fuente = (prefijo(org, db_base, sp, borde, nloc=nloc, nobj=nobj, nvar=nvar,
                       titulo_bk=titulo[0] if titulo else 0,
                       nscr=len(pantallas or ())) +
               _engine_msx(bool(imagenes), bool(titulo)) +
@@ -1587,7 +1588,7 @@ def compila(game, game_dir=None, ancho=COLS, guion=None, imagenes=True):
             spec['messages'], spec['locations'], spec['vocab'], spec['objects'],
             spec['responses'], spec['startloc'], spec['sysverbs'], spec['width'],
             load=dbaddr, proc_before=spec['proc_before'],
-            proc_after=spec['proc_after'], proc_onstart=spec['proc_onstart'],
+            proc_after=spec['proc_after'], proc_onstart=spec['proc_onstart'], subs=spec.get('subs', ()), plantillas=spec.get('plantillas', ()), proc_onenter=spec.get('proc_onenter', b''), pesoact=spec.get('pesoact', 0),
             hdrbuf=0, imgbuf=0, loc_slot=b'', vall=spec['vall'],
             font_acc=spec['font_acc'], timers=spec['timers'],
             llevarmax=spec['llevarmax'], fx=fx_blob, texto=texto,
@@ -1698,7 +1699,8 @@ def compila(game, game_dir=None, ancho=COLS, guion=None, imagenes=True):
     def _asm(base, sp, gbk=None):
         return ensambla(org=ORG, db_base=base, sp=sp, idioma=idioma, borde=borde,
                         nloc=nlocs, imagenes=img_arg, titulo=titulo,
-                        psg_pos=psg_pos, guion_bk=gbk, pantallas=pant)
+                        psg_pos=psg_pos, guion_bk=gbk, pantallas=pant,
+                        nobj=len(spec['objects']), nvar=spec['nvars'])
 
     img_banco0 = len(bancos) + 1
     nguion = (len(guion) + BANCO) // BANCO if guion is not None else 0

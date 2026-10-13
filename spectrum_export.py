@@ -211,14 +211,20 @@ def recolecta(game):
 
     locs = game.get('locations', {})
     c.locids = list(locs.keys())
-    if len(c.locids) > 90:
-        raise ValueError('Demasiadas localizaciones para el exportador (max 90)')
+    # Topes del motor nativo (game_engine.NLOC_MAX y NOBJ_MAX). Hasta la 3.0
+    # aqui ponia 90 y 90: eran los del exportador a BASIC (LOC_INVEN = 240,
+    # CONT_BASE = 100 + objeto), que el motor nativo no usa, y eran el limite
+    # real de las maquinas aunque el manual dijera 255.
+    if len(c.locids) > 252:
+        raise ValueError('las maquinas admiten 252 localizaciones como mucho, y el '
+                         'juego trae %d' % len(c.locids))
     c.locidx = {lid: i + 1 for i, lid in enumerate(c.locids)}
 
     objs = game.get('objects', {})
     c.objids = list(objs.keys())
-    if len(c.objids) > 90:
-        raise ValueError('Demasiados objetos para el exportador (max 90)')
+    if len(c.objids) > 255:
+        raise ValueError('las maquinas admiten 255 objetos como mucho, y el juego '
+                         'trae %d' % len(c.objids))
     c.objidx = {oid: i + 1 for i, oid in enumerate(c.objids)}
 
     tims = game.get('timers', {})
@@ -246,19 +252,26 @@ def recolecta(game):
         return LOC_NADA
     c.locval = locval
 
-    # nouns: canonico 5 letras -> id. Objetos primero (id = indice objeto)
+    # nouns: canonico 5 letras -> id, seguidos desde el 1: los de los objetos,
+    # los demas del vocabulario y TODO. En el motor nativo el id es un byte, el
+    # 0 es "ninguno" y 254/255 son los comodines _ y *, asi que caben 253
+    # (nativecc lo comprueba). Hasta la 3.0 el de cada objeto era su numero de
+    # objeto, TODO el 95 y los demas desde el 100: con mas de 94 objetos se
+    # pisaban.
     c.nounid = {}
+    _sig = 1
     for oid in c.objids:
         n5 = translit((objs[oid].get('noun') or '')[:5]).upper()
         if n5 and n5 not in c.nounid:
-            c.nounid[n5] = c.objidx[oid]
-    extra = 100
+            c.nounid[n5] = _sig
+            _sig += 1
     for nkey, aliases in (game.get('vocabulary', {}).get('nouns') or {}).items():
         n5 = translit(nkey[:5]).upper()
         if n5 not in c.nounid:
-            c.nounid[n5] = extra
-            extra += 1
-    c.nounid.setdefault('TODO', 95)
+            c.nounid[n5] = _sig
+            _sig += 1
+    if 'TODO' not in c.nounid:
+        c.nounid['TODO'] = _sig
 
     # alias de nouns -> id canonico
     c.nounalias = {}
@@ -367,6 +380,12 @@ def recolecta(game):
         c.vars[k] = int(vv) if isinstance(vv, (int, float)) else 0
     for extra_v in ('PUNTOS', 'TURNOS'):
         c.vars.setdefault(extra_v, 0)
+    # El motor nativo guarda el indice de LLEVAR_MAX + 1 en un byte (0 = el
+    # juego no la tiene), asi que no puede ser la variable 255: con 256
+    # variables y LLEVAR_MAX la ultima, pasa a ser la primera.
+    if len(c.vars) == 256 and list(c.vars)[255] == 'LLEVARMAX':
+        c.vars = dict([('LLEVARMAX', c.vars['LLEVARMAX'])] +
+                      [(k, v) for k, v in c.vars.items() if k != 'LLEVARMAX'])
     return c
 
 # ─── Transpilador de condacts (mini-BASIC PAWS -> ZX BASIC) ─────────────

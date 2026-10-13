@@ -126,7 +126,9 @@ class Juego:
         out = []
         for ch in str(orden).lower():
             ch = self.ACENTOS.get(ch, ch)
-            if ch in 'abcdefghijklmnopqrstuvwxyz0123456789 ':
+            # la coma y las comillas: ordenes a personajes (JUAN, COGE LA
+            # LLAVE); en el Spectrum, con SYMBOL SHIFT
+            if ch in 'abcdefghijklmnopqrstuvwxyz0123456789 ,"':
                 out.append(ch)
         return ''.join(out).strip()
 

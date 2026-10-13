@@ -1,4 +1,4 @@
-# Scriba 3.0 — Novedades desde la 2.3
+# Scriba 3.1 — Novedades desde la 2.3
 
 Scriba 3.0 es un cambio grande: todas las máquinas de 8 bits salen ahora de un
 mismo motor escrito en ensamblador Z80, compilado dentro del propio Scriba. Ya
@@ -107,6 +107,45 @@ resumen de lo nuevo.
   arriba sin dar tiempo a leerlo.
 
 <!-- AUTO:INICIO desde="3.0 — 2026-10-12" -->
+## Últimos cambios
+
+Lo que ha entrado después de lo que se cuenta arriba (lista sacada del
+registro de cambios al compilar Scriba).
+
+### Novedades
+
+- Hasta 255 objetos y 256 variables en las máquinas (antes, 64 y 64).
+- Más memoria para el juego en las máquinas.
+- Subrutinas: `SUB nombre` … `ENDSUB` y `CALL nombre`.
+- Órdenes a personajes: `JUAN, COGE LA LLAVE` y `PARSE`.
+- `DOALL destino` … `ENDDOALL`: recorrer objetos.
+- `PRINT "{#objeto}"` escribe el nombre del objeto.
+- `AQUI` es un destino nuevo: la sala del jugador.
+
+### Correcciones
+
+- Los mensajes de serie dicen lo mismo en PC y en las máquinas.
+- COGER TODO y DEJAR TODO pasan cada objeto por las respuestas del juego en las máquinas.
+- El inventario de las máquinas es como el de PC.
+- `LLEVAR_MAX`: sin la variable, o a 0, no hay límite de peso.
+- El condact `GET` hace en las máquinas lo mismo que en PC.
+- `_PESO_ACT` vale en las máquinas el peso que se lleva.
+- `PRINT "{_PUNTOS}"` y las demás variables de sistema salían a 0 en PC.
+- `before_turn` ve la orden del turno también en PC.
+- En las máquinas, los temporizadores iban después de `after_turn`.
+- El `on_enter` de una sala corre cuando se entra, también en las máquinas.
+- Las máquinas no tenían PONERSE, QUITARSE, ABRIR, CERRAR, METER ni SACAR.
+- EXAMINAR hace en las máquinas lo mismo que en PC.
+- El peso, en las máquinas, cuenta lo que va dentro de los contenedores.
+- `ON COGER LINTERNA` no casaba nunca en las máquinas.
+- `IF VERB EXAMINAR` o `IF NOUN1 LINTERNA` no se cumplían nunca.
+- Una respuesta vacía hacía RECUPERAR en las máquinas.
+- `#objeto.isat = INVEN` (sin arroba) no se cumplía nunca en PC.
+- Multiplicar, dividir y MOD en las máquinas.
+- Las máquinas solo admitían 90 salas y 90 objetos, aunque el manual decía 255.
+- Más de 251 verbos o de 253 nombres distintos se perdían sin avisar.
+- El manual decía «65.535 palabras de vocabulario».
+
 <!-- AUTO:FIN -->
 
 ## Ejemplos incluidos

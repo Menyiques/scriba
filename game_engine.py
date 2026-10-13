@@ -16,7 +16,35 @@ SNADAD=19                        # DEJAR TODO sin nada que dejar
 SOSCHAY=20                       # COGER TODO a oscuras
 SVACIO=21                        # ENTER sin nada (linea_vacia, configurable por juego)
 NSYS=22
-NRAM=64                          # tamano de las matrices de estado en RAM
+# Topes del motor nativo. Las matrices de estado en RAM (FLAGS para las
+# variables; OBJLOC, OBJLIT, OBJOPEN, OBJLOCK y OBJIN para los objetos) van al
+# tamano de cada juego (tamanos_equ), con estos maximos:
+#  - objetos: 255. El numero de objetos va en un byte (nobj) y 0 es "ninguno";
+#    OBJIN guarda el contenedor + 1.
+#  - variables: 256 (indices 0-255). LLEVAR_MAX se guarda como indice + 1.
+#  - localizaciones: 252. En OBJLOC, 252-255 son CONTAINED, WORN, NOWHERE y
+#    CARRIED, y prevloc arranca a 255.
+NOBJ_MAX=255
+NVAR_MAX=256
+NLOC_MAX=252
+NRAM=64                          # tamano por defecto (arneses y llamadas viejas)
+# Subrutinas: CALL dentro de CALL hasta CALL_MAX (la pila de llamadas, CSTK,
+# son 4 bytes por nivel). El mismo tope que el probador de PC.
+from paws_lang import CALL_MAX, DOALL_MAX
+
+
+def tamanos_equ(nobj=NRAM, nvar=NRAM):
+    """Los 'equ' del tamano de las matrices de estado, para el prefijo del
+    motor: NOBJR/NVARR (lo que reservan), NOBJB/NVARB (lo mismo como cuenta de
+    DJNZ: 256 es 0) y SNAPN (la partida grabada, sin LOCSCR: FLAGS, las cinco
+    de objetos, TCUR y TACT de 16, y curloc). Va tambien CALLMAX, el tope de
+    las subrutinas, para que lo tengan todas las maquinas."""
+    no = max(1, min(int(nobj), NOBJ_MAX))
+    nv = max(1, min(int(nvar), NVAR_MAX))
+    return ['NOBJR equ %d' % no, 'NOBJB equ %d' % (no & 255),
+            'NVARR equ %d' % nv, 'NVARB equ %d' % (nv & 255),
+            'SNAPN equ %d' % (nv + 5 * no + 16 + 16 + 1),
+            'CALLMAX equ %d' % CALL_MAX, 'DOMAX equ %d' % DOALL_MAX]
 CARRIED=255
 NOWHERE=254
 WORN=253                         # objeto puesto (sentinel en OBJLOC); CARRIED incluye WORN
@@ -29,11 +57,12 @@ EOP={'END':0,'CONST':1,'VAR':2,'ADD':3,'SUB':4,'EQ':5,'NE':6,'LT':7,'GT':8,
  'CARRIED':17,'PRESENT':18,'ABSENT':19,'NOTCARR':20,
  'ISAT':21,'CHANCE':22,'WORN':23,'NOTWORN':24,'VERB':25,'NOUN1':26,
  'TIMER':27,'HASOBJOPEN':28,'NOUN2':29,'ISIN':30,'ENTERED':31,
- 'OBJLIT':32,'OBJLOCK':33}
+ 'OBJLIT':32,'OBJLOCK':33,'MUL':34,'DIV':35,'MOD':36,'OBJHERE':37,'DOBJ':38}
 # condacts extra: LETX (var,expr) e IF (expr -> salta cuerpo si falso)
 COP_EXTRA={'SHOWPIC':50,'PRVAR':51,'ENDGAME':52,
  'BRIGHT':53,'FLASH':54,'INVERSE':55,'SAMPLE':56,'QUIT':57,'SCR':58,'SCRLOC':59,
  'EXITS':60,'SCRINTRO':61,'RAMSAVE':62,'RAMLOAD':63,
+ 'CALL':64,'RETURN':65,'PARSE':66,'DOALL':67,'DNEXT':68,'PRNAME':69,
  'LETX':26,'IF':27,'JMP':28,
  'INK':29,'PAPER':30,'BORDER':31,'PAUSE':32,'CLS':33,
  'WEAR':34,'REMOVE':35,'LIT':36,'UNLIT':37,'SCORE':38,
@@ -73,7 +102,46 @@ def empaqueta_en_bancos(trozos, tam=16384, bancos=None):
     return bancos, donde
 
 
-def build_game_db(messages, locations, vocab, objects, responses, startloc, sysverbs, width=40, load=DB, proc_before=b'', proc_after=b'', proc_onstart=b'', title_pal=b'', has_music=False, has_title=False, hdrbuf=0, imgbuf=0, loc_slot=b'', vall=0, font_acc=b'', timers=(), llevarmax=0, fx=b'', exit_names=None, texto=None):
+# Mensajes de PONERSE, QUITARSE, ABRIR, CERRAR, METER, SACAR y EXAMINAR: los
+# mismos ids que usa el interprete de PC (interpreter.MSGS, o el texto del
+# autor en metadata.mensajes). Cada uno es una plantilla: nativecc la parte en
+# trozos de texto y huecos, y el motor la imprime con print_tpl. Los huecos:
+# {o} = tplo, {k}/{c} = tplo2, salvo donde se dice otra cosa (3 = la lista de
+# lo que hay dentro de tplo; 4 = tplo con mayuscula, como el capitalize() de PC;
+# 6 y 7 = los numeros de 16 bits tpln1 y tpln2).
+PLANTILLAS = [
+    ('PL_QPONER', 'que_poner', None), ('PL_NOINV', 'no_inventario', None),
+    ('PL_NOPONER', 'no_ponerte', None), ('PL_PONES', 'te_pones', None),
+    ('PL_QQUITAR', 'que_quitar', None), ('PL_NOPUESTO', 'no_puesto', None),
+    ('PL_QUITAS', 'te_quitas', None),
+    ('PL_QABRIR', 'que_abrir', None), ('PL_NOABRIR', 'no_abrir', None),
+    ('PL_YAABIER', 'ya_abierto', None), ('PL_ABRESCON', 'abres_con', None),
+    ('PL_CERRLLAVE', 'cerrado_llave', None), ('PL_ABRES', 'abres', None),
+    ('PL_DENTRO', 'dentro_hay', {'c': 3}),
+    ('PL_QCERRAR', 'que_cerrar', None), ('PL_NOCERRAR', 'no_cerrar', None),
+    ('PL_YACERR', 'ya_cerrado', None), ('PL_CIERRAS', 'cierras', None),
+    ('PL_QMETER', 'que_meter', None), ('PL_DONDE', 'donde_meter', None),
+    ('PL_PRIMERO', 'primero_coger', None), ('PL_NOMETERSI', 'no_meter_si', None),
+    ('PL_NOCONT', 'no_contenedor_p', None), ('PL_CONTCERR', 'cont_cerrado', {'o': 4}),
+    ('PL_NOCABE', 'no_cabe', None), ('PL_METES', 'metes', None),
+    ('PL_QSACAR', 'que_sacar', None), ('PL_NODENTRO', 'no_dentro', None),
+    ('PL_PESOSACAR', 'peso_sacar', None), ('PL_SACAS', 'sacas', None),
+    ('PL_OSCVER', 'oscuro_ver', None), ('PL_CONTIENE', 'contiene', {'c': 3}),
+    ('PL_VACIO', 'vacio', None),
+    # 3.1: los mensajes de COGER, DEJAR, INVENTARIO y la descripcion, enteros
+    # (antes salia el principio y el nombre: "Coges una llave", sin el punto)
+    ('PL_NOHACER', 'no_hacer', None), ('PL_NOESP', 'no_especial', None),
+    ('PL_AQUIHAY', 'aqui_hay', None), ('PL_COGES', 'coges', None),
+    ('PL_DEJAS', 'dejas', None), ('PL_YALLEVAS', 'ya_llevas', None),
+    ('PL_NOCABEP', 'no_cabe_peso', None), ('PL_PESOMAX', 'peso_max', None),
+    ('PL_QCOGER', 'que_coger', None), ('PL_QDEJAR', 'que_dejar', None),
+    ('PL_LLEVAS', 'llevas_cab', None), ('PL_CONTINL', 'contiene_inline', {'c': 3}),
+    ('PL_PUESTOC', 'puesto_cab', None), ('PL_PESOINV', 'peso_inv', {'p': 6, 'm': 7}),
+]
+PLANTILLA_HUECOS = {'o': 1, 'k': 2, 'c': 2}
+
+
+def build_game_db(messages, locations, vocab, objects, responses, startloc, sysverbs, width=40, load=DB, proc_before=b'', proc_after=b'', proc_onstart=b'', title_pal=b'', has_music=False, has_title=False, hdrbuf=0, imgbuf=0, loc_slot=b'', vall=0, font_acc=b'', timers=(), llevarmax=0, fx=b'', exit_names=None, texto=None, subs=(), plantillas=(), proc_onenter=b'', pesoact=0):
     """La base de datos del juego, como la lee el motor.
 
     `texto`: None (48K, y el CPC cuando le cabe todo) deja los mensajes dentro,
@@ -89,13 +157,13 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     la DB plana, con banco 0: los que caben en la RAM base; el resto va a los
     bancos) y `fx_plano` (los FX, en la DB: se tocan fuera de TXTPAGE).
     """
-    # Las matrices de estado del motor (FLAGS, OBJLOC, OBJLIT, OBJOPEN, OBJLOCK,
-    # OBJIN) son 'defs 64' fijos, asi que pasarse no da error: escribe encima de
-    # la siguiente. Mejor parar aqui que depurar luego por que se mueve solo un
-    # objeto al encender una linterna.
-    if len(objects)>NRAM:
-        raise ValueError('el motor nativo admite %d objetos como mucho, y el '
-                         'juego trae %d' % (NRAM, len(objects)))
+    # Las matrices de estado del motor van al tamano del juego (tamanos_equ),
+    # hasta NOBJ_MAX objetos: pasarse escribiria encima de la siguiente. Mejor
+    # parar aqui que depurar luego por que se mueve solo un objeto al encender
+    # una linterna.
+    if len(objects)>NOBJ_MAX:
+        raise ValueError('las maquinas admiten %d objetos como mucho, y el '
+                         'juego trae %d' % (NOBJ_MAX, len(objects)))
     # Tokens 128..223 (96 max); los codigos 224..239 quedan para los acentos.
     dic=txtpack.build_dict(''.join(messages),96)
     exps=txtpack.expansions(dic); ntok=len(exps)
@@ -120,11 +188,11 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     if nvocab>65535:
         raise ValueError('Vocabulario CPC: %d palabras tras quitar duplicados '
                          '(maximo 65535).' % nvocab)
-    if nloc>255:
-        raise ValueError('CPC: %d localizaciones (maximo 255).' % nloc)
-    if nobj>255:
-        raise ValueError('CPC: %d objetos (maximo 255).' % nobj)
-    HDR=89
+    if nloc>NLOC_MAX:
+        raise ValueError('las maquinas admiten %d localizaciones como mucho, y el '
+                         'juego trae %d (252-255 son las ubicaciones especiales '
+                         'de los objetos)' % (NLOC_MAX, nloc))
+    HDR=109
     p=load+HDR
     dictidx=p; p+=ntok*2
     ddat=p; dptr=[]; dd=bytearray()
@@ -151,6 +219,14 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
         mptr=[0]*nmsg; mbnk=[0]*nmsg
         for k,i in enumerate(banc):
             mptr[i]=ventana+donde[k][1]; mbnk[i]=ids[donde[k][0]]
+        # el banco de cada mensaje, por tramos: [primer mensaje16][banco] cada
+        # vez que cambia, y &FFFF al final (msg_banco). Antes era un byte por
+        # mensaje: en DAS BOOT, 600 bytes de la memoria plana del 128K.
+        tramos=bytearray()
+        for i,b in enumerate(mbnk):
+            if i==0 or b!=mbnk[i-1]:
+                tramos+=bytes([i&0xFF,(i>>8)&0xFF,b&0xFF])
+        tramos+=b'\xff\xff'
         if fx_banco: fx_en_banco=(ids[donde[len(banc)][0]], ventana+donde[len(banc)][1])
         # los que se quedan en la DB (banco 0), detras del indice
         mdat=p; md=bytearray()
@@ -158,7 +234,7 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
             if i in plano:
                 mptr[i]=mdat+len(md); md+=bytes(toks[i])+b'\x00'
         p=mdat+len(md)
-        msgbnk=p; p+=nmsg
+        msgbnk=p; p+=len(tramos)
     locidx=p; p+=nloc*2
     ldat=p; lptr=[]; lb=bytearray()
     for L in locations:
@@ -180,7 +256,7 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     # de un ON, o dos reglas identicas) lo guardan una vez. La segunda lleva
     # longitud 0 y un puntero al byte de longitud de la primera (el motor lo
     # resuelve en run_response). Un cuerpo vacio seria confundible con un
-    # alias, asi que se sustituye por un opcode nulo (63: >= 60, el motor
+    # alias, asi que se sustituye por un opcode nulo (255: fuera de CTAB, el motor
     # lo salta) que no marca la orden como atendida, igual que antes.
     _cuerpos={}
     for _r in responses:
@@ -191,7 +267,7 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
         if len(_r)==4: vb,nn,n2,cl=_r
         else:          (vb,nn,cl),n2=_r,0
         cb=bytes(cl) if isinstance(cl,(bytes,bytearray)) else enc_condacts(cl)
-        if not cb: cb=bytes([63])
+        if not cb: cb=bytes([255])     # (era 63, que desde la 3.0 es RAMLOAD)
         if len(cb)>255:
             raise ValueError('una respuesta compila a %d bytes y el motor nativo admite 255 como mucho: parte el bloque ON en dos'%len(cb))
         rbytes.append(vb&0xFF); rbytes.append(nn&0xFF); rbytes.append(n2&0xFF)
@@ -205,9 +281,11 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     p+=len(rbytes)
     def mkblk(b): return (bytes([len(b)&0xFF,(len(b)>>8)&0xFF])+bytes(b)) if b else b''
     bb=mkblk(proc_before); ab=mkblk(proc_after); ob=mkblk(proc_onstart)
+    eb=mkblk(proc_onenter)
     before_addr = p if proc_before else 0; p+=len(bb)
     after_addr  = p if proc_after else 0;  p+=len(ab)
     onstart_addr= p if proc_onstart else 0; p+=len(ob)
+    onenter_addr= p if proc_onenter else 0; p+=len(eb)
     palbytes=(bytes(title_pal)+bytes(16))[:16] if title_pal else b''
     pal_addr = p if palbytes else 0; p+=len(palbytes)
     locslot_addr = p if loc_slot else 0; p+=len(loc_slot)
@@ -246,6 +324,25 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
         else:
             texp_ptr.append(0)
     texptab_addr = p if nt else 0; p += nt*2
+    # ── subrutinas (SUB ... ENDSUB): tabla de punteros a [long16][cuerpo] ──
+    if len(subs) > 256:
+        raise ValueError('las maquinas admiten 256 subrutinas como mucho, y el '
+                         'juego trae %d' % len(subs))
+    sub_blocks = [mkblk(bytes(b)) or bytes(2) for b in subs]   # vacia: long 0
+    sub_ptr = []
+    for blk in sub_blocks:
+        sub_ptr.append(p); p += len(blk)
+    subtab_addr = p if subs else 0; p += len(subs)*2
+    # ── PONERSE, ABRIR, METER...: por objeto, los bits poner (1), abrir (2) y
+    # contenedor (4), la llave + 1 y la capacidad; y las plantillas de sus
+    # mensajes (ver PLANTILLAS y print_tpl) ──
+    objattr_a = p; p += nobj
+    _hay_llave = any(o.get('key') for o in objects)
+    _hay_cap = any(o.get('cap') for o in objects)
+    objkey_a = p if _hay_llave else 0; p += nobj if _hay_llave else 0
+    objcap_a = p if _hay_cap else 0; p += nobj if _hay_cap else 0
+    tpl_blocks = [bytes(b) for b in plantillas]    # seguidas, sin punteros
+    tpl_addr = p if plantillas else 0; p += sum(len(b) for b in tpl_blocks)
     # ── contenedores (estado inicial; se copia a RAM en init) ──
     objopen_a = p; p += nobj
     objlock_a = p; p += nobj
@@ -303,12 +400,21 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     w16(msgbnk)                                                 # 86 (banco por mensaje; 0 = texto plano)
     out.append(fxbnk & 0xFF)                                    # 87 (banco de los FX; 0 = planos)
     w16(objdesc_a)                                              # 89 (descripcion por objeto; 0 = sin tabla)
+    w16(subtab_addr)                                            # 91 (subrutinas; 0 = no hay)
+    out.append(sysverbs.get('say',0) & 0xFF)                    # 92 (DECIR: JUAN, COGE...)
+    for _k in ('poner','quita','abrir','cerra','meter','sacar'):
+        out.append(sysverbs.get(_k,0) & 0xFF)                   # 98 (verbos de serie)
+    w16(objattr_a)                                              # 100 (poner/abrir/contenedor...)
+    w16(tpl_addr)                                               # 102 (plantillas; 0 = no hay)
+    w16(onenter_addr)                                           # 104 (on_enter; 0 = no hay)
+    out.append(pesoact & 0xFF)                                  # 105 (PESO_ACT + 1; 0 = no)
+    w16(objkey_a); w16(objcap_a)                                # 109 (llave y capacidad; 0 = no)
     assert len(out)==HDR, len(out)
     for x in dptr: w16(x)
     out+=dd
     for x in mptr: w16(x)
     out+=md
-    out+=bytes(mbnk)
+    if texto is not None: out+=tramos
     for x in lptr: w16(x)
     out+=lb
     for word,vid,typ in vocab:
@@ -323,7 +429,7 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     for o in objects: out.append(1 if o.get('light') else 0)
     for o in objects: out.append(1 if o.get('lit') else 0)
     out+=rbytes
-    out+=bb; out+=ab; out+=ob; out+=palbytes; out+=bytes(loc_slot)
+    out+=bb; out+=ab; out+=ob; out+=eb; out+=palbytes; out+=bytes(loc_slot)
     for x in vname_ptr: w16(x)
     out+=vnd
     out+=bytes(font_acc)
@@ -332,6 +438,14 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
     for t in timers: out.append(t.get('active',0)&0xFF)
     for blk in texp_blocks: out+=blk
     for x in texp_ptr: w16(x)
+    for blk in sub_blocks: out+=blk
+    for x in sub_ptr: w16(x)
+    for o in objects: out.append(o.get('attr',0)&0xFF)
+    if objkey_a:
+        for o in objects: out.append(o.get('key',0)&0xFF)
+    if objcap_a:
+        for o in objects: out.append(min(int(o.get('cap',0)),255)&0xFF)
+    for blk in tpl_blocks: out+=blk
     for o in objects: out.append(1 if o.get('open') else 0)
     for o in objects: out.append(1 if o.get('locked') else 0)
     for o in objects: out.append(o.get('incont',0)&0xFF)
@@ -347,11 +461,14 @@ def build_game_db(messages, locations, vocab, objects, responses, startloc, sysv
             _d=o.get('desc',0)&0xFFFF
             out.append(_d&0xFF); out.append((_d>>8)&0xFF)
     if not fx_en_banco: out+=bytes(fx)
+    # lo escrito tiene que caer donde dicen los punteros calculados arriba
+    assert load+len(out)==p, (hex(load+len(out)), hex(p))
     return bytes(out), dict(load=load,ntok=ntok,nmsg=nmsg,nloc=nloc,nvocab=nvocab,nobj=nobj,ntimers=nt,size=len(out),
                             bancos_texto=bancos_texto,
                             msg_tam=[len(t)+1 for t in toks])
 
 ENGINE_ASM = r'''
+; @@PLANTILLAS@@
         org   ORIGIN
 
 start:  call  init
@@ -362,6 +479,8 @@ start:  call  init
         ld    hl,(onstartp)
         call  run_proc
         call  describe
+        ld    hl,(onenterp)   ; el on_enter de la sala inicial, como en PC
+        call  run_proc
         call  mainloop
 gameover:                      ; etiqueta para el arnes de pruebas: aqui, y solo
         ; aqui, se sabe que la partida ha terminado (antes solo se notaba porque
@@ -420,6 +539,26 @@ init:   ld    hl,(DBB+0)
         ld    (msgbnk),hl     ; banco por mensaje (0 = el texto es plano)
         ld    hl,(DBB+87)
         ld    (objdescp),hl   ; descripciones de objeto (0 = sin tabla)
+        ld    hl,(DBB+89)
+        ld    (subtabp),hl    ; subrutinas (0 = no hay)
+        ld    a,(DBB+91)
+        ld    (vsay),a        ; DECIR (las ordenes con coma)
+        ld    hl,DBB+92       ; PONERSE, QUITARSE, ABRIR, CERRAR, METER, SACAR
+        ld    de,vponer
+        ld    bc,6
+        ldir
+        ld    hl,(DBB+98)
+        ld    (objattrp),hl   ; poner/abrir/contenedor, llave y capacidad
+        ld    hl,(DBB+100)
+        ld    (tplp),hl       ; plantillas de los mensajes de esos verbos
+        ld    hl,(DBB+102)
+        ld    (onenterp),hl   ; los on_enter de las salas (0 = no hay)
+        ld    a,(DBB+104)
+        ld    (pesoact),a     ; indice de PESO_ACT + 1 (0 = no la usa)
+        ld    hl,(DBB+105)
+        ld    (objkeyp),hl    ; la llave de cada objeto (0 = ninguno tiene)
+        ld    hl,(DBB+107)
+        ld    (objcapp),hl    ; la capacidad (0 = ninguno la tiene)
         ld    a,(DBB+86)
         ld    (fxbnk),a       ; banco de los FX (0 = planos)
         ld    hl,(DBB+20)
@@ -490,7 +629,7 @@ init:   ld    hl,(DBB+0)
         ld    (faccp),hl      ; bitmaps de acentos (o 0 si no hay)
         call  detect128       ; pone has128=1 si hay RAM extra (CPC 6128)
         ld    hl,FLAGS
-        ld    b,64
+        ld    b,NVARB         ; las del juego (256 -> 0: DJNZ da 256 vueltas)
 icf_l:  ld    (hl),0
         inc   hl
         djnz  icf_l
@@ -594,11 +733,15 @@ mainloop:
         ld    a,(noturn)     ; GRABAR/RECUPERAR no gastan turno: ni after_turn
         or    a              ; ni temporizadores (lo recuperado queda tal cual)
         jr    nz,ml_noturn
+        ; Como en PC y en el manual: los temporizadores y luego after_turn.
+        ; Hasta la 3.0 iba al reves.
+        call  pa_rest         ; los dos, con las palabras del turno
+        call  tick_timers
+        ld    a,(quitf)       ; END en un temporizador: after_turn ya no corre
+        or    a
+        jr    nz,ml_fin
         ld    hl,(afterp)
         call  run_proc
-        ld    a,(curloc)      ; cerrado el turno, ya no es "recien entrado"
-        ld    (prevloc),a
-        call  tick_timers
         ld    a,(quitf)
         or    a
         jr    z,mainloop
@@ -609,7 +752,11 @@ ml_noturn:
         jp    mainloop
 
 dispatch:
+        call  pa_rest         ; un PARSE de before_turn no llega aqui
         call  run_response
+        push  af
+        call  pa_rest         ; ni uno de las respuestas a las de serie
+        pop   af
         or    a
         ret   nz
         ld    a,(verbid)
@@ -644,20 +791,39 @@ d_niv:  ld    a,(vinven)
         ret
 d_nex:  ld    a,(vexam)
         cp    b
-        jr    nz,d_mov
+        jr    nz,d_nv1
         call  do_exam
         ret
+d_nv1:  ld    a,(vponer)
+        cp    b
+        jp    z,do_poner
+        ld    a,(vquita)
+        cp    b
+        jp    z,do_quita
+        ld    a,(vabrir)
+        cp    b
+        jp    z,do_abrir
+        ld    a,(vcerra)
+        cp    b
+        jp    z,do_cerrar
+        ld    a,(vmeter)
+        cp    b
+        jp    z,do_meter
+        ld    a,(vsacar)
+        cp    b
+        jp    z,do_sacar
 d_mov:  ld    a,b
         or    a
         jr    z,d_nound
         ld    a,(vtype)
         cp    2
-        jr    nz,d_nound
+        jr    nz,d_nohacer
         call  try_move
         or    a
         jr    z,d_cantgo
         call  describe
-        ret
+        ld    hl,(onenterp)   ; y el on_enter de la sala nueva, como en PC
+        jp    run_proc
 d_cantgo:
         call  newline
         ld    de,SCANTGO
@@ -685,6 +851,11 @@ d_nound:
         ld    de,SNOUND
         call  print_msg
         ret
+; un verbo que se entiende pero que nada atiende (ni respuestas ni acciones de
+; serie): "No puedes hacer eso.", como en PC. Hasta la 3.0 decia "No entiendo".
+d_nohacer:
+        ld    a,PL_NOHACER
+        jp    print_tpl
 
 describe:
         call  scr_rest        ; si habia una pantalla entera puesta, fuera
@@ -1188,11 +1359,10 @@ lh_pon: pop   de
         call  print_msg
         jr    lh_sk
 lh_mov: pop   de
-lh_nom: call  newline
-        ld    de,SSEE
-        call  print_msg
-        ld    a,(oidx)
-        call  print_objname
+lh_nom: ld    a,(oidx)
+        ld    (tplo),a
+        ld    a,PL_AQUIHAY
+        call  print_tpl
 lh_sk:  ld    a,(oidx)
         inc   a
         ld    (oidx),a
@@ -1201,230 +1371,390 @@ lh_sk:  ld    a,(oidx)
         ret
 
 ; ---- do_get ----
+; COGER, DEJAR e INVENTARIO, como en el interprete de PC (handle_builtin,
+; take_all, drop_all, show_inventory) y con sus mensajes enteros.
 do_get: ld    a,(nounid)
         or    a
-        jp    z,dg_no
+        ld    a,PL_QCOGER
+        jp    z,print_tpl
+        ld    a,(nounid)
         ld    hl,vall
         cp    (hl)
-        jp    z,dg_all        ; COGER TODO
-        ld    (tnoun),a
-        ld    a,(nobj)
-        or    a
-        jr    z,dg_no
-        ld    b,a
-        xor   a
-        ld    (oidx),a
-dg_l:   ld    a,(oidx)
-        call  objnoun_get
-        ld    hl,tnoun
-        cp    (hl)
-        jr    nz,dg_nx
-        ld    a,(oidx)
+        jp    z,ct_todo       ; COGER TODO
+        ld    c,0
+        call  fobj1
+        cp    255
+        jp    z,dvb_noves
+; toma1: A = objeto -> lo que hace _builtin_take en PC
+toma1:  ld    (tplo),a
         call  objloc_get
-        ld    hl,curloc
-        cp    (hl)
-        jr    z,dg_aqui
-        cp    CONTAINED       ; dentro de un contenedor: vale si se alcanza
-        jr    nz,dg_nx
-        ld    a,(oidx)
-        call  obj_present
-        or    a
-        jr    z,dg_nx
-dg_aqui:
-        ld    a,(oidx)
+        call  held_z
+        ld    a,PL_YALLEVAS
+        jp    z,print_tpl
+        ld    a,(tplo)
         call  objfix_get
         or    a
-        jr    nz,dg_fixed     ; objeto fijo (PNJ/escenario): no se puede coger
-        ld    a,(oidx)
+        jr    nz,tk_fijo
+        ld    a,(tplo)
         call  too_heavy
         or    a
-        jr    nz,dg_heavy     ; excede LLEVAR_MAX
-        ld    a,(oidx)
+        ld    a,PL_NOCABEP
+        jp    nz,print_tpl
+        ld    a,(tplo)
         call  objloc_carr
-        call  newline
-        ld    de,STAKE
-        call  print_msg
-        ld    a,(oidx)
-        call  print_objname
-        ret
-dg_fixed:
+        ld    a,(tplo)
+        call  objin_addr
+        ld    (hl),0
+        ld    a,PL_COGES
+        jp    print_tpl
+tk_fijo:
         call  newline
         ld    de,SNOTAKE
-        call  print_msg
-        ret
-dg_heavy:
-        call  newline
-        ld    de,SHEAVY
-        call  print_msg
-        ret
-dg_nx:  ld    a,(oidx)
-        inc   a
-        ld    (oidx),a
-        djnz  dg_l
-dg_no:  call  newline
-        ld    de,SNOTHERE
-        call  print_msg
-        ret
-; ---- COGER TODO: coge todos los objetos presentes en la localizacion ----
-dg_all: call  is_dark         ; a oscuras no se ve que hay (como en PC)
+        jp    print_msg
+; COGER TODO: lo suelto en la sala y lo de los contenedores abiertos que hay en
+; ella, sin los fijos; cada uno pasa por las respuestas del juego (ON COGER x,
+; con sus puntos) y, si ninguna lo atiende, toma1
+ct_todo:
+        call  is_dark
         or    a
-        jr    z,dga_luz
+        jr    z,ct_luz
         call  newline
         ld    de,SOSCHAY
         jp    print_msg
-dga_luz:
+ct_luz: call  cand_borra
+        ld    a,(curloc)
+        ld    (ct_sala),a
         xor   a
-        ld    (oidx),a
-        ld    (dgcnt),a       ; dgcnt = nº de objetos cogidos (ctmp lo usa
-                              ; obj_present, que se llama en el bucle)
-dga_l:  ld    a,(oidx)
+        ld    (cnd_i),a
+        ld    (cnd_n),a
+ct_l:   ld    a,(cnd_i)
         ld    hl,nobj
         cp    (hl)
-        jr    nc,dga_e        ; recorridos todos
-        ld    a,(oidx)
+        jr    nc,ct_fin
+        call  es_hueco        ; los contenedores abiertos que hay en la sala:
+        jr    nz,ct_nh        ; lo de dentro vale aunque luego se cojan (PC)
+        ld    a,(cnd_i)
+        call  hold_pon
+ct_nh:  ld    a,(cnd_i)
+        call  en_sala
+        jr    nz,ct_nx
+        ld    a,(cnd_i)
+        call  objfix_get
+        or    a
+        jr    nz,ct_nx
+        ld    a,(cnd_i)
+        call  cand_pon
+        ld    hl,cnd_n
+        inc   (hl)
+ct_nx:  ld    hl,cnd_i
+        inc   (hl)
+        jr    ct_l
+ct_fin: ld    a,(cnd_n)
+        or    a
+        jr    nz,ct_hay
+        call  newline
+        ld    de,SNADAC
+        jp    print_msg
+ct_hay: xor   a
+        ld    (tmodo),a
+        ld    a,(vget)
+        jp    todos
+; es_hueco: A = objeto -> Z si es un contenedor abierto suelto en la sala
+es_hueco:
+        ld    c,a
         call  objloc_get
         ld    hl,curloc
         cp    (hl)
-        jr    z,dga_aqui      ; suelto en la sala
-        cp    CONTAINED       ; o dentro de un contenedor abierto y presente:
-        jr    nz,dga_nx       ; "coger todo" coge todo lo que se pueda coger
-        ld    a,(oidx)
-        call  obj_present
+        jr    nz,es_no
+        jr    es_abto
+; en_hueco: A = objeto -> Z si sigue donde estaba al empezar COGER TODO: en
+; la sala de entonces o dentro de uno de los contenedores apuntados en HOLDS
+en_hueco:
+        ld    c,a
+        call  objloc_get
+        ld    hl,ct_sala
+        cp    (hl)
+        ret   z
+        cp    CONTAINED
+        ret   nz
+        ld    a,c
+        call  objin_get
         or    a
-        jr    z,dga_nx
-dga_aqui:
-        ld    a,(oidx)
-        call  objfix_get
+        jr    z,es_no
+        dec   a
+        call  hold_es
+        jr    z,es_no
+        xor   a
+        ret
+; en_sala: A = objeto -> Z si esta suelto en la sala, o dentro de un
+; contenedor abierto que esta suelto en la sala (los "holders" de take_all)
+en_sala:
+        ld    c,a
+        call  objloc_get
+        ld    hl,curloc
+        cp    (hl)
+        ret   z
+        cp    CONTAINED
+        ret   nz
+        ld    a,c
+        call  objin_get
         or    a
-        jr    nz,dga_nx       ; fijo (PNJ/escenario): no se coge con "coger todo"
-        ld    a,(oidx)
-        call  too_heavy
+        jr    z,es_no
+        dec   a
+        ld    c,a
+        call  objloc_get
+        ld    hl,curloc
+        cp    (hl)
+        ret   nz
+es_abto:
+        ld    a,c
+        call  objopen_addr
+        ld    a,(hl)
         or    a
-        jr    nz,dga_nx       ; demasiado peso: se deja
-        ld    a,(oidx)
-        call  objloc_carr     ; cogerlo
-        call  newline
-        ld    de,STAKE
-        call  print_msg
-        ld    a,(oidx)
-        call  print_objname
-        ld    a,(dgcnt)
-        inc   a
-        ld    (dgcnt),a
-dga_nx: ld    a,(oidx)
-        inc   a
-        ld    (oidx),a
-        jr    dga_l
-dga_e:  ld    a,(dgcnt)
-        or    a
-        ret   nz             ; cogio algo
-        call  newline        ; nada que coger (antes decia "No ves eso aqui")
-        ld    de,SNADAC
-        jp    print_msg
+        jr    z,es_no
+        ld    a,c
+        call  objattr_get
+        and   4
+        jr    z,es_no
+        xor   a
+        ret
+es_no:  or    1
+        ret
 
-; ---- do_drop ----
 do_drop:
         ld    a,(nounid)
         or    a
-        jp    z,dd_no
+        ld    a,PL_QDEJAR
+        jp    z,print_tpl
+        ld    a,(nounid)
         ld    hl,vall
         cp    (hl)
-        jp    z,dd_all        ; DEJAR TODO
-        ld    (tnoun),a
-        ld    a,(nobj)
-        or    a
+        jr    z,dd_todo       ; DEJAR TODO
+        ld    c,1
+        call  fobj1
+        cp    255
         jr    z,dd_no
-        ld    b,a
-        xor   a
-        ld    (oidx),a
-dd_l:   ld    a,(oidx)
-        call  objnoun_get
-        ld    hl,tnoun
-        cp    (hl)
-        jr    nz,dd_nx
-        ld    a,(oidx)
+        ld    (tplo),a
         call  objloc_get
-        cp    CARRIED
-        jr    nz,dd_nx
-        ld    a,(oidx)
-        call  objloc_cur
-        call  newline
-        ld    de,SDROP
-        call  print_msg
-        ld    a,(oidx)
-        call  print_objname
-        ret
-dd_nx:  ld    a,(oidx)
-        inc   a
-        ld    (oidx),a
-        djnz  dd_l
+        call  held_z          ; llevado o puesto
+        ld    a,(tplo)
+        jr    z,deja1
 dd_no:  call  newline
         ld    de,SNOTCARR
-        call  print_msg
-        ret
-; ---- DEJAR TODO: deja todos los objetos que se llevan ----
-dd_all: xor   a
-        ld    (oidx),a
-        ld    (ctmp),a
-dda_l:  ld    a,(oidx)
+        jp    print_msg
+; deja1: A = objeto -> lo deja en la sala (aunque lo llevara puesto)
+deja1:  ld    (tplo),a
+        call  objloc_cur
+        ld    a,PL_DEJAS
+        jp    print_tpl
+; DEJAR TODO: lo que llevas (no lo puesto), cada uno por las respuestas del
+; juego y, si ninguna lo atiende, deja1
+dd_todo:
+        call  cand_borra
+        xor   a
+        ld    (cnd_i),a
+        ld    (cnd_n),a
+dt_l:   ld    a,(cnd_i)
         ld    hl,nobj
         cp    (hl)
-        jr    nc,dda_e
-        ld    a,(oidx)
+        jr    nc,dt_fin
         call  objloc_get
         cp    CARRIED
-        jr    nz,dda_nx      ; no se lleva
-        ld    a,(oidx)
-        call  objloc_cur     ; dejarlo aqui
-        call  newline
-        ld    de,SDROP
-        call  print_msg
-        ld    a,(oidx)
-        call  print_objname
-        ld    a,(ctmp)
-        inc   a
-        ld    (ctmp),a
-dda_nx: ld    a,(oidx)
-        inc   a
-        ld    (oidx),a
-        jr    dda_l
-dda_e:  ld    a,(ctmp)
+        jr    nz,dt_nx
+        ld    a,(cnd_i)
+        call  cand_pon
+        ld    hl,cnd_n
+        inc   (hl)
+dt_nx:  ld    hl,cnd_i
+        inc   (hl)
+        jr    dt_l
+dt_fin: ld    a,(cnd_n)
         or    a
-        ret   nz
-        call  newline        ; nada que dejar (antes decia "No llevas eso")
+        jr    nz,dt_hay
+        call  newline
         ld    de,SNADAD
         jp    print_msg
-
-; ---- do_inven ----
-do_inven:
-        ld    a,(nobj)
-        or    a
-        jr    z,di_e
-        ld    b,a
-        ld    hl,OBJLOC
-        ld    d,0
-di_c:   ld    a,(hl)
-        call  held_z
-        jr    nz,di_cn
-        inc   d
-di_cn:  inc   hl
-        djnz  di_c
-        ld    a,d
-        or    a
-        jr    z,di_e
-        call  newline
-        ld    de,SINVEN
-        call  print_msg
-        ld    a,(nobj)
-        ld    b,a
+dt_hay: ld    a,1
+        ld    (tmodo),a
+        ld    a,(vdrop)
+; todos: A = verbo -> los objetos marcados en CANDS, en el orden del juego,
+; con ese verbo y su nombre por las respuestas del juego; si ninguna los
+; atiende (y siguen donde estaban), toma1 (tmodo 0) o deja1 (tmodo 1)
+todos:  ld    (tverb),a
         xor   a
-        ld    (oidx),a
-di_l:   ld    a,(oidx)
+        ld    (cnd_i),a
+td_l:   ld    a,(quitf)
+        or    a
+        ret   nz
+        ld    a,(cnd_i)
+        ld    hl,nobj
+        cp    (hl)
+        ret   nc
+        call  cand_es
+        jr    z,td_nx
+        ld    a,(cnd_i)
+        call  objnoun_get
+        or    a
+        jr    z,td_serie      ; sin nombre: directamente la accion de serie
+        ld    (nounid),a
+        ld    a,(tverb)
+        ld    (verbid),a
+        xor   a
+        ld    (nounid2),a
+        call  run_response
+        or    a
+        jr    nz,td_nx        ; una respuesta lo atendio
+        ld    a,(quitf)
+        or    a
+        ret   nz
+td_serie:
+        ld    a,(tmodo)
+        or    a
+        jr    nz,td_deja
+        ld    a,(cnd_i)
+        call  en_hueco
+        jr    nz,td_nx
+        ld    a,(cnd_i)
+        call  toma1
+        jr    td_nx
+td_deja:
+        ld    a,(cnd_i)
         call  objloc_get
-        call  held_z
-        jr    nz,di_nx
-        push  bc
-        call  newline         ; un objeto por linea, "  - nombre", como en PC
+        cp    CARRIED
+        jr    nz,td_nx
+        ld    a,(cnd_i)
+        call  deja1
+td_nx:  ld    hl,cnd_i
+        inc   (hl)
+        jr    td_l
+; CANDS: un bit por objeto (los de COGER TODO / DEJAR TODO, apuntados antes
+; de empezar, como la lista de take_all)
+cand_borra:                   ; CANDS y HOLDS
+        ld    hl,CANDS
+        ld    b,64
+        xor   a
+cb_l:   ld    (hl),a
+        inc   hl
+        djnz  cb_l
+        ret
+cand_pon:
+        call  cand_dir
+        ld    a,(hl)
+        or    c
+        ld    (hl),a
+        ret
+cand_es:                      ; A = objeto -> NZ si esta marcado
+        call  cand_dir
+        ld    a,(hl)
+        and   c
+        ret
+hold_pon:                     ; A = contenedor -> a HOLDS
+        call  cand_dir
+        ld    de,32
+        add   hl,de
+        ld    a,(hl)
+        or    c
+        ld    (hl),a
+        ret
+hold_es:                      ; A = contenedor -> NZ si esta en HOLDS
+        call  cand_dir
+        ld    de,32
+        add   hl,de
+        ld    a,(hl)
+        and   c
+        ret
+cand_dir:                     ; A -> HL = &CANDS[A/8], C = su bit
+        ld    c,a
+        srl   a
+        srl   a
+        srl   a
+        ld    e,a
+        ld    d,0
+        ld    hl,CANDS
+        add   hl,de
+        ld    a,c
+        and   7
+        ld    b,a
+        inc   b
+        ld    a,1
+cdr_l:  dec   b
+        jr    z,cdr_f
+        add   a,a
+        jr    cdr_l
+cdr_f:  ld    c,a
+        ret
+
+; ---- INVENTARIO, como show_inventory en PC: lo que llevas (con lo que tenga
+; dentro), lo puesto aparte y, si hay limite de peso, el peso ----
+do_inven:
+        xor   a
+        ld    (ivn_i),a
+        ld    (ivn_l),a
+        ld    (ivn_p),a
+iv_c:   ld    a,(ivn_i)
+        ld    hl,nobj
+        cp    (hl)
+        jr    nc,iv_cf
+        call  objloc_get
+        cp    CARRIED
+        jr    nz,iv_c2
+        ld    hl,ivn_l
+        inc   (hl)
+        jr    iv_cn
+iv_c2:  cp    WORN
+        jr    nz,iv_cn
+        ld    hl,ivn_p
+        inc   (hl)
+iv_cn:  ld    hl,ivn_i
+        inc   (hl)
+        jr    iv_c
+iv_cf:  ld    a,(ivn_l)
+        ld    hl,ivn_p
+        or    (hl)
+        jr    nz,iv_algo
+        call  newline
+        ld    de,SEMPTY
+        jp    print_msg
+iv_algo:
+        ld    a,PL_LLEVAS
+        call  print_tpl
+        ld    c,CARRIED
+        call  iv_lista
+        ld    a,(ivn_p)
+        or    a
+        jr    z,iv_peso
+        ld    a,PL_PUESTOC
+        call  print_tpl
+        ld    c,WORN
+        call  iv_lista
+iv_peso:
+        call  wlimite
+        ret   z
+        ld    l,a
+        ld    h,0
+        ld    (tpln2),hl
+        xor   a
+        ld    (wmode),a
+        call  wsum
+        ld    (tpln1),hl
+        ld    a,PL_PESOINV
+        jp    print_tpl
+; iv_lista: C = CARRIED o WORN -> "  - nombre" por objeto; los que se llevan
+; con algo dentro, con "(contiene: ...)" detras
+iv_lista:
+        ld    a,c
+        ld    (ivn_u),a
+        xor   a
+        ld    (ivn_i),a
+ivl_l:  ld    a,(ivn_i)
+        ld    hl,nobj
+        cp    (hl)
+        ret   nc
+        call  objloc_get
+        ld    hl,ivn_u
+        cp    (hl)
+        jr    nz,ivl_nx
+        call  newline
         ld    a,32
         call  char_raw
         ld    a,32
@@ -1433,60 +1763,593 @@ di_l:   ld    a,(oidx)
         call  char_raw
         ld    a,32
         call  char_raw
-        ld    a,(oidx)
+        ld    a,(ivn_i)
         call  print_objname
-        pop   bc
-di_nx:  ld    a,(oidx)
-        inc   a
-        ld    (oidx),a
-        djnz  di_l
-        ret
-di_e:   call  newline
-        ld    de,SEMPTY
-        call  print_msg
+        ld    a,(ivn_u)
+        cp    CARRIED
+        jr    nz,ivl_nx
+        ld    a,(ivn_i)
+        ld    (tplo),a
+        call  cuenta_dentro
+        or    a
+        jr    z,ivl_nx
+        ld    a,PL_CONTINL
+        call  print_tpl0
+ivl_nx: ld    hl,ivn_i
+        inc   (hl)
+        jr    ivl_l
+
+; print_dec16: HL en decimal, sin ceros delante, donde este el cursor
+print_dec16:
+        xor   a
+        ld    (pdlead),a
+        ld    de,10000
+        call  pd16
+        ld    de,1000
+        call  pd16
+        ld    de,100
+        call  pd16
+        ld    de,10
+        call  pd16
+        ld    a,l
+        add   a,48
+        jp    char_raw
+pd16:   ld    c,47
+pd16l:  inc   c
+        or    a
+        sbc   hl,de
+        jr    nc,pd16l
+        add   hl,de
+        ld    a,c
+        cp    48
+        jr    nz,pd16s
+        ld    a,(pdlead)
+        or    a
+        ret   z
+pd16s:  ld    a,1
+        ld    (pdlead),a
+        push  hl
+        push  de
+        ld    a,c
+        call  char_raw
+        pop   de
+        pop   hl
         ret
 
 ; ---- do_exam: imprime el nombre del objeto presente/llevado ----
 do_exam:
+        call  is_dark         ; a oscuras no se ve nada (como en PC)
+        or    a
+        ld    a,PL_OSCVER
+        jp    nz,print_tpl
         ld    a,(nounid)
         or    a
-        jp    z,describe      ; "mirar"/"examinar" sin objeto -> describe la sala
-        ld    (tnoun),a
-        ld    a,(nobj)
-        or    a
+        jp    z,describe      ; "examinar" sin objeto -> describe la sala
+        ld    c,0
+        call  fobj1           ; al alcance: llevado, puesto, aqui o en un
+        ld    (tplo),a        ; contenedor abierto
+        cp    255
         jr    z,dx_no
-        ld    b,a
-        xor   a
-        ld    (oidx),a
-dx_l:   ld    a,(oidx)
-        call  objnoun_get
-        ld    hl,tnoun
-        cp    (hl)
-        jr    nz,dx_nx
-        ld    a,(oidx)
-        call  objloc_get
-        cp    CARRIED
-        jr    z,dx_f
-        ld    hl,curloc
-        cp    (hl)
-        jr    nz,dx_nx
-dx_f:   call  newline
-        ld    a,(oidx)
+        ld    a,(tplo)
         call  objdesc_get     ; DE = descripcion del objeto (0 = no tiene)
         ld    a,d
         or    e
         jr    z,dx_nom
-        jp    print_msg
-dx_nom: ld    a,(oidx)
-        call  print_objname   ; sin descripcion: el nombre, como siempre
-        ret
-dx_nx:  ld    a,(oidx)
-        inc   a
-        ld    (oidx),a
-        djnz  dx_l
+        push  de
+        call  newline
+        pop   de
+        call  print_msg
+        jr    dx_cont
+dx_nom: ld    a,PL_NOESP      ; sin descripcion: "No ves nada especial." (PC;
+        call  print_tpl       ; hasta la 3.0 las maquinas daban el nombre)
+dx_cont:
+        ld    a,(tplo)        ; un contenedor abierto: lo que tiene dentro
+        call  objattr_get
+        and   4
+        ret   z
+        ld    a,(tplo)
+        call  objopen_addr
+        ld    a,(hl)
+        or    a
+        ret   z
+        call  cuenta_dentro
+        or    a
+        ld    a,PL_VACIO
+        jp    z,print_tpl
+        ld    a,PL_CONTIENE
+        jp    print_tpl
 dx_no:  call  newline
         ld    de,SNOTHERE
         call  print_msg
+        ret
+
+; ===== PONERSE, QUITARSE, ABRIR, CERRAR, METER y SACAR =====
+; Lo mismo que hace el interprete de PC (handle_builtin), con sus mismos
+; mensajes (las plantillas PL_). Hasta la 3.0 las maquinas no los tenian y
+; respondian "No entiendo eso", aunque el manual decia que si.
+do_poner:
+        ld    a,(nounid2)     ; PONER X EN Y es METER
+        or    a
+        jp    nz,do_meter
+        ld    a,(nounid)
+        or    a
+        ld    a,PL_QPONER
+        jp    z,print_tpl
+        ld    c,1
+        call  fobj1
+        ld    (tplo),a
+        cp    255
+        jr    z,dpo_inv
+        call  objloc_get
+        cp    CARRIED
+        jr    nz,dpo_inv
+        ld    a,(tplo)
+        call  objattr_get
+        and   1               ; se puede poner
+        ld    a,PL_NOPONER
+        jp    z,print_tpl
+        ld    a,(tplo)
+        call  obj_addr
+        ld    (hl),WORN
+        ld    a,PL_PONES
+        jp    print_tpl
+dpo_inv:
+        ld    a,PL_NOINV
+        jp    print_tpl
+
+do_quita:
+        ld    a,(nounid)
+        or    a
+        ld    a,PL_QQUITAR
+        jp    z,print_tpl
+        ld    c,1
+        call  fobj1
+        ld    (tplo),a
+        cp    255
+        jr    z,dqu_no
+        call  objloc_get
+        cp    WORN
+        jr    nz,dqu_no
+        ld    a,(tplo)
+        call  obj_addr
+        ld    (hl),CARRIED
+        ld    a,PL_QUITAS
+        jp    print_tpl
+dqu_no: ld    a,PL_NOPUESTO
+        jp    print_tpl
+
+do_abrir:
+        ld    a,(nounid)
+        or    a
+        ld    a,PL_QABRIR
+        jp    z,print_tpl
+        ld    c,0
+        call  fobj1
+        ld    (tplo),a
+        cp    255
+        jp    z,dvb_noves
+        call  objattr_get
+        and   2               ; se abre
+        ld    a,PL_NOABRIR
+        jp    z,print_tpl
+        ld    a,(tplo)
+        call  objopen_addr
+        ld    a,(hl)
+        or    a
+        ld    a,PL_YAABIER
+        jp    nz,print_tpl
+        ld    a,(tplo)
+        call  objlock_addr
+        ld    a,(hl)
+        or    a
+        jr    z,dab_abre
+        ld    a,(tplo)
+        call  objkey_get      ; la llave + 1 (0 = no tiene)
+        or    a
+        jr    z,dab_llave
+        dec   a
+        ld    (tplo2),a
+        call  objloc_get
+        call  held_z          ; abre si la llevas (o la llevas puesta)
+        jr    nz,dab_llave
+        ld    a,(tplo)
+        call  objlock_addr
+        ld    (hl),0
+        ld    a,(tplo)
+        call  objopen_addr
+        ld    (hl),1
+        ld    a,PL_ABRESCON
+        jp    print_tpl
+dab_llave:
+        ld    a,PL_CERRLLAVE
+        jp    print_tpl
+dab_abre:
+        ld    a,(tplo)
+        call  objopen_addr
+        ld    (hl),1
+        ld    a,PL_ABRES
+        call  print_tpl
+        ld    a,(tplo)
+        call  objattr_get
+        and   4               ; contenedor: lo que hay dentro
+        ret   z
+        call  cuenta_dentro
+        or    a
+        ret   z
+        ld    a,PL_DENTRO
+        jp    print_tpl
+dvb_noves:
+        call  newline
+        ld    de,SNOTHERE
+        jp    print_msg
+
+do_cerrar:
+        ld    a,(nounid)
+        or    a
+        ld    a,PL_QCERRAR
+        jp    z,print_tpl
+        ld    c,0
+        call  fobj1
+        ld    (tplo),a
+        cp    255
+        jp    z,dvb_noves
+        call  objattr_get
+        and   2
+        ld    a,PL_NOCERRAR
+        jp    z,print_tpl
+        ld    a,(tplo)
+        call  objopen_addr
+        ld    a,(hl)
+        or    a
+        ld    a,PL_YACERR
+        jp    z,print_tpl
+        ld    (hl),0          ; HL sigue en OBJOPEN del objeto
+        ld    a,PL_CIERRAS
+        jp    print_tpl
+
+do_meter:
+        ld    a,(nounid)
+        or    a
+        ld    a,PL_QMETER
+        jp    z,print_tpl
+        ld    a,(nounid2)
+        or    a
+        ld    a,PL_DONDE
+        jp    z,print_tpl
+        ld    c,0
+        call  fobj1
+        ld    (tplo),a
+        cp    255
+        jp    z,dvb_noves
+        call  objloc_get
+        call  held_z
+        ld    a,PL_PRIMERO
+        jp    nz,print_tpl
+        ld    a,(nounid2)
+        ld    c,0
+        call  fobj
+        ld    (tplo2),a
+        cp    255
+        jp    z,dvb_noves
+        ld    hl,tplo
+        cp    (hl)
+        ld    a,PL_NOMETERSI
+        jp    z,print_tpl
+        ld    a,(tplo2)
+        call  objattr_get
+        and   4
+        ld    a,PL_NOCONT
+        jr    z,dme_cont
+        ld    a,(tplo2)
+        call  objattr_get
+        and   2
+        jr    z,dme_abierto
+        ld    a,(tplo2)
+        call  objopen_addr
+        ld    a,(hl)
+        or    a
+        jr    nz,dme_abierto
+        ld    a,PL_CONTCERR
+dme_cont:                     ; A = plantilla cuyo {o} es el contenedor
+        push  af
+        ld    a,(tplo2)
+        ld    (tplo),a
+        pop   af
+        jp    print_tpl
+dme_abierto:
+        ld    a,(tplo2)
+        call  objcap_get      ; capacidad (0 = sin limite)
+        or    a
+        jr    z,dme_mete
+        ld    (wtmp),a
+        ld    a,(tplo2)
+        ld    (wobj),a
+        ld    a,2
+        ld    (wmode),a
+        call  wsum            ; lo que ya hay dentro
+        push  hl
+        ld    a,(tplo)
+        ld    (wobj),a
+        ld    a,1
+        ld    (wmode),a
+        call  wsum            ; y lo que se mete
+        pop   de
+        add   hl,de
+        ld    a,(wtmp)
+        call  wpasa
+        ld    a,PL_NOCABE
+        jr    nz,dme_cont
+dme_mete:
+        ld    a,(tplo)
+        call  obj_addr
+        ld    (hl),CONTAINED
+        ld    a,(tplo)
+        call  objin_addr
+        ld    a,(tplo2)
+        inc   a
+        ld    (hl),a
+        ld    a,PL_METES
+        jp    print_tpl
+
+do_sacar:
+        ld    a,(nounid)
+        or    a
+        ld    a,PL_QSACAR
+        jp    z,print_tpl
+        ld    c,0
+        call  fobj1
+        ld    (tplo),a
+        cp    255
+        jp    z,dvb_noves
+        call  objloc_get
+        cp    CONTAINED
+        jr    nz,dsa_no
+        ld    a,(tplo)
+        call  objin_get
+        or    a
+        jr    z,dsa_no
+        dec   a
+        ld    (tplo2),a
+        call  objattr_get
+        and   4
+        jr    z,dsa_no
+        ld    a,(tplo)        ; se saca y, si pesa demasiado, vuelve dentro
+        call  obj_addr
+        ld    (hl),CARRIED
+        call  wlimite
+        jr    z,dsa_ok
+        ld    (wtmp),a
+        xor   a
+        ld    (wmode),a
+        call  wsum
+        ld    a,(wtmp)
+        call  wpasa
+        jr    z,dsa_ok
+        ld    a,(tplo)
+        call  obj_addr
+        ld    (hl),CONTAINED
+        ld    a,PL_PESOSACAR
+        jp    print_tpl
+dsa_ok: ld    a,(tplo)
+        call  objin_addr
+        ld    (hl),0
+        ld    a,PL_SACAS
+        jp    print_tpl
+dsa_no: ld    a,PL_NODENTRO
+        jp    print_tpl
+
+; fobj: A = nombre, C = 0 (al alcance) o 1 (cualquiera) -> A = el objeto con
+; ese nombre, o 255. Como find_object_by_noun en PC: el que llevas, si hay
+; uno; si no, el primero del juego.
+fobj1:  ld    a,(nounid)
+fobj:   ld    (fn_nom),a
+        ld    a,c
+        ld    (fn_modo),a
+        ld    a,255
+        ld    (fn_res),a
+        xor   a
+        ld    (fn_i),a
+fo_l:   ld    a,(fn_i)
+        ld    hl,nobj
+        cp    (hl)
+        jr    nc,fo_fin
+        call  objnoun_get
+        ld    hl,fn_nom
+        cp    (hl)
+        jr    nz,fo_nx
+        ld    a,(fn_modo)
+        or    a
+        jr    nz,fo_vale
+        ld    a,(fn_i)
+        call  obj_present
+        or    a
+        jr    z,fo_nx
+fo_vale:
+        ld    a,(fn_i)
+        call  objloc_get
+        call  held_z
+        ld    a,(fn_i)
+        ret   z
+        ld    a,(fn_res)
+        cp    255
+        jr    nz,fo_nx
+        ld    a,(fn_i)
+        ld    (fn_res),a
+fo_nx:  ld    hl,fn_i
+        inc   (hl)
+        jr    fo_l
+fo_fin: ld    a,(fn_res)
+        ret
+
+; print_tpl: A = plantilla (PL_) -> en linea nueva, sus trozos: un mensaje del
+; juego (5), el nombre de tplo (1; 4 con la primera letra en mayuscula), el de
+; tplo2 (2) o lo que hay dentro de tplo, separado por un mensaje (3). Las arma
+; nativecc con los textos del interprete de PC (o los del autor) del idioma.
+print_tpl:
+        push  af
+        call  newline
+        pop   af
+print_tpl0:                   ; lo mismo, en la linea en que se este
+        ld    hl,(tplp)
+        ld    e,a
+        ld    a,h
+        or    l
+        ret   z               ; sin plantillas (arneses)
+        inc   e               ; las plantillas van seguidas: se salta las
+pt_b:   dec   e               ; E primeras (cada una acaba en un 0; 3 y 5
+        jr    z,pt_l          ; llevan detras dos bytes, que pueden ser 0)
+pt_s:   ld    a,(hl)
+        inc   hl
+        or    a
+        jr    z,pt_b
+        cp    3
+        jr    z,pt_s2
+        cp    5
+        jr    nz,pt_s
+pt_s2:  inc   hl
+        inc   hl
+        jr    pt_s
+pt_l:   ld    a,(hl)
+        inc   hl
+        or    a
+        ret   z
+        push  hl
+        cp    5
+        jr    z,pt_msg
+        cp    3
+        jr    z,pt_lis
+        cp    4
+        jr    z,pt_cap
+        cp    6
+        jr    z,pt_n1
+        cp    7
+        jr    z,pt_n2
+        cp    1
+        ld    a,(tplo)
+        jr    z,pt_nom
+        ld    a,(tplo2)
+pt_nom: call  print_objname
+        pop   hl
+        jr    pt_l
+pt_msg: pop   hl
+        ld    e,(hl)
+        inc   hl
+        ld    d,(hl)
+        inc   hl
+        push  hl
+        call  print_msg
+        pop   hl
+        jr    pt_l
+pt_lis: pop   hl
+        ld    e,(hl)
+        inc   hl
+        ld    d,(hl)
+        inc   hl
+        push  hl
+        ld    (tplsep),de
+        call  lista_dentro
+        pop   hl
+        jr    pt_l
+pt_n1:  ld    hl,(tpln1)
+        jr    pt_num
+pt_n2:  ld    hl,(tpln2)
+pt_num: call  print_dec16
+        pop   hl
+        jr    pt_l
+pt_cap: ld    a,(tplo)
+        ld    l,a
+        ld    h,0
+        add   hl,hl
+        ld    de,(objnamep)
+        add   hl,de
+        ld    e,(hl)
+        inc   hl
+        ld    d,(hl)
+        call  expand_msg      ; HL = BUF, BC = longitud
+        ld    a,(hl)
+        cp    97
+        jr    c,ptc_p
+        cp    123
+        jr    nc,ptc_p
+        sub   32
+        ld    (hl),a
+ptc_p:  call  wrap_print
+        pop   hl
+        jr    pt_l
+; lista_dentro: los nombres de lo que hay dentro de tplo, en el orden del
+; juego, separados por el mensaje tplsep (", ")
+lista_dentro:
+        xor   a
+        ld    (lsd_i),a
+        ld    (lsd_n),a
+lsd_l:  ld    a,(lsd_i)
+        ld    hl,nobj
+        cp    (hl)
+        ret   nc
+        call  esta_dentro
+        jr    nz,lsd_nx
+        ld    a,(lsd_n)
+        or    a
+        jr    z,lsd_pri
+        ld    de,(tplsep)
+        call  print_msg
+lsd_pri:
+        ld    hl,lsd_n
+        inc   (hl)
+        ld    a,(lsd_i)
+        call  print_objname
+lsd_nx: ld    hl,lsd_i
+        inc   (hl)
+        jr    lsd_l
+; esta_dentro: A = objeto -> Z si esta directamente dentro de tplo
+esta_dentro:
+        ld    c,a
+        call  objloc_get
+        cp    CONTAINED
+        ret   nz
+        ld    a,c
+        call  objin_get
+        dec   a
+        ld    hl,tplo
+        cp    (hl)
+        ret
+; cuenta_dentro: A = cuantos objetos hay directamente dentro de tplo
+cuenta_dentro:
+        ld    b,0
+        xor   a
+        ld    (lsd_i),a
+cud_l:  ld    a,(lsd_i)
+        ld    hl,nobj
+        cp    (hl)
+        jr    nc,cud_f
+        push  bc
+        call  esta_dentro
+        pop   bc
+        jr    nz,cud_nx
+        inc   b
+cud_nx: ld    hl,lsd_i
+        inc   (hl)
+        jr    cud_l
+cud_f:  ld    a,b
+        ret
+; objattr_get / objkey_get / objcap_get: A = objeto -> los bits poner (1),
+; abrir (2) y contenedor (4); la llave + 1 (0 = no tiene); la capacidad (0 =
+; sin limite). Las dos ultimas tablas solo estan si algun objeto las usa.
+objattr_get:
+        ld    hl,(objattrp)
+        jr    ota
+objkey_get:
+        ld    hl,(objkeyp)
+        jr    ota
+objcap_get:
+        ld    hl,(objcapp)
+ota:    ld    e,a
+        ld    d,0
+        ld    a,h
+        or    l
+        ret   z               ; sin tabla: 0
+        add   hl,de
+        ld    a,(hl)
         ret
 
 ; ---- helpers objetos ----
@@ -1620,54 +2483,128 @@ objweight_get:
         add   hl,de
         ld    a,(hl)
         ret
-; carried_weight: A = suma de pesos de los objetos llevados/puestos
-carried_weight:
-        ld    a,(nobj)
-        or    a
-        jr    z,cw_z
-        ld    b,a
-        ld    c,0
+; Pesos, como el interprete de PC (recalc_weight / get_object_weight): un
+; objeto pesa lo suyo mas lo que lleve dentro, a cualquier profundidad, y lo
+; que va dentro de algo que llevas tambien lo llevas. Hasta la 3.0 solo
+; contaban los objetos llevados sueltos, y en un byte que se daba la vuelta.
+; wsum: HL = peso de los objetos que pasan la prueba de wmode:
+;   0 = los que llevas (sueltos, puestos o dentro de algo que llevas)
+;   1 = wobj y lo que tenga dentro
+;   2 = solo lo que tenga dentro wobj
+wsum:   ld    hl,0
+        ld    (wacc),hl
         xor   a
         ld    (widx),a
-cw_l:   ld    a,(widx)
-        call  objloc_get
-        call  held_z
-        jr    nz,cw_nx
+ws_l:   ld    a,(widx)
+        ld    hl,nobj
+        cp    (hl)
+        jr    nc,ws_fin
+        call  ws_test
+        jr    nz,ws_nx
         ld    a,(widx)
         call  objweight_get
-        add   a,c
+        ld    e,a
+        ld    d,0
+        ld    hl,(wacc)
+        add   hl,de
+        ld    (wacc),hl
+ws_nx:  ld    hl,widx
+        inc   (hl)
+        jr    ws_l
+ws_fin: ld    hl,(wacc)
+        ret
+; ws_test: A = objeto -> Z si cuenta para wmode
+ws_test:
         ld    c,a
-cw_nx:  ld    a,(widx)
-        inc   a
-        ld    (widx),a
-        djnz  cw_l
-        ld    a,c
-        ret
-cw_z:   xor   a
-        ret
-; too_heavy: A=obj -> A=1 si coger ese objeto excederia LLEVAR_MAX (0 = sin limite)
-too_heavy:
-        ld    (wtmp),a       ; obj (temporal)
-        ld    a,(llevarmax)
-        cp    255
-        jr    z,th_no        ; sin variable LLEVAR_MAX -> sin limite
-        ld    a,(wtmp)
-        call  objweight_get
-        ld    (wtmp),a       ; peso del objeto
-        call  carried_weight
-        ld    hl,wtmp
-        add   a,(hl)
-        ld    (wtmp),a       ; peso total resultante
-        ld    a,(llevarmax)
-        call  flag_addr
-        ld    a,(hl)         ; valor de LLEVAR_MAX
+        ld    a,(wmode)
         or    a
-        jr    z,th_no        ; 0 -> sin limite
-        ld    c,a
-        ld    a,(wtmp)
+        jr    nz,wt_dentro
+        ld    a,c
+        call  wsube           ; A = OBJLOC del de mas arriba
+        jp    held_z
+wt_dentro:
+        ld    a,(wobj)
         cp    c
+        jr    nz,wt_sub
+        ld    a,(wmode)
+        cp    1               ; el propio wobj cuenta en el modo 1
+        ret
+wt_sub: ld    b,8             ; sube por los contenedores (8 pasos como mucho)
+wts_l:  ld    a,c
+        call  objloc_get
+        cp    CONTAINED
+        jr    nz,wt_no
+        ld    a,c
+        call  objin_get
+        or    a
+        jr    z,wt_no
+        dec   a
+        ld    c,a
+        ld    a,(wobj)
+        cp    c
+        ret   z
+        djnz  wts_l
+wt_no:  or    1
+        ret
+; wsube: A = objeto -> A = OBJLOC del contenedor de mas arriba de su cadena (el
+; suyo si no esta dentro de nada; NOWHERE si la cadena diera vueltas)
+wsube:  ld    c,a
+        ld    b,8
+wsb_l:  ld    a,c
+        call  objloc_get
+        cp    CONTAINED
+        ret   nz
+        ld    a,c
+        call  objin_get
+        or    a
+        jr    z,wsb_no
+        dec   a
+        ld    c,a
+        djnz  wsb_l
+wsb_no: ld    a,NOWHERE
+        ret
+; wlimite: Z si no hay limite de peso (no hay LLEVAR_MAX, o vale 0); si no,
+; A = el limite
+wlimite:
+        ld    a,(llevarmax)   ; indice de LLEVAR_MAX + 1 (0 = no hay)
+        or    a
+        ret   z
+        dec   a
+        call  flag_addr
+        ld    a,(hl)
+        or    a
+        ret
+; wpasa: HL = peso, A = limite -> NZ si el peso pasa del limite
+wpasa:  ld    c,a
+        ld    a,h
+        or    a
+        ret   nz
+        ld    a,c
+        cp    l               ; CF si el limite es menor que el peso
+        jr    c,wpa_si
+        xor   a
+        ret
+wpa_si: or    1
+        ret
+; too_heavy: A=obj -> A=1 si coger ese objeto (con lo que lleve dentro) pasa
+; de LLEVAR_MAX (sin LLEVAR_MAX, o a 0, no hay limite)
+too_heavy:
+        ld    (wobj),a
+        call  wlimite
         jr    z,th_no
-        jr    c,th_no
+        ld    (wtmp),a        ; el limite
+        ld    a,1
+        ld    (wmode),a
+        call  wsum            ; el objeto con lo que lleve dentro
+        push  hl
+        xor   a
+        ld    (wmode),a
+        call  wsum            ; lo que ya llevas
+        pop   de
+        add   hl,de
+        ld    a,(wtmp)
+        call  wpasa
+        jr    z,th_no
         ld    a,1
         ret
 th_no:  xor   a
@@ -1838,39 +2775,10 @@ tt_nx:  ld    a,(tidx)
         djnz  tt_l
         ret
 ; print_dec: imprime A (0..255) en decimal sin ceros a la izquierda
-print_dec:
-        push  af
-        xor   a
-        ld    (pdlead),a
-        pop   af
-        ld    b,100
-        call  pd_dig
-        ld    b,10
-        call  pd_dig
-        add   a,48           ; '0'
-        jp    char_raw
-pd_dig: ld    c,47           ; '0'-1
-pd_l:   inc   c
-        sub   b
-        jr    nc,pd_l
-        add   a,b
-        push  af
-        ld    a,c
-        cp    48             ; '0'
-        jr    nz,pd_show
-        ld    a,(pdlead)
-        or    a
-        jr    z,pd_noshow
-pd_show:
-        ld    a,1
-        ld    (pdlead),a
-        push  bc
-        ld    a,c
-        call  char_raw
-        pop   bc
-pd_noshow:
-        pop   af
-        ret
+print_dec:                    ; A en decimal (el de 16 bits, con H = 0)
+        ld    l,a
+        ld    h,0
+        jp    print_dec16
 objloc_carr:
         ld    e,a
         ld    d,0
@@ -1887,10 +2795,10 @@ objloc_cur:
         ld    (hl),a
         ret
 print_objname:
-        add   a,a
-        ld    e,a
-        ld    d,0
-        ld    hl,(objnamep)
+        ld    l,a             ; objeto*2 en 16 bits: con 'add a,a' el 128 y
+        ld    h,0             ; siguientes se salian del byte y salia el nombre
+        add   hl,hl           ; de otro objeto (hasta la 3.0 habia 64 como mucho)
+        ld    de,(objnamep)
         add   hl,de
         ld    e,(hl)
         inc   hl
@@ -2022,11 +2930,91 @@ pa_sep: ld    a,(hl)           ; el espacio: "l'uniforme", "esconde-te"
 pa_esp: ld    (hl),32
 pa_sig: inc   hl
         jr    pa_sep
-pa_go:  xor   a
+; Ordenes a personajes: el primer " o la primera , parte la frase. Lo de
+; delante es la frase del turno y lo de detras la orden, que PARSE analiza
+; cuando el autor quiera (ordp; 0 = no hay). Con coma solo es una orden si
+; delante hay un nombre y ningun verbo (JUAN, COGE LA LLAVE), y entonces el
+; verbo es DECIR; si no, la coma es un espacio. Lo mismo en PC
+; (paws_lang.separa_orden).
+pa_go:  ld    hl,0
+        ld    (ordp),hl
+        ld    hl,INBUF
+pq_l:   ld    a,(hl)
+        or    a
+        jr    z,pq_fin
+        cp    34
+        jr    z,pq_com
+        cp    44
+        jr    z,pq_coma
+        inc   hl
+        jr    pq_l
+pq_coma:
+        ld    (ordc),hl
+        ld    (hl),0
+        inc   hl
+        ld    (ordp),hl
+        ld    hl,INBUF
+        call  pa_words
+        ld    a,(verbid)
+        or    a
+        jr    nz,pq_noes
+        ld    a,(nounid)
+        or    a
+        jr    z,pq_noes
+        ld    a,(vsay)
+        ld    (verbid),a
+        xor   a
+        ld    (vtype),a
+        jr    pa_guarda
+pq_noes:
+        ld    hl,(ordc)
+        ld    (hl),32
+        ld    hl,0
+        ld    (ordp),hl
+        jr    pq_fin
+pq_com: ld    (hl),0
+        inc   hl
+        ld    (ordp),hl
+pq_c2:  ld    a,(hl)
+        or    a
+        jr    z,pq_fin
+        cp    34
+        jr    z,pq_c3
+        inc   hl
+        jr    pq_c2
+pq_c3:  ld    (hl),0
+pq_fin: ld    hl,INBUF
+        call  pa_words
+; Lo que tecleo el jugador queda a salvo: PARSE cambia las palabras para el
+; resto del bloque que se esta ejecutando, y pa_rest las devuelve antes de las
+; respuestas, de las acciones de serie y de los temporizadores (en PC, cada
+; script empieza con las palabras del turno).
+pa_guarda:
+        ld    a,(verbid)
+        ld    (sverb),a
+        ld    a,(vtype)
+        ld    (svtype),a
+        ld    a,(nounid)
+        ld    (snoun),a
+        ld    a,(nounid2)
+        ld    (snoun2),a
+        ret
+pa_rest:
+        ld    a,(sverb)
+        ld    (verbid),a
+        ld    a,(svtype)
+        ld    (vtype),a
+        ld    a,(snoun)
+        ld    (nounid),a
+        ld    a,(snoun2)
+        ld    (nounid2),a
+        ret
+; HL = frase terminada en 0 -> verbid, vtype, nounid, nounid2
+pa_words:
+        xor   a
         ld    (verbid),a
         ld    (nounid),a
         ld    (nounid2),a
-        ld    hl,INBUF
 pa_w:   ld    a,(hl)
         or    a
         ret   z
@@ -2150,6 +3138,35 @@ vl_nm:  pop   bc
         or    a
         ret
 
+; msg_banco: HL = numero de mensaje -> A = su banco (0 = plano), de los tramos
+; de msgbnk ([primer mensaje16][banco]..., &FFFF al final). Conserva HL y DE.
+msg_banco:
+        push  hl
+        push  de
+        ex    de,hl
+        ld    hl,(msgbnk)
+mb_l:   ld    c,(hl)
+        inc   hl
+        ld    b,(hl)
+        inc   hl
+        ld    a,c
+        and   b
+        inc   a
+        jr    z,mb_f          ; &FFFF: no hay mas tramos
+        ld    a,e
+        sub   c
+        ld    a,d
+        sbc   a,b
+        jr    c,mb_f          ; este tramo empieza despues del mensaje
+        ld    a,(hl)
+        ld    (mbtmp),a
+        inc   hl
+        jr    mb_l
+mb_f:   ld    a,(mbtmp)
+        pop   de
+        pop   hl
+        ret
+
 print_msg:
         call  expand_msg
         call  wrap_print
@@ -2169,10 +3186,7 @@ expand_msg:
         ld    a,b
         or    c
         jr    z,em_pl
-        push  hl
-        add   hl,bc
-        ld    a,(hl)          ; A = banco de este mensaje
-        pop   hl
+        call  msg_banco       ; A = banco de este mensaje (conserva HL)
         call  TXTPAGE         ; conserva HL
 em_pl:  add   hl,hl
         ld    de,(msgidx)
@@ -2408,6 +3422,9 @@ run_condacts:
         ld    (cptr),hl
         add   hl,de
         ld    (rcend),hl
+        xor   a
+        ld    (calldep),a
+        ld    (dodep),a
 rc_loop:
         ld    hl,(cptr)
         ld    de,(rcend)
@@ -2419,7 +3436,7 @@ rc_loop:
         cp    e
         jr    nc,rc_end
 rc_go:  call  getop
-        cp    64
+        cp    70
         jr    nc,rc_loop
         add   a,a
         ld    e,a
@@ -2434,9 +3451,214 @@ rc_go:  call  getop
 rc_handled:
         ld    a,1
         ret
+; Fin de un cuerpo. Si era el de una subrutina, se vuelve a quien la llamo:
+; su cptr y su rcend estan en CSTK. Las llamadas no gastan pila del Z80 (la
+; del 48K y la del Next son de 128 bytes); MATCH y END salen por rc_handled
+; y dejan la pila de llamadas como este, que run_condacts la vacia al entrar.
 rc_end:
+        ld    a,(calldep)
+        or    a
+        jr    z,rc_fail
+        dec   a
+        ld    (calldep),a
+        call  cstk_addr
+        ld    e,(hl)
+        inc   hl
+        ld    d,(hl)
+        inc   hl
+        ld    (cptr),de
+        ld    e,(hl)
+        inc   hl
+        ld    d,(hl)
+        inc   hl
+        ld    (rcend),de
+        ld    a,(hl)          ; los DOALL de quien llamo: un RETURN a media
+        ld    (dodep),a       ; vuelta deja el de la subrutina a medias
+        inc   hl
+        ld    a,(hl)
+        ld    (curobj),a
+        jp    rc_loop
 rc_fail:
         xor   a
+        ret
+
+; CALL n: guarda donde va este cuerpo y salta al de la subrutina n. Pasado
+; CALLMAX llamadas una dentro de otra, la llamada no se hace (como en PC).
+c_call: call  getop
+        ld    l,a
+        ld    h,0
+        add   hl,hl
+        ld    de,(subtabp)
+        add   hl,de
+        ld    a,(hl)
+        inc   hl
+        ld    h,(hl)
+        ld    l,a             ; HL -> [longitud16][cuerpo]
+; call_blk: ejecuta el bloque [longitud16][cuerpo] de HL como una subrutina
+; (con su sitio en CSTK) y luego se sigue detras. Lo usan CALL y GOTO.
+call_blk:
+        ld    a,(calldep)
+        cp    CALLMAX
+        jp    nc,rc_loop
+        push  hl
+        ld    b,a
+        inc   a
+        ld    (calldep),a
+        ld    a,b
+        call  cstk_addr
+        ld    de,(cptr)
+        ld    (hl),e
+        inc   hl
+        ld    (hl),d
+        inc   hl
+        ld    de,(rcend)
+        ld    (hl),e
+        inc   hl
+        ld    (hl),d
+        inc   hl
+        ld    a,(dodep)
+        ld    (hl),a
+        inc   hl
+        ld    a,(curobj)
+        ld    (hl),a
+        pop   hl
+        ld    e,(hl)
+        inc   hl
+        ld    d,(hl)
+        inc   hl
+        ld    (cptr),hl
+        add   hl,de
+        ld    (rcend),hl
+        jp    rc_loop
+; PARSE: la orden (lo que va entre comillas o detras de la coma) pasa a ser la
+; frase: VERB, NOUN1 y NOUN2 son ya los suyos. Sin orden, o si no se entiende,
+; no hay verbo (IF VERB _).
+c_parse:
+        ld    hl,(ordp)
+        ld    a,h
+        or    l
+        jr    z,cpa_no
+        call  pa_words
+        jp    rc_loop
+cpa_no: xor   a
+        ld    (verbid),a
+        ld    (nounid),a
+        ld    (nounid2),a
+        jp    rc_loop
+; DOALL destino ... ENDDOALL: el cuerpo una vez por cada objeto que este en el
+; destino, en el orden del juego, con ese objeto como #DOALL (curobj; en los
+; operandos de objeto, 255). La condicion se mira al llegar a cada objeto, asi
+; que lo que el cuerpo mueva cuenta ya. En el bytecode:
+;   DOALL, long. condicion, condicion, long. cuerpo, cuerpo, DNEXT
+; DSTK guarda por nivel donde empieza la condicion, el ultimo objeto mirado y
+; el #DOALL de fuera. Pasado DOMAX uno dentro de otro, el DOALL no se hace.
+c_doall:
+        call  getop           ; longitud de la condicion
+        ld    c,a
+        ld    a,(dodep)
+        cp    DOMAX
+        jr    nc,cdo_no
+        call  dstk_addr
+        ld    de,(cptr)
+        ld    (hl),e
+        inc   hl
+        ld    (hl),d
+        inc   hl
+        ld    (hl),255        ; el de antes del primero
+        inc   hl
+        ld    a,(curobj)
+        ld    (hl),a
+        ld    hl,dodep
+        inc   (hl)
+        jr    dn_busca
+cdo_no: ld    hl,(cptr)
+        ld    b,0
+        add   hl,bc           ; -> longitud del cuerpo
+        ld    c,(hl)
+        inc   hl
+        add   hl,bc           ; -> DNEXT
+        inc   hl
+        ld    (cptr),hl
+        jp    rc_loop
+; DNEXT: fin del cuerpo, al siguiente objeto que cumpla
+c_dnext:
+dn_busca:
+        ld    a,(dodep)
+        dec   a
+        call  dstk_addr
+        ld    e,(hl)
+        inc   hl
+        ld    d,(hl)          ; DE = la condicion
+        inc   hl              ; HL -> el ultimo objeto mirado
+dn_l:   inc   (hl)
+        ld    a,(nobj)
+        ld    b,a
+        ld    a,(hl)
+        cp    b
+        jr    nc,dn_fin       ; no quedan
+        ld    (curobj),a
+        push  hl
+        push  de
+        ld    (cptr),de
+        call  eval_expr
+        pop   de
+        pop   hl
+        or    a
+        jr    z,dn_l
+        call  getop           ; la longitud del cuerpo: cptr queda en el cuerpo
+        jp    rc_loop
+dn_fin: inc   hl
+        ld    a,(hl)
+        ld    (curobj),a      ; el #DOALL de fuera
+        ld    hl,dodep
+        dec   (hl)
+        ld    h,d
+        ld    l,e
+        dec   hl
+        ld    c,(hl)          ; longitud de la condicion (el byte de delante)
+        ld    b,0
+        inc   hl
+        add   hl,bc           ; -> longitud del cuerpo
+        ld    c,(hl)
+        inc   hl
+        add   hl,bc           ; -> DNEXT
+        inc   hl
+        ld    (cptr),hl
+        jp    rc_loop
+; A = nivel -> HL = DSTK + 4*A (pisa BC)
+dstk_addr:
+        add   a,a
+        add   a,a
+        ld    c,a
+        ld    b,0
+        ld    hl,DSTK
+        add   hl,bc
+        ret
+; PRNAME obj: el nombre del objeto donde este el cursor (PRINT "{#obj}")
+c_prname:
+        call  getob
+        call  print_objname
+        jp    rc_loop
+; getob: operando de objeto; 255 es #DOALL, el objeto de la vuelta en curso
+getob:  call  getop
+        cp    255
+        ret   nz
+        ld    a,(curobj)
+        ret
+; RETURN: al final del cuerpo que se esta ejecutando (rc_end vuelve)
+c_ret:  ld    hl,(rcend)
+        ld    (cptr),hl
+        jp    rc_loop
+; A = nivel -> HL = CSTK + 6*A (pisa DE)
+cstk_addr:
+        add   a,a
+        ld    l,a
+        add   a,a
+        add   a,l
+        ld    l,a
+        ld    h,0
+        ld    de,CSTK
+        add   hl,de
         ret
 
 getop:  ld    hl,(cptr)
@@ -2534,9 +3756,16 @@ c_eq:   call  getop
         cp    c
         jp    z,rc_loop
         jp    rc_fail
+; GOTO @sala: cambia de sala (sin describirla) y corre su on_enter en ese
+; momento, como en PC: lo que venga detras del GOTO sale despues. Hasta la 3.0
+; los on_enter iban al final de after_turn, detras de los temporizadores.
 c_goto: call  getop
         ld    (curloc),a
-        jp    rc_loop
+        ld    hl,(onenterp)
+        ld    a,h
+        or    l
+        jp    z,rc_loop
+        jp    call_blk
 c_message:
         call  getop16
         push  de
@@ -2547,36 +3776,58 @@ c_message:
 c_mes:  call  getop16
         call  print_msg
         jp    rc_loop
-c_get:  call  getop
+c_get:  call  getob
+        ld    (tplo),a
+        call  objloc_get
+        call  held_z
+        jp    z,rc_loop       ; ya lo llevas (o puesto): nada, como en PC
+        ld    a,(tplo)
+        call  objfix_get
+        or    a
+        jr    nz,cge_fijo
+        ld    a,(tplo)
+        call  too_heavy
+        or    a
+        jr    nz,cge_pesa
+        ld    a,(tplo)
         call  objloc_carr
         jp    rc_loop
-c_drop: call  getop
+cge_fijo:
+        call  newline
+        ld    de,SNOTAKE
+        call  print_msg
+        jp    rc_loop
+cge_pesa:
+        ld    a,PL_PESOMAX
+        call  print_tpl
+        jp    rc_loop
+c_drop: call  getob
         call  objloc_cur
         jp    rc_loop
 c_destroy:
-        call  getop
+        call  getob
         call  obj_addr
         ld    (hl),NOWHERE
         jp    rc_loop
 c_create:
-        call  getop
+        call  getob
         call  objloc_cur
         jp    rc_loop
-c_wear: call  getop
+c_wear: call  getob
         call  obj_addr
         ld    (hl),WORN
         jp    rc_loop
 c_remove:
-        call  getop
+        call  getob
         call  obj_addr
         ld    (hl),CARRIED
         jp    rc_loop
-c_lit:  call  getop
+c_lit:  call  getob
         call  objlit_addr
         ld    (hl),1
         jp    rc_loop
 c_unlit:
-        call  getop
+        call  getob
         call  objlit_addr
         ld    (hl),0
         jp    rc_loop
@@ -2640,7 +3891,7 @@ c_treset:
         call  tcur_addr
         ld    (hl),c
         jp    rc_loop
-c_open: call  getop
+c_open: call  getob
         ld    (ctmp),a
         call  objopen_addr
         ld    (hl),1
@@ -2649,23 +3900,23 @@ c_open: call  getop
         ld    (hl),0
         jp    rc_loop
 c_close:
-        call  getop
+        call  getob
         call  objopen_addr
         ld    (hl),0
         jp    rc_loop
-c_lock: call  getop
+c_lock: call  getob
         call  objlock_addr
         ld    (hl),1
         jp    rc_loop
 c_unlock:
-        call  getop
+        call  getob
         call  objlock_addr
         ld    (hl),0
         jp    rc_loop
 c_putin:
-        call  getop          ; obj
+        call  getob          ; obj
         ld    (ctmp),a
-        call  getop          ; contenedor
+        call  getob          ; contenedor
         inc   a              ; OBJIN = contenedor+1
         ld    c,a
         ld    a,(ctmp)
@@ -2676,7 +3927,7 @@ c_putin:
         ld    (hl),CONTAINED
         jp    rc_loop
 c_takeout:
-        call  getop
+        call  getob
         ld    (ctmp),a
         call  objin_addr
         ld    (hl),0
@@ -2685,7 +3936,7 @@ c_takeout:
         ld    (hl),CARRIED
         jp    rc_loop
 c_place:
-        call  getop
+        call  getob
         ld    (ctmp),a
         call  getop
         ld    c,a
@@ -2745,7 +3996,7 @@ eval_expr:
         xor   a
         ld    (esp),a
 ev_l:   call  getop
-        cp    34
+        cp    39
         jr    nc,ev_l
         add   a,a
         ld    e,a
@@ -2788,10 +4039,33 @@ ex_const:
         call  e_push
         jp    ev_l
 ex_var: call  getop
-        call  flag_addr
-        ld    a,(hl)
+        call  var_lee
         call  e_push
         jp    ev_l
+; var_lee: A = variable -> A = su valor. _PESO_ACT no se guarda: es el peso que
+; se lleva (wsum), como el recalc_weight del PC, en un byte (255 si pasa)
+var_lee:
+        ld    c,a
+        ld    a,(pesoact)     ; indice de PESO_ACT + 1 (0 = el juego no la usa)
+        or    a
+        jr    z,vr_flag
+        dec   a
+        cp    c
+        jr    nz,vr_flag
+        xor   a
+        ld    (wmode),a
+        call  wsum
+        ld    a,h
+        or    a
+        ld    a,l
+        ret   z
+        ld    a,255
+        ret
+vr_flag:
+        ld    a,c
+        call  flag_addr
+        ld    a,(hl)
+        ret
 ex_add: call  e_pop
         ld    c,a
         call  e_pop
@@ -2851,10 +4125,9 @@ ex_not: call  e_pop
         or    a
         jp    z,ex_t
         jp    ex_f
-; ENTERED: cierto si el jugador ha cambiado de sala en este turno. Es lo que
-; permite compilar los on_enter del autor sin tocar el formato de la base de
-; datos: nativecc los sintetiza en after_turn con este predicado delante.
-; prevloc arranca a 255 para que la sala inicial tambien cuente como entrada.
+; ENTERED: cierto si el jugador ha cambiado de sala en este turno. Hasta la
+; 3.0 los on_enter iban al final de after_turn con este predicado delante; hoy
+; van aparte (onenterp) y nativecc ya no lo emite. Se queda por la numeracion.
 ex_entered:
         ld    a,(curloc)
         ld    hl,prevloc
@@ -2893,7 +4166,7 @@ ex_dark:
         jp    nz,ex_t
         jp    ex_f
 ex_carr:
-        call  getop
+        call  getob
         call  obj_addr
         ld    a,(hl)
         cp    CARRIED
@@ -2902,25 +4175,25 @@ ex_carr:
         jp    z,ex_t
         jp    ex_f
 ex_pres:
-        call  getop
+        call  getob
         call  obj_present
         or    a
         jp    nz,ex_t
         jp    ex_f
-ex_abs: call  getop
+ex_abs: call  getob
         call  obj_present
         or    a
         jp    z,ex_t
         jp    ex_f
 ex_hasopen:
-        call  getop
+        call  getob
         call  objopen_addr
         ld    a,(hl)
         or    a
         jp    nz,ex_t
         jp    ex_f
 ex_ncar:
-        call  getop
+        call  getob
         call  obj_addr
         ld    a,(hl)
         cp    CARRIED
@@ -2929,21 +4202,21 @@ ex_ncar:
         jp    z,ex_f
         jp    ex_t
 ex_worn:
-        call  getop
+        call  getob
         call  obj_addr
         ld    a,(hl)
         cp    WORN
         jp    z,ex_t
         jp    ex_f
 ex_nworn:
-        call  getop
+        call  getob
         call  obj_addr
         ld    a,(hl)
         cp    WORN
         jp    z,ex_f
         jp    ex_t
 ex_isat:
-        call  getop          ; obj
+        call  getob          ; obj
         call  obj_addr
         ld    a,(hl)
         ld    c,a            ; c = OBJLOC[obj]
@@ -2953,7 +4226,7 @@ ex_isat:
         jp    ex_f
 ; ex_isin: obj dentro del contenedor C -> OBJLOC[obj]=CONTAINED y OBJIN[obj]=C+1
 ex_isin:
-        call  getop          ; obj
+        call  getob          ; obj
         ld    (ctmp),a
         call  obj_addr
         ld    a,(hl)
@@ -2962,31 +4235,92 @@ ex_isin:
         ld    a,(ctmp)
         call  objin_get      ; a = contenedor+1 (0 = ninguno)
         ld    c,a
-        call  getop          ; contenedor
+        call  getob          ; contenedor
         inc   a
         cp    c
         jp    z,ex_t
         jp    ex_f
 exin_no:
-        call  getop          ; hay que consumir el operando igual
+        call  getob          ; hay que consumir el operando igual
         jp    ex_f
 ; ex_olit / ex_olock: #obj.lit y #obj.locked en una expresion. Las demas
 ; propiedades de objeto las traduce nativecc a lo que ya habia (CARRIED,
 ; WORN, PRESENT, HASOBJOPEN, ISAT/ISIN) o a una constante.
 ex_olit:
-        call  getop
+        call  getob
         call  objlit_addr
         ld    a,(hl)
         or    a
         jp    nz,ex_t
         jp    ex_f
 ex_olock:
-        call  getop
+        call  getob
         call  objlock_addr
         ld    a,(hl)
         or    a
         jp    nz,ex_t
         jp    ex_f
+; ex_ohere: el objeto esta en la sala del jugador (ISAT #obj AQUI)
+ex_ohere:
+        call  getob
+        call  obj_addr
+        ld    a,(curloc)
+        cp    (hl)
+        jp    z,ex_t
+        jp    ex_f
+; ex_dobj: el numero del objeto #DOALL, para compararlo (#DOALL = #llave)
+ex_dobj:
+        ld    a,(curobj)
+        call  e_push
+        jp    ev_l
+; ex_mul / ex_div / ex_mod: * / y MOD, en bytes como + y -: el producto se
+; queda con los 8 bits bajos, y dividir o MOD entre 0 dan 0, como en el
+; interprete de PC. Hasta la 3.0 nativecc no los compilaba.
+ex_mul: call  e_pop          ; multiplicador
+        ld    c,a
+        call  e_pop          ; multiplicando
+        ld    e,a
+        xor   a              ; acumulador
+        ld    b,8
+em8_l:  add   a,a            ; acc*2 (se pierde lo que pase de 255)
+        sla   c              ; el bit alto del multiplicador, al carry
+        jr    nc,em8_n
+        add   a,e
+em8_n:  djnz  em8_l
+        call  e_push
+        jp    ev_l
+ex_div: call  e_pop          ; divisor
+        ld    c,a
+        call  e_pop          ; dividendo
+        call  div8
+        call  e_push         ; cociente
+        jp    ev_l
+ex_mod: call  e_pop
+        ld    c,a
+        call  e_pop
+        call  div8
+        ld    a,l            ; resto
+        call  e_push
+        jp    ev_l
+; div8: A / C sin signo -> A = cociente, L = resto. Entre 0: A = 0 y L = 0.
+div8:   ld    e,a            ; dividendo; va saliendo por arriba y entra el cociente
+        ld    l,0
+        ld    a,c
+        or    a
+        ret   z              ; /0: A = 0, L = 0
+        xor   a              ; resto
+        ld    b,8
+dv8_l:  sla   e              ; bit alto del dividendo, al carry
+        rla                  ; resto = resto*2 + bit
+        jr    c,dv8_s       ; paso de 255: seguro que es >= divisor
+        cp    c
+        jr    c,dv8_n
+dv8_s:  sub   c
+        inc   e              ; bit del cociente
+dv8_n:  djnz  dv8_l
+        ld    l,a
+        ld    a,e
+        ret
 ex_chance:
         call  getop          ; n (0..100)
         ld    c,a
@@ -2999,11 +4333,17 @@ exc_ok: cp    c             ; rnd < n -> exito
         jp    c,ex_t
         jp    ex_f
 ex_verb:
-        call  getop          ; v (255 = comodin *)
+        call  getop          ; v (255 = comodin *, 254 = _: sin verbo)
         cp    255
         jp    z,ex_t
+        cp    254
+        jr    z,exv_no
         ld    hl,verbid
         cp    (hl)
+        jp    z,ex_t
+        jp    ex_f
+exv_no: ld    a,(verbid)
+        or    a
         jp    z,ex_t
         jp    ex_f
 ex_noun1:
@@ -3068,14 +4408,14 @@ ex_f:   xor   a
 ETAB:   defw ex_end,ex_const,ex_var,ex_add,ex_sub,ex_eq,ex_ne,ex_lt,ex_gt,ex_and
         defw ex_or,ex_not,ex_at,ex_notat,ex_zero,ex_nzero,ex_dark,ex_carr,ex_pres,ex_abs,ex_ncar
         defw ex_isat,ex_chance,ex_worn,ex_nworn,ex_verb,ex_noun1,ex_timer,ex_hasopen
-        defw ex_noun2,ex_isin,ex_entered,ex_olit,ex_olock
+        defw ex_noun2,ex_isin,ex_entered,ex_olit,ex_olock,ex_mul,ex_div,ex_mod
+        defw ex_ohere,ex_dobj
 ; c_prvar: imprime el valor de una variable en decimal, donde este el cursor.
 ; Es la mitad que le faltaba a PRINT "...{_VARIABLE}...": nativecc parte el
 ; texto por las llaves y va alternando trozo de mensaje y variable.
 c_prvar:
         call  getop
-        call  flag_addr
-        ld    a,(hl)
+        call  var_lee
         call  print_dec
         jp    rc_loop
 ; LETX e IF guardan su operando en un sitio propio (iftmp) y no en ctmp:
@@ -3438,8 +4778,6 @@ c_ramload:
         jr    z,snap_no
         ld    a,1              ; recupera: SNAPBUF -> estado
         call  snap_copia
-        ld    a,(curloc)       ; ya se esta en la sala: no es "recien entrado"
-        ld    (prevloc),a
         call  describe         ; describir borra el texto: el mensaje, despues
         ld    de,(snapm1)
         jr    snap_msg
@@ -3486,7 +4824,7 @@ sc_g:   ld    (snapb),de
 sc_n:   ld    hl,(snapt)
         jr    sc_l
 snaptab:
-        defw  FLAGS,64,OBJLOC,64,OBJLIT,64,OBJOPEN,64,OBJLOCK,64,OBJIN,64
+        defw  FLAGS,NVARR,OBJLOC,NOBJR,OBJLIT,NOBJR,OBJOPEN,NOBJR,OBJLOCK,NOBJR,OBJIN,NOBJR
         defw  TCUR,16,TACT,16,curloc,1,LOCSCR,LOCSCRN,0
 
 CTAB:   defw c_at,c_notat,c_present,c_absent,c_carried,c_notcarr,c_zero,c_notzero,c_eq
@@ -3501,6 +4839,7 @@ CTAB:   defw c_at,c_notat,c_present,c_absent,c_carried,c_notcarr,c_zero,c_notzer
         defw c_showpic,c_prvar,c_endgame
         defw c_bright,c_flash,c_inverse,c_sample,c_quit,c_scr,c_scrloc
         defw c_exits,c_scrintro,c_ramsave,c_ramload
+        defw c_call,c_ret,c_parse,c_doall,c_dnext,c_prname
 
 show_title:
         ld    a,(hastitle)
@@ -3701,6 +5040,57 @@ respp:    defw 0
 iftmp:    defb 0               ; operando de IF/LETX a salvo de obj_present
 cptr:     defw 0
 rcend:    defw 0
+subtabp:  defw 0               ; tabla de subrutinas (0 = no hay)
+vsay:     defb 0               ; el verbo DECIR (las ordenes con coma)
+vponer:   defb 0               ; seguidos: PONERSE, QUITARSE, ABRIR, CERRAR,
+vquita:   defb 0               ; METER y SACAR (init los copia de la cabecera)
+vabrir:   defb 0
+vcerra:   defb 0
+vmeter:   defb 0
+vsacar:   defb 0
+objattrp: defw 0               ; objattr_get
+objkeyp:  defw 0               ; objkey_get (0 = no hay tabla)
+objcapp:  defw 0               ; objcap_get (0 = no hay tabla)
+mbtmp:    defb 0               ; msg_banco
+tplp:     defw 0               ; tabla de plantillas (print_tpl)
+onenterp: defw 0               ; [long16][cuerpo]: IF AT @sala ... de cada on_enter
+pesoact:  defb 0               ; indice de PESO_ACT + 1 (var_lee la calcula)
+tplo:     defb 0               ; los objetos de una plantilla: {o}
+tplo2:    defb 0               ; y {k} / {c}
+tplsep:   defw 0               ; el mensaje que separa una lista (", ")
+fn_nom:   defb 0               ; fobj
+fn_modo:  defb 0
+fn_res:   defb 0
+fn_i:     defb 0
+wmode:    defb 0               ; wsum
+wobj:     defb 0
+wacc:     defw 0
+lsd_i:    defb 0               ; lista_dentro / cuenta_dentro
+lsd_n:    defb 0
+tpln1:    defw 0               ; los numeros de una plantilla (peso_inv)
+tpln2:    defw 0
+cnd_i:    defb 0               ; COGER TODO / DEJAR TODO
+cnd_n:    defb 0
+tverb:    defb 0
+tmodo:    defb 0
+CANDS:    defs 32              ; un bit por objeto
+HOLDS:    defs 32              ; y los contenedores de COGER TODO (va detras)
+ct_sala:  defb 0
+ivn_i:    defb 0               ; INVENTARIO
+ivn_l:    defb 0
+ivn_p:    defb 0
+ivn_u:    defb 0
+ordp:     defw 0               ; la orden del turno en INBUF (0 = no hay)
+ordc:     defw 0               ; donde estaba su coma
+sverb:    defb 0               ; las palabras que tecleo el jugador (pa_rest)
+svtype:   defb 0
+snoun:    defb 0
+snoun2:   defb 0
+calldep:  defb 0               ; llamadas CALL en curso, una dentro de otra
+CSTK:     defs 6*CALLMAX       ; cptr, rcend, dodep y curobj de quien llamo
+curobj:   defb 0               ; el objeto #DOALL de la vuelta en curso
+dodep:    defb 0               ; DOALL en curso, uno dentro de otro
+DSTK:     defs 4*DOMAX         ; por DOALL: condicion, ultimo objeto, #DOALL de fuera
 rnext:    defw 0
 beforep:  defw 0
 afterp:   defw 0
@@ -3731,18 +5121,18 @@ accptr:   defw 0
 acccode:  defb 0
 accbuf:   defs 8
 ctmp:     defb 0
-FLAGS:    defs 64
+FLAGS:    defs NVARR         ; las variables del juego (tamanos_equ)
 esp:      defb 0
 darkf:    defb 0
 ESTACK:   defs 16
 KEY:      defs 5
 vllen:    defb 0
 INBUF:    defs 41
-OBJLOC:   defs 64
-OBJLIT:   defs 64
-OBJOPEN:  defs 64
-OBJLOCK:  defs 64
-OBJIN:    defs 64
+OBJLOC:   defs NOBJR         ; las cinco, una entrada por objeto (tamanos_equ)
+OBJLIT:   defs NOBJR
+OBJOPEN:  defs NOBJR
+OBJLOCK:  defs NOBJR
+OBJIN:    defs NOBJR
 TCUR:     defs 16
 TACT:     defs 16
 BUF:      defs 1024
@@ -3756,9 +5146,13 @@ snapb:    defw 0
 snapt:    defw 0
 snapm1:   defw 0
 snapm2:   defw 0
-; la partida grabada: lo que copia snaptab (6 x 64 + 2 x 16 + 1 + LOCSCRN)
-SNAPBUF:  defs 417+LOCSCRN
+; la partida grabada: lo que copia snaptab (FLAGS + 5 de objetos + 2 x 16 + 1,
+; que es SNAPN, + LOCSCRN)
+SNAPBUF:  defs SNAPN+LOCSCRN
 '''
+# los numeros de las plantillas (PL_...), del orden de PLANTILLAS
+ENGINE_ASM = ENGINE_ASM.replace('; @@PLANTILLAS@@\n', ''.join(
+    '%s equ %d\n' % (_n, _i) for _i, (_n, _m, _h) in enumerate(PLANTILLAS)))
 
 CPC_PLAT_ASM = r'''
 ; ===========================================================================
@@ -4215,6 +5609,12 @@ def _engine_cpc(slots):
             raise RuntimeError('_engine_cpc: no encuentro %r' % viejo[:60])
         src = src.replace(viejo, nuevo)
 
+    # La partida grabada (SNAPBUF, cientos de bytes) no va dentro del motor:
+    # en el CPC todo el motor tiene que acabar antes de &4000, y GRABAR solo
+    # copia, sin paginar nada, asi que puede vivir en la RAM de arriba
+    # (SNAPCPC, detras de MTABLE; lo coloca cpc_nativo).
+    cambia('SNAPBUF:  defs SNAPN+LOCSCRN', 'SNAPBUF   equ SNAPCPC')
+
     # Sin precarga de las salas contiguas. Leia de disco en los ratos sin
     # teclear, con CAS IN, que bloquea: mientras gira el disco (arrancar el
     # motor, el directorio, la imagen: un par de segundos en un 6128 de verdad)
@@ -4252,8 +5652,7 @@ expand_msg:
         or    c
         jr    z,em_pl
         ex    de,hl           ; HL = numero de mensaje, DE = puntero
-        add   hl,bc
-        ld    a,(hl)          ; A = banco de este mensaje (0 = plano)
+        call  msg_banco       ; A = banco de este mensaje (0 = plano)
         ex    de,hl
         call  TXTPAGE         ; lo copia a TBUF y deja HL ahi
 em_pl:  ld    de,BUF
@@ -4491,7 +5890,8 @@ SLOTS_CPC = [(0xC4 + b, 0x4000 + k * 0x1400) for b in range(4) for k in range(3)
 
 def assemble_engine(org=ORG, db_base=DB, nloc=256, pantallas=None, modo=2,
                     tintas=None, slots=None, tbufn=256, mtable=0x8000,
-                    imgtop=0xA67C, aviso128='Necesita un CPC 6128.', borde=None):
+                    imgtop=0xA67C, aviso128='Necesita un CPC 6128.', borde=None,
+                    nobj=NRAM, nvar=NRAM, snapbuf=None):
     """El motor del CPC. pantallas: [(filas, 16 tintas)] de las pantallas
     sueltas del SCR (filas 0 = no esta en el disco), en el orden de
     spec['pantallas']. modo: 1 (40 columnas, 4 colores) o 2 (80, 2).
@@ -4515,6 +5915,9 @@ def assemble_engine(org=ORG, db_base=DB, nloc=256, pantallas=None, modo=2,
     L.append('IMGTOP equ &%04X'%imgtop)
     L.append('TBUFN equ %d'%max(1, tbufn))
     L.append('LOCSCRN equ %d'%max(1, nloc))
+    L.extend(tamanos_equ(nobj, nvar))   # FLAGS y las de objetos, al tamano del juego
+    # la partida grabada, fuera del motor (ver _engine_cpc): detras de MTABLE
+    L.append('SNAPCPC equ &%04X'%(mtable + 256 if snapbuf is None else snapbuf))
     L.append('NSCR equ %d'%len(pantallas or ()))
     # TXTO y KMW son rutinas de CPC_PLAT_ASM (la paginacion del texto): las
     # del firmware quedan como TXTFW y KMWFW.

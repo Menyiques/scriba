@@ -366,21 +366,22 @@ def _engine_48(portada=False, grabar=True):
     # bytes): GRABAR dice que esta version no puede. Esta funcion la usan
     # tambien el 128K, el MSX2 y el PCW, que si la guardan. Si cambia la linea
     # del motor, que falle aqui a voces.
-    _snap = 'SNAPBUF:  defs 417+LOCSCRN'
+    _snap = 'SNAPBUF:  defs SNAPN+LOCSCRN'
     assert _snap in src, 'no encuentro SNAPBUF en ENGINE_ASM'
     return src if grabar else src.replace(_snap, 'SNAPBUF   equ 0')
 
 
-def prefijo(org, db_base, borde=7, sp=SP48, ntxt=0, nscr=0, nloc=256):
+def prefijo(org, db_base, borde=7, sp=SP48, ntxt=0, nscr=0, nloc=256,
+            nobj=ge.NRAM, nvar=ge.NRAM):
     return (nx.prefijo(org, db_base, nimg=0, titulo=False, borde=borde, ntxt=ntxt,
-                       nloc=nloc) +
+                       nloc=nloc, nobj=nobj, nvar=nvar) +
             'S48SP equ &%04X\n' % sp +
             'FILATXT equ %d\n' % nx.FILA_TEXTO +
             'NSCR equ %d\n' % nscr)
 
 
 def ensambla(org=ORG, db_base=None, idioma='es', borde=7, guion=None,
-             pantallas=None, nloc=256, portada=False):
+             pantallas=None, nloc=256, portada=False, nobj=ge.NRAM, nvar=ge.NRAM):
     """Ensambla motor + capa de plataforma 48K. Devuelve (bytes, simbolos).
     Con `guion`, sale en MODO PRUEBA: el binario lleva dentro la partida, se
     teclea solo y copia lo que imprime a un puerto (ver bateria_next).
@@ -396,7 +397,8 @@ def ensambla(org=ORG, db_base=None, idioma='es', borde=7, guion=None,
         # etiqueta que viene despues (ya nos paso con el CPC).
         extra = ('SCRUN:' + DZX0_ASM + chr(10) +
                  pantallas_asm_48(pantallas) + chr(10))
-    fuente = (prefijo(org, db_base, borde, nscr=len(pantallas or ()), nloc=nloc) +
+    fuente = (prefijo(org, db_base, borde, nscr=len(pantallas or ()), nloc=nloc,
+                      nobj=nobj, nvar=nvar) +
               _engine_48(portada and guion is None, grabar=False) +
               plat + chr(10) +
               Z80N_ASM + chr(10) +
@@ -502,7 +504,7 @@ def compila(game, ancho=COLS, org=ORG, guion=None, game_dir=None):
             spec['messages'], spec['locations'], spec['vocab'], spec['objects'],
             spec['responses'], spec['startloc'], spec['sysverbs'], spec['width'],
             load=dbaddr, proc_before=spec['proc_before'],
-            proc_after=spec['proc_after'], proc_onstart=spec['proc_onstart'],
+            proc_after=spec['proc_after'], proc_onstart=spec['proc_onstart'], subs=spec.get('subs', ()), plantillas=spec.get('plantillas', ()), proc_onenter=spec.get('proc_onenter', b''), pesoact=spec.get('pesoact', 0),
             hdrbuf=0, imgbuf=0, loc_slot=b'', vall=spec['vall'],
             font_acc=spec['font_acc'], timers=spec['timers'],
             llevarmax=spec['llevarmax'], fx=fx_blob, exit_names=_sal)[0]
@@ -516,11 +518,12 @@ def compila(game, ancho=COLS, org=ORG, guion=None, game_dir=None):
 
     # dos pasadas: la 1a da la longitud del motor, para saber donde cae la DB
     nloc = len(spec['locations'])
+    tam = dict(nobj=len(spec['objects']), nvar=spec['nvars'])   # FLAGS y objetos, a medida
     code, _sym = ensambla(portada=portada, org=org, db_base=org, idioma=idioma, borde=borde,
-                          guion=guion, pantallas=pant, nloc=nloc)
+                          guion=guion, pantallas=pant, nloc=nloc, **tam)
     dbaddr = org + len(code)
     code, sym = ensambla(portada=portada, org=org, db_base=dbaddr, idioma=idioma, borde=borde,
-                         guion=guion, pantallas=pant, nloc=nloc)
+                         guion=guion, pantallas=pant, nloc=nloc, **tam)
     assert org + len(code) == dbaddr, 'el motor cambio de tamano entre pasadas'
     # Los efectos FX del AY son lo primero que se sacrifica en el 48K: el 48K
     # de serie no tiene AY (solo suenan con una interfaz AY o en un 128K), y
@@ -589,10 +592,10 @@ def compila(game, ancho=COLS, org=ORG, guion=None, game_dir=None):
             scr_fuera.append(pant[i][0])
             pant[i] = (pant[i][0], 0, [])
             code, _sym = ensambla(portada=portada, org=org, db_base=org, idioma=idioma, borde=borde,
-                                  guion=guion, pantallas=pant, nloc=nloc)
+                                  guion=guion, pantallas=pant, nloc=nloc, **tam)
             dbaddr = org + len(code)
             code, sym = ensambla(portada=portada, org=org, db_base=dbaddr, idioma=idioma, borde=borde,
-                                 guion=guion, pantallas=pant, nloc=nloc)
+                                 guion=guion, pantallas=pant, nloc=nloc, **tam)
             db = _db(dbaddr)
             if _cabe(len(db)):
                 break
@@ -606,9 +609,9 @@ def compila(game, ancho=COLS, org=ORG, guion=None, game_dir=None):
             prueba = list(pant)
             prueba[i] = (n,) + _guarda[n]
             c1, _s = ensambla(portada=portada, org=org, db_base=org, idioma=idioma, borde=borde,
-                              guion=guion, pantallas=prueba, nloc=nloc)
+                              guion=guion, pantallas=prueba, nloc=nloc, **tam)
             c2, s2 = ensambla(portada=portada, org=org, db_base=org + len(c1), idioma=idioma,
-                              borde=borde, guion=guion, pantallas=prueba, nloc=nloc)
+                              borde=borde, guion=guion, pantallas=prueba, nloc=nloc, **tam)
             d2 = _db(org + len(c1))
             if org + len(c2) + len(d2) <= TOPE48:
                 pant, code, sym, dbaddr, db = prueba, c2, s2, org + len(c1), d2

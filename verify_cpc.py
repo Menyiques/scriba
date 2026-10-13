@@ -37,7 +37,7 @@ def _build(game):
         spec['messages'], spec['locations'], spec['vocab'], spec['objects'],
         spec['responses'], spec['startloc'], spec['sysverbs'], spec['width'],
         load=dbaddr, proc_before=spec['proc_before'], proc_after=spec['proc_after'],
-        proc_onstart=spec['proc_onstart'], hdrbuf=0x6700, imgbuf=0x8B00,
+        proc_onstart=spec['proc_onstart'], subs=spec.get('subs', ()), plantillas=spec.get('plantillas', ()), proc_onenter=spec.get('proc_onenter', b''), pesoact=spec.get('pesoact', 0), hdrbuf=0x6700, imgbuf=0x8B00,
         loc_slot=bytes([255] * len(spec['locations'])), vall=spec['vall'],
         font_acc=spec['font_acc'], timers=spec['timers'],
         llevarmax=spec['llevarmax'])
@@ -163,8 +163,8 @@ def verify(game):
         cond([CX['TSTOP'], 0])
         chk('TIMER_STOP', mem[TACT] == 0)
     # peso
-    lm = spec['llevarmax']
-    if lm != 255:
+    lm = spec['llevarmax'] - 1    # va como indice + 1 (0 = no hay LLEVAR_MAX)
+    if lm >= 0:
         oi = 0
         mem[OBJLOC + oi] = cur
         mem[objw + oi] = 50

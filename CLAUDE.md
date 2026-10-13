@@ -80,9 +80,10 @@ objetos, respuestas y la pila, en `&BFF0`—; `&C000-&FFFF` es una **ventana de
 paginación pura** por la que se leen, cada uno de su banco, el texto (por
 mensaje, vía `TXTPAGE`), la música del título, los FX, las imágenes y las
 muestras. Nada permanente vive en la ventana, así que se pagina cuando hace
-falta y no se devuelve nada a su sitio. La base de datos lleva, por mensaje, el
-banco (`msgbnk`) y la dirección en la ventana; `expand_msg` pagina antes de
-seguir el puntero. En 48K `TXTPAGE` es un `RET` y el texto sigue plano; el
+falta y no se devuelve nada a su sitio. La base de datos lleva, por mensaje, la
+dirección en la ventana, y en `msgbnk` el banco por tramos (`[primer
+mensaje16][banco]` cada vez que cambia, `&FFFF` al final; `msg_banco`; hasta la
+3.0 era un byte por mensaje); `expand_msg` pagina antes de seguir el puntero. En 48K `TXTPAGE` es un `RET` y el texto sigue plano; el
 CPC tiene su propio mapa (abajo).
 El mapa plano son 24.432 bytes (`&6000-&BF70`): menos que los 40K del 48K, pero
 sin el texto, que es dos tercios de la base de datos. Y los bancos del 128K son
@@ -101,7 +102,9 @@ portada y, con texto en bancos, con la prueba del 6128; `export_native` sube
 el motor lo justo (`cpc_nativo.BASIC_BUFFER`, que `probar_cpc` también
 comprueba al interpretar el cargador). Detrás del motor, la DB; luego `hdrbuf` (2K de CAS IN, y la rutina de la música
 del título: el firmware la quiere en los 32K centrales, por eso nunca por
-debajo de `&4000`) y `MTABLE` (256 bytes), todo antes de `imgbuf` (`&8B00`).
+debajo de `&4000`), `MTABLE` (256 bytes) y la partida grabada (`SNAPBUF`, que
+desde la 3.1 no va dentro del motor: `SNAPCPC`, `cpc_nativo.SNAPTAM`), todo
+antes de `imgbuf` (`&8B00`).
 Si el juego no cabe, los primeros mensajes se quedan planos (banco 0 en
 `msgbnk`) y el resto va a los bancos `&C4-&C7`; el `TXTPAGE` del CPC copia el
 mensaje a `TBUF` y devuelve `&C0` antes de expandir, y `expand_msg` lee el
@@ -128,6 +131,73 @@ deba volver con RECUPERAR, hay que añadirlo a `snaptab` y al tamaño de
 sobrevive a «jugar otra vez». `noturn` hace que `mainloop` se salte
 `after_turn` y los temporizadores. El 48K (`_engine_48(grabar=False)`) no tiene
 sitio: `SNAPBUF equ 0` y GRABAR dice que no puede.
+
+**Subrutinas, órdenes y DOALL.** `SUB`/`CALL`/`RETURN`, `PARSE` y
+`DOALL`/`ENDDOALL` son condacts 64-69 (`CALL`, `RETURN`, `PARSE`, `DOALL`,
+`DNEXT`, `PRNAME`); `run_condacts` ya no admite opcodes por encima de 69 (`cp
+70`), y el cuerpo vacío de una respuesta se rellena con un 255, que se salta.
+- `CALL` no usa la pila del Z80 (128 bytes en 48K y Next): guarda `cptr`,
+  `rcend`, `dodep` y `curobj` en `CSTK` (6 bytes por nivel, `CALLMAX` 8) y
+  `rc_end` los recupera; `run_condacts` vacía la pila al entrar, porque `MATCH`
+  y `END` salen por `rc_handled` sin deshacerla. Las subrutinas van en una
+  tabla de la DB (`subtabp`, cabecera 89) como `[long16][cuerpo]`.
+  `paws_lang.separa_subs` las saca de cualquier sección de condacts para los
+  tres caminos (nativecc, intérprete, validador).
+- `PARSE`: el parser parte la frase por el primer `"` o `,` (`pa_go`; en PC,
+  `paws_lang.separa_orden`), guarda la orden en `ordp` y las palabras del
+  jugador en `sverb`… (`pa_guarda`). `pa_rest` las devuelve al empezar
+  `dispatch`, antes de las acciones de serie y antes de los temporizadores:
+  en PC cada script empieza con las palabras del turno. La coma solo es orden
+  si delante hay nombre y no verbo; entonces el verbo es `vsay` (DECIR,
+  cabecera 91). El teclado del Spectrum/Next lee SYMBOL SHIFT por `NXSYMT`
+  (ahí están `,` y `"`), y el simulador (`verify_next.Teclado`) lo pulsa.
+- **En los operandos de objeto, 255 es `#DOALL`** (`nativecc.DOALL_OBJ`): los
+  condacts y predicados de objeto leen el operando con `getob`, no con `getop`,
+  que lo cambia por `curobj`. Un condact o predicado de objeto nuevo tiene que
+  usar `getob`, o con `#DOALL` leerá el objeto 255 (fuera de las tablas). El
+  bucle está en `c_doall`/`dn_busca`: `DSTK` (4 bytes por nivel, `DOMAX` 4)
+  guarda dónde empieza la condición del destino, el último objeto mirado y el
+  `#DOALL` de fuera. La condición se evalúa al llegar a cada objeto.
+- Las palabras del autor (`ON`, `VERB`, `NOUN1`, `NOUN2`) se buscan con
+  `nativecc._palabra_id`: sin tildes, 5 letras y `#objeto` por su nombre, como
+  `_canon_slot` en PC. Hasta la 3.0 se buscaban enteras y una palabra larga
+  daba 0, que en el hueco de un nombre casa con todo.
+
+**Los verbos de serie del motor** (`dispatch`): MIRAR, FIN, COGER, DEJAR,
+INVENTARIO y EXAMINAR desde siempre, y desde la 3.1 PONERSE, QUITARSE, ABRIR,
+CERRAR, METER y SACAR (`do_poner`… `do_sacar`), copiados de
+`interpreter.handle_builtin`. Sus ids van en la cabecera (92-97), y los datos
+de objeto que necesitan, en `objattrp` (cabecera 98: los bits poner/abrir/
+contenedor, la llave + 1 y la capacidad, tres tablas de `nobj`). Sus mensajes
+son **plantillas** (`game_engine.PLANTILLAS`; los `PL_` equ salen solos de esa
+lista): `nativecc._plantillas` toma el texto como `PAWSInterpreter._t` (el del
+autor en `metadata.mensajes` y, si no, `interpreter.MSGS` en el idioma) y lo
+parte en trozos y huecos (`{o}`, `{k}`/`{c}`, la lista de lo que hay dentro, el
+nombre con mayúscula); `print_tpl` las imprime. Un mensaje nuevo de un verbo de
+serie: añadirlo a `MSGS` y a `PLANTILLAS`. El peso (`wsum`, en 16 bits) cuenta
+lo que va dentro de los contenedores, como `recalc_weight` en PC.
+Desde la 3.1 COGER, DEJAR (también con TODO, que pasan cada objeto por
+`run_response` como `take_all`/`drop_all`), INVENTARIO y la lista de objetos
+de la sala usan plantillas, y los mensajes de sistema sin huecos (`SYS_MSGS`)
+toman el texto como el PC: `cpc_nativo._sys_msgs_y_salidas` mira primero
+`metadata.mensajes`, luego `interpreter.MSGS` y por último el catálogo.
+`LLEVAR_MAX` ausente o a 0 es «sin límite» en todas partes (`wlimite` y
+`PAWSInterpreter._peso_max`). `_PESO_ACT` no se guarda: `var_lee` la calcula
+(`wsum`) cada vez que una expresión o un `PRINT` la leen.
+La cabecera de la DB acaba en el byte 109 (`HDR`): 89 subrutinas, 91 DECIR,
+92-97 los seis verbos, 98 `objattr`, 100 plantillas (seguidas, sin tabla de
+punteros: `print_tpl0` cuenta hasta la que toca), 102 `on_enter`, 104
+`PESO_ACT`, 105 y 107 llave y capacidad (0 si ningún objeto las usa).
+
+**El turno y los `on_enter`.** `mainloop`: leer, `parse`, `before_turn`,
+`dispatch` (respuestas y acciones de serie), temporizadores y `after_turn`,
+como el `_partida` del intérprete (hasta la 3.0 los temporizadores iban
+detrás, y el PC analizaba la orden después de `before_turn`). Los tres ven las
+palabras del turno: en el motor, `pa_rest`; en PC, `PAWSInterpreter._palabras`,
+que `PAWSBasic` toma por defecto. Los `on_enter` son un bloque aparte (`onenterp`, cabecera 102: un `IF
+AT @sala` por sala) que se corre donde lo corre PC: tras `describe` al andar y
+al empezar, y en `c_goto` como una llamada (`call_blk`, la de `CALL`), en el
+sitio. `ENTERED` y `prevloc` quedan sin uso.
 
 El borde de arranque sale de `next_nativo.borde_inicial(game)`:
 `metadata.border` (el combo del editor), si no el primer `BORDER` del
@@ -473,12 +543,30 @@ máquina (pero **no comprueba la suma**; la del cargador la asegura un `assert`)
   comprobar los `ld hl,(DBB+n)` de `init` contra la tabla, no contra los
   comentarios.
 
-- **El motor nativo no admite mas de 64 objetos ni 64 variables.** `FLAGS`,
-  `OBJLOC`, `OBJLIT`, `OBJOPEN`, `OBJLOCK` y `OBJIN` son `defs 64` fijos y
-  pasarse no daba error: escribia sobre la matriz siguiente. Desde 2.47
-  `build_game_db` y `nativecc` cortan con un mensaje claro
-  (`game_engine.NRAM`). Las **localizaciones** si llegan a 255: no tienen
-  matriz en RAM. Subir el tope cuesta ~1,1 KB de RAM por las seis matrices.
+- **Topes del motor nativo: 255 objetos, 256 variables, 252 salas, 251
+  verbos y 253 nombres distintos** (`game_engine.NOBJ_MAX`, `NVAR_MAX`,
+  `NLOC_MAX`; los de vocabulario, en `nativecc.compile_game`). Cada uno corta
+  la exportación con un mensaje claro. Hasta la 3.0 eran 64 objetos y 64
+  variables (`defs 64` fijos) y, sin que nadie lo supiera, **90 salas y 90
+  objetos** en `recolecta`, restos del exportador a BASIC.
+  - `FLAGS`, `OBJLOC`, `OBJLIT`, `OBJOPEN`, `OBJLOCK` y `OBJIN` van **al tamaño
+    del juego**: cada máquina pasa `nobj`/`nvar` a su prefijo y
+    `game_engine.tamanos_equ()` da `NOBJR`/`NVARR` (lo que se reserva),
+    `NOBJB`/`NVARB` (lo mismo como cuenta de DJNZ: 256 es 0) y `SNAPN` (la
+    partida grabada). `nvar` es `spec['nvars']`, las variables al **final**
+    de compilar: un condact que use una variable sin declarar le da un número
+    nuevo, y con la tabla justa caería encima de la siguiente.
+  - Cada tope sale de un valor reservado: el número de objetos va en un byte
+    (`nobj`, 0 = ninguno) y `OBJIN` guarda el contenedor + 1; en `OBJLOC`,
+    252-255 son CONTAINED/WORN/NOWHERE/CARRIED y `prevloc` arranca a 255; en
+    los nombres, 0 es «ninguno» y 254/255 son los comodines `_` y `*`; en los
+    verbos, 255 cierra la tabla de respuestas, y las direcciones son 1-6 y el
+    resto empieza en el 10. `LLEVAR_MAX` va como índice + 1 (0 = no hay), así
+    que no puede ser la variable 255: `recolecta` la pasa delante si lo fuera.
+  - **Un índice de objeto doblado en 8 bits se sale a partir del 128.**
+    `print_objname` hacía `add a,a` y el objeto 251 salía con el nombre del
+    123. Cualquier tabla de 2 bytes por objeto (o por sala) se indexa en 16
+    bits (`ld l,a / ld h,0 / add hl,hl`).
 
 - **`ISAT` tiene tres clases de destino, no dos**: sentinel (`INVEN`/`PUESTO`/
   `NADA`), localización (`@sala`) y **contenedor** (`#objeto`). El tercero no
@@ -552,6 +640,9 @@ máquina (pero **no comprueba la suma**; la del cargador la asegura un `assert`)
 
 Rama de trabajo: `master`. Scriba 3.0, publicada el 12/10/2026 como
 `Scriba v3.0.zip` (lo monta `build_exe.bat`; ver «Dos registros de cambios»).
+En curso, la 3.1 (`scriba_info` ya lo dice): subrutinas, órdenes a personajes
+(`PARSE`), `DOALL` y los verbos de serie que faltaban en las máquinas; está en
+«Sin publicar» de `NOVEDADES.md`.
 Siete destinos nativos (48K, 128K, Next, CPC Modo 1 y 2, MSX2, PCW 8256/8512)
 más Windows, y cinco idiomas de serie (es, en, pt, ca, fr).
 

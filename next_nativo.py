@@ -471,6 +471,7 @@ nxbrd:   defb 0            ; el color del borde puesto (KCLICK lo repone)
 nxritmo: defb 0            ; caracteres impresos en el barrido actual
 nxultimo: defb 255         ; slot de imagen que hay puesta (255 = ninguna)
 nxcaps:  defb 0            ; CAPS SHIFT pulsado en el ultimo escaneo
+nxsym:   defb 0            ; SYMBOL SHIFT pulsado en el ultimo escaneo
 nxinv:   defb 0            ; INVERSE: 1 = el glifo se imprime complementado
 
 ; ---------------------------------------------------------------------------
@@ -1074,6 +1075,11 @@ nxscan:
         cpl
         and   1
         ld    (nxcaps),a       ; CAPS SHIFT
+        ld    bc,&7FFE
+        in    a,(c)
+        cpl
+        and   2
+        ld    (nxsym),a        ; SYMBOL SHIFT
         ld    hl,NXKTAB
         ld    de,NXKPORT
         ld    b,8
@@ -1102,6 +1108,25 @@ nxs_otra:
         djnz  nxs_bit
         jr    nxs_sig
 nxs_hall:
+        ld    c,a
+        ld    a,(nxsym)
+        or    a
+        ld    a,c
+        jr    z,nxs_cap
+        ; SYMBOL SHIFT: el simbolo rojo de la tecla, solo los que sirven para
+        ; escribir una orden (JUAN, COGE LA LLAVE / DI A JUAN "VETE"); con
+        ; cualquier otra tecla no se escribe nada
+        ld    hl,NXSYMT
+nxs_sy: ld    a,(hl)
+        or    a
+        jr    z,nxs_ok         ; no esta: A = 0, nada
+        inc   hl
+        cp    c
+        ld    a,(hl)
+        inc   hl
+        jr    nz,nxs_sy
+        jr    nxs_ok
+nxs_cap:
         cp    48
         jr    nz,nxs_ok
         ld    a,(nxcaps)
@@ -1122,6 +1147,9 @@ nxs_sig:
         ret
 
 NXKPORT: defb &FE,&FD,&FB,&F7,&EF,&DF,&BF,&7F
+; tecla -> su simbolo con SYMBOL SHIFT (los que se escriben en una orden)
+; (en numeros: 'n' ',' 'p' '"' 'm' '.' '7' "'" 'j' '-' 'c' '?' '1' '!' 'z' ':' 'o' ';')
+NXSYMT: defb 110,44,112,34,109,46,55,39,106,45,99,63,49,33,122,58,111,59,0
 NXKTAB:
         defb 0,'z','x','c','v'
         defb 'a','s','d','f','g'
@@ -1430,17 +1458,17 @@ NXDUMP:
         ld    hl,NXT_VAR
         call  nxtrs
         ld    hl,FLAGS
-        ld    b,64
+        ld    b,NVARB
         call  nxtrhex
         ld    hl,NXT_OBJ
         call  nxtrs
         ld    hl,OBJLOC
-        ld    b,64
+        ld    b,NOBJB
         call  nxtrhex
         ld    hl,NXT_IN
         call  nxtrs
         ld    hl,OBJIN
-        ld    b,64
+        ld    b,NOBJB
         call  nxtrhex
         ld    hl,NXT_LOC
         call  nxtrs
@@ -1661,7 +1689,7 @@ def banco_guion(nimg, titulo, nsmp=0, ntxt=0):
 
 
 def prefijo(org, db_base, nimg=0, titulo=False, borde=7, nsmp=0, ntxt=0,
-            nloc=256):
+            nloc=256, nobj=ge.NRAM, nvar=ge.NRAM):
     """Constantes que el motor espera resueltas. A diferencia del CPC, aqui NO
     se declaran TXTO/KMW/... como equ: son etiquetas de PLAT_ASM."""
     L = ['ORIGIN equ &%04X' % org,          # el motor lleva dentro 'org ORIGIN'
@@ -1677,6 +1705,7 @@ def prefijo(org, db_base, nimg=0, titulo=False, borde=7, nsmp=0, ntxt=0,
          'NXREVPASO equ %d' % REVELADO_PASO,    # lineas por barrido al revelar
          'NXLENTO equ %d' % TEXTO_RITMO,        # caracteres por barrido al escribir
          'NXBORDE equ %d' % borde]              # color de borde al arrancar
+    L += ge.tamanos_equ(nobj, nvar)            # FLAGS y las de objetos, al tamano del juego
     for n in ('SCANTGO', 'SEXITS', 'SNOUND', 'SSEE', 'STAKE', 'SDROP',
               'SNOTHERE', 'SNOTCARR', 'SINVEN', 'SEMPTY', 'SNOTAKE', 'SDARK',
               'SSCORE', 'SHEAVY', 'SSCOREP', 'SSCORES', 'SFIN', 'SOTRA',
@@ -1689,7 +1718,8 @@ def prefijo(org, db_base, nimg=0, titulo=False, borde=7, nsmp=0, ntxt=0,
 def assemble_engine_next(org=ORG, db_base=None, idioma='es', paletas=b'',
                          titulo_pal=b'', psg=b'', borde=7, guion=None,
                          smptab=None, nsmp=0, smphz=11025, nsmpbanco=0,
-                         ntxt=0, psg_pos=None, nloc=256, pantallas=None):
+                         ntxt=0, psg_pos=None, nloc=256, pantallas=None,
+                         nobj=ge.NRAM, nvar=ge.NRAM):
     """Ensambla motor + plataforma Next. Devuelve (bytes, tabla_de_simbolos).
     paletas:    256 bytes por imagen (un byte por color), en orden de slot
     titulo_pal: 256 bytes de la paleta de la portada (b'' = sin portada)
@@ -1727,7 +1757,7 @@ def assemble_engine_next(org=ORG, db_base=None, idioma='es', paletas=b'',
     if pantallas:
         plat = con_showscr(plat, SCR_NEXT_ASM)
     fuente = (prefijo(org, db_base, nimg, titulo, borde, nsmpbanco, ntxt,
-                      nloc=nloc) + 'NSCR equ %d\n' % len(pantallas or ()) +
+                      nloc=nloc, nobj=nobj, nvar=nvar) +'NSCR equ %d\n' % len(pantallas or ()) +
               _engine_next(nimg > 0, titulo) +
               plat + chr(10) +
               chr(10).join(partes) + chr(10) +
@@ -2133,7 +2163,7 @@ def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None,
             spec['messages'], spec['locations'], spec['vocab'], spec['objects'],
             spec['responses'], spec['startloc'], spec['sysverbs'], spec['width'],
             load=dbaddr, proc_before=spec['proc_before'],
-            proc_after=spec['proc_after'], proc_onstart=spec['proc_onstart'],
+            proc_after=spec['proc_after'], proc_onstart=spec['proc_onstart'], subs=spec.get('subs', ()), plantillas=spec.get('plantillas', ()), proc_onenter=spec.get('proc_onenter', b''), pesoact=spec.get('pesoact', 0),
             hdrbuf=0, imgbuf=0, loc_slot=bytes(loc_slot), vall=spec['vall'],
             font_acc=spec['font_acc'], timers=spec['timers'],
             llevarmax=spec['llevarmax'], fx=fx_blob, texto=texto,
@@ -2191,6 +2221,7 @@ def compila(game, ancho=COLS, org=ORG, datadir=None, musicdir=None,
                                     nsmpbanco=nsmpbanco, ntxt=ntxt + npant,
                                     psg_pos=psg_pos,
                                     nloc=len(spec['locations']),
+                                    nobj=len(spec['objects']), nvar=spec['nvars'],
                                     pantallas=pant_tabla)
 
     code, sym = _ensambla(org)

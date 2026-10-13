@@ -352,13 +352,15 @@ sli_fin:
     return src
 
 
-def prefijo(org, db_base, borde=7, nscr=0, nloc=256):
-    return s48.prefijo(org, db_base, borde, sp=SP128, nscr=nscr, nloc=nloc)
+def prefijo(org, db_base, borde=7, nscr=0, nloc=256, nobj=ge.NRAM, nvar=ge.NRAM):
+    return s48.prefijo(org, db_base, borde, sp=SP128, nscr=nscr, nloc=nloc,
+                       nobj=nobj, nvar=nvar)
 
 
 def ensambla(org=ORG, db_base=None, idioma='es', borde=7,
              tabla=None, scr_off=None, nlocs=0, psg_pos=None, guion=None,
-             smptab=None, nsmp=0, smphz=11025, pantallas=None):
+             smptab=None, nsmp=0, smphz=11025, pantallas=None,
+             nobj=ge.NRAM, nvar=ge.NRAM):
     """Ensambla motor + plataforma 48K + bancos de imagenes y musica del 128K.
     psg_pos: (direccion en la ventana, banco) de la musica, o None si no hay.
     pantallas: entradas de SCRT [(offB/2, offA/2, filas)] para el condact SCR."""
@@ -390,7 +392,7 @@ def ensambla(org=ORG, db_base=None, idioma='es', borde=7,
     partes.append(nx.PSG_ASM + chr(10) + nx._psg_pos_asm(psg_pos)
                   if psg_pos else nx.PSG_ASM_VACIO)
     fuente = (prefijo(org, db_base, borde, nscr=len(pantallas or ()),
-                      nloc=nlocs or 256) +
+                      nloc=nlocs or 256, nobj=nobj, nvar=nvar) +
               _engine_128(hay_img, hay_tit) +
               chr(10).join(partes) + chr(10) +
               nx._font_asm(idioma) + chr(10))
@@ -485,7 +487,7 @@ def compila(game, game_dir, ancho=COLS, org=ORG, guion=None):
             spec['messages'], spec['locations'], spec['vocab'], spec['objects'],
             spec['responses'], spec['startloc'], spec['sysverbs'], spec['width'],
             load=dbaddr, proc_before=spec['proc_before'],
-            proc_after=spec['proc_after'], proc_onstart=spec['proc_onstart'],
+            proc_after=spec['proc_after'], proc_onstart=spec['proc_onstart'], subs=spec.get('subs', ()), plantillas=spec.get('plantillas', ()), proc_onenter=spec.get('proc_onenter', b''), pesoact=spec.get('pesoact', 0),
             hdrbuf=0, imgbuf=0, loc_slot=b'', vall=spec['vall'],
             font_acc=spec['font_acc'], timers=spec['timers'],
             llevarmax=spec['llevarmax'], fx=fx_blob, texto=texto,
@@ -552,6 +554,7 @@ def compila(game, game_dir, ancho=COLS, org=ORG, guion=None):
     def _asm(base):
         return ensambla(org=org, db_base=base, idioma=idioma, borde=borde,
                         tabla=tabla, scr_off=scr_off, nlocs=nlocs, psg_pos=psg_pos,
+                        nobj=len(spec['objects']), nvar=spec['nvars'],
                         guion=guion, smptab=smptab, nsmp=nsmp, smphz=smphz,
                         pantallas=pant_tabla)
 

@@ -21,9 +21,163 @@ y **Correcciones**. Al publicar, mueve lo acumulado de «Sin publicar» a la nue
   bien, monta el paquete `Scriba vX.Y.zip` (`paquete_distribucion.py`): el
   `.exe`, el manual, esas novedades y los ejemplos, comprobado fichero a
   fichero.
+- **Hasta 255 objetos y 256 variables en las máquinas (antes, 64 y 64).** Las
+  tablas de estado del motor (`FLAGS`, `OBJLOC`, `OBJLIT`, `OBJOPEN`, `OBJLOCK`,
+  `OBJIN`) ya no son de 64 fijos: cada juego las reserva a su medida
+  (`game_engine.tamanos_equ`), así que uno pequeño gasta menos que antes (DAS
+  BOOT deja 104 bytes más libres en el 128K) y uno grande llega a 255 objetos y
+  256 variables. GRABAR y RECUPERAR copian las tablas a su tamaño. Comprobado
+  con un juego de 255 objetos y 256 variables que usa los números más altos (el
+  objeto 255 de contenedor, la variable 254, `LLEVAR_MAX` en el sitio de la
+  255) en PC y en las siete máquinas, con el mismo resultado en todas.
+- **Más memoria para el juego en las máquinas.** Lo que ha crecido el motor con
+  esta versión (subrutinas, órdenes, `DOALL`, los verbos de serie) se recupera
+  así: el banco de cada mensaje ya no es un byte por mensaje sino una tabla de
+  tramos (en DAS BOOT, 600 bytes menos en la memoria plana del 128K); las
+  tablas de llaves y de capacidad solo van si algún objeto las usa; y en el CPC
+  la partida grabada (`SNAPBUF`) sale del motor y va detrás de `MTABLE`, así
+  que el motor ya no se acerca a `&4000`. DAS BOOT cabe en las siete máquinas
+  en sus cinco idiomas (en el 128K, en inglés, con 148 bytes de sobra).
+- **Subrutinas: `SUB nombre` … `ENDSUB` y `CALL nombre`.** Un bloque con nombre,
+  escrito al nivel de arriba de cualquier sección de condacts (lo normal, al
+  final de las respuestas), que se llama desde cualquier sitio: respuestas,
+  `before_turn`, `after_turn`, `on_start`, `on_enter`, temporizadores y otras
+  subrutinas. `RETURN` sale de la subrutina antes de su final; `MATCH` y `END`
+  cortan también a quien la llamó. Ve el verbo y los nombres del turno. Hasta
+  8 llamadas una dentro de otra (la novena no se hace, y el probador de PC lo
+  dice): una subrutina que se llame a sí misma sin parar no cuelga la partida.
+  Hasta 256 por juego. En las máquinas, el cuerpo de una subrutina no tiene el
+  límite de 255 bytes de una respuesta, así que también sirve para partir las
+  largas. En el motor, `CALL` (64) y `RETURN` (65), con su pila de llamadas en
+  memoria (`CSTK`, 6 bytes por nivel) y no en la del Z80, que en el 48K y el
+  Next es de 128 bytes. «Validar juego» avisa de un `CALL` a una subrutina que
+  no existe, de un `RETURN` fuera de una, de una `SUB` dentro de un `ON` o de
+  un `IF`, de las repetidas y de las que no se cierran.
+- **Órdenes a personajes: `JUAN, COGE LA LLAVE` y `PARSE`.** Si el jugador
+  escribe un nombre, una coma y una orden, el verbo del turno es `DECIR` (un
+  verbo de serie nuevo, en los cinco idiomas: decir/di/dile, say/tell,
+  dizer/diz/diga, dir/digues, dire/dis) y el nombre, el del personaje; lo de
+  detrás de la coma queda aparte. También vale `DECIR A JUAN "COGE LA LLAVE"`.
+  En la respuesta, `PARSE` hace que `VERB`, `NOUN1` y `NOUN2` sean los de la
+  orden durante el resto del turno; si no hay orden o no se entiende, no hay
+  verbo (`IF VERB _`). Antes de las acciones de serie vuelven las palabras del
+  jugador, así que una orden sin respuesta no la cumple el jugador. Una coma
+  que no sigue a un nombre solo («coge la llave, la lámpara») es un espacio,
+  como antes. En el Spectrum y el Next la coma y las comillas se escriben con
+  SYMBOL SHIFT (N y P), que el teclado del motor no leía: ahora da también `.`,
+  `'`, `-`, `?`, `!`, `:` y `;`. En el PCW no hay comillas (la coma sí).
+- **`DOALL destino` … `ENDDOALL`: recorrer objetos.** El cuerpo se ejecuta una
+  vez por cada objeto que esté en el destino (`@sala`, `INVEN`, `PUESTO`,
+  `NADA`, `AQUI` o `#contenedor`), en el orden del juego, con ese objeto como
+  `#DOALL`: vale en las sentencias (`GET #DOALL`, `PUT #DOALL @pozo`…), en las
+  condiciones (`IF CARRIED #DOALL`, `IF #DOALL.lit`, `IF #DOALL = #libro`) y en
+  los textos. Lo que el cuerpo mueve cuenta ya: el destino se mira al llegar a
+  cada objeto. Hasta 4 uno dentro de otro (también a través de `CALL`).
+- **`PRINT "{#objeto}"` escribe el nombre del objeto.** Como `{_variable}` su
+  valor; con `DOALL`, `PRINT "Llevas {#DOALL}."`.
+- **`AQUI` es un destino nuevo: la sala del jugador.** Vale en `DOALL AQUI`,
+  `ISAT #x AQUI`, `#x.isat = AQUI` y `PUT #x AQUI`.
 
 ### Correcciones
-- (…)
+- **Los mensajes de serie dicen lo mismo en PC y en las máquinas.** Una orden
+  que se entiende pero que nada atiende da «No puedes hacer eso.» (las máquinas
+  decían «No entiendo eso.»), y una que no se entiende, «No entiendo eso.» en
+  todas partes (el PC añadía «Escribe AYUDA para ver los comandos», aunque
+  Scriba no trae AYUDA de serie; el autor puede cambiar los dos en el editor).
+  COGER, DEJAR, la descripción de la sala e INVENTARIO usan en las máquinas los
+  mensajes enteros, con su punto final («Coges una llave.», «Aquí hay una
+  roca.»), y responden igual que en PC a COGER sin nada («¿Qué quieres
+  coger?»), a coger lo que ya llevas («Ya llevas una llave.»), al peso («No
+  puedes cargar tanto peso.») y a EXAMINAR algo sin descripción («No ves nada
+  especial.»). Los mensajes de sistema de las máquinas salen ahora del idioma
+  del juego también cuando el autor no los ha traducido (antes, en español).
+- **COGER TODO y DEJAR TODO pasan cada objeto por las respuestas del juego en
+  las máquinas.** Como en PC: un `ON COGER X` con sus puntos o su negativa vale
+  también al coger todo. Antes las máquinas los cogían o dejaban sin mirarlas.
+- **El inventario de las máquinas es como el de PC.** Lo que llevas, con lo que
+  hay dentro de cada contenedor («(contiene: ...)»), lo que llevas puesto
+  aparte («Llevas puesto:») y, si hay límite de peso, el peso («Peso: 6/8»).
+- **`LLEVAR_MAX`: sin la variable, o a 0, no hay límite de peso.** También en
+  PC. El PC ponía 50 sin variable y, a 0, no dejaba coger nada que pesara; las
+  máquinas no limitaban. El inventario solo dice el peso si hay límite.
+- **El condact `GET` hace en las máquinas lo mismo que en PC.** No coge lo fijo (dice «No
+  puedes coger eso.»), respeta el peso y deja como está lo que ya llevas
+  (antes, a un objeto puesto se lo quitaba).
+- **`_PESO_ACT` vale en las máquinas el peso que se lleva.** Como en PC (antes,
+  0): el motor lo calcula cuando se lee, en una condición o en un `PRINT`.
+- **`PRINT "{_PUNTOS}"` y las demás variables de sistema salían a 0 en PC.**
+  Se guardan sin el guion bajo y la sustitución las buscaba con él.
+- **`before_turn` ve la orden del turno también en PC.** El PC corría
+  `before_turn` antes de analizar la orden, y ni él ni los temporizadores ni
+  `after_turn` veían `VERB`, `NOUN1` y `NOUN2` (un `IF VERB SALTAR` en
+  `before_turn` no se cumplía nunca); las máquinas sí. Ahora en todas partes
+  se analiza primero y los tres ven las palabras del turno, como en PAWS.
+- **En las máquinas, los temporizadores iban después de `after_turn`.** El
+  manual y el PC dicen al revés: respuestas, acción de serie, temporizadores y
+  `after_turn`. Ahora es así en todas partes.
+- **El `on_enter` de una sala corre cuando se entra, también en las máquinas.**
+  Hasta ahora iba al final del turno (detrás de `after_turn`), y el de la sala
+  inicial después de la primera orden. Ahora, como en PC: al andar, después de
+  describir la sala; al empezar, después de describir la inicial; y con `GOTO`,
+  en ese momento, así que lo que va detrás del `GOTO` sale después. Un `GOTO` a
+  la misma sala también lo corre.
+- **Las máquinas no tenían PONERSE, QUITARSE, ABRIR, CERRAR, METER ni SACAR.**
+  Respondían «No entiendo eso», aunque el manual decía que sí. Ahora hacen lo
+  mismo que el intérprete de PC y con sus mismos mensajes (los del autor en
+  `metadata.mensajes` o los de serie del idioma del juego): ponerse solo lo que
+  llevas y se puede poner, abrir con la llave si la llevas (y decir lo que hay
+  dentro), no meter nada en un contenedor cerrado ni pasar de su capacidad, y
+  no sacar algo si luego llevarías demasiado peso. PONER X EN Y es METER. En el
+  motor, los mensajes son plantillas (`game_engine.PLANTILLAS`, impresas por
+  `print_tpl`) con el nombre del objeto donde toque.
+- **EXAMINAR hace en las máquinas lo mismo que en PC.** Ve también lo que llevas puesto y
+  lo que hay en un contenedor abierto, dice lo que tiene dentro un contenedor
+  abierto (o que está vacío) y a oscuras no ve nada.
+- **El peso, en las máquinas, cuenta lo que va dentro de los contenedores.**
+  Como en PC: un saco con una piedra pesa los dos, y coger un contenedor lleno
+  cuenta lo que lleva. Antes solo contaban los objetos sueltos, y en un byte que
+  pasado 255 se daba la vuelta.
+- **`ON COGER LINTERNA` no casaba nunca en las máquinas.** Las palabras de las
+  cabeceras `ON` se buscaban enteras, y el vocabulario guarda 5 letras: una
+  palabra de más de 5 daba 0, que en el hueco del verbo no casa nunca y en el
+  de un nombre es «la regla no pide nada», o sea que `ON COGER LINTERNA`
+  casaba con cualquier cosa que se cogiera. En PC iba bien. Ahora se buscan
+  como en PC (5 letras, sin tildes), `ON CAVAR #arena` vale por el nombre de la
+  arena también en las máquinas, y una palabra que no está en el vocabulario
+  deja la regla fuera con un aviso en vez de hacerla casar con todo. Ningún
+  juego de ejemplo lo usaba; en *La aventura original* (importada de DAAD) dos
+  reglas con nombres con tilde casaban con cualquier nombre.
+- **`IF VERB EXAMINAR` o `IF NOUN1 LINTERNA` no se cumplían nunca.** En las máquinas una
+  palabra larga valía 0 (`NOUN1 0` es «no hay nombre») y en PC se comparaba sin
+  recortar, así que no se cumplían nunca en ninguno de los dos. Ahora las dos
+  partes las comparan en su forma de 5 letras (o por el nombre de un objeto).
+- **Una respuesta vacía hacía RECUPERAR en las máquinas.** Un `ON` sin nada que
+  compilar (solo comentarios) se rellenaba con el opcode 63 para no confundirlo
+  con un alias, y el 63 es `RAMLOAD` desde la 3.0. Ahora es un 255, que el
+  motor se salta.
+- **`#objeto.isat = INVEN` (sin arroba) no se cumplía nunca en PC.** El
+  intérprete tomaba `INVEN`, `PUESTO` y `NADA` por variables; las máquinas no.
+- **Multiplicar, dividir y MOD en las máquinas.** El manual los daba por
+  buenos, pero `nativecc` solo sabía sumar y restar: `LET _x = _a * 2` hacía
+  fallar la exportación con un error interno. Ahora son tres operaciones del
+  evaluador del motor (`MUL` 34, `DIV` 35, `MOD` 36) y también se compila el
+  menos delante (`-_x`). Dan lo mismo que el intérprete de PC (división entera;
+  entre 0, da 0) con una diferencia que ya había con `+` y `-`: en las máquinas
+  las variables son bytes y lo que pasa de 255 da la vuelta (20 * 20 = 144).
+- **Las máquinas solo admitían 90 salas y 90 objetos, aunque el manual decía
+  255.** `recolecta` cortaba en 90, un resto del antiguo exportador a BASIC.
+  Ahora el tope de salas es 252 (en el motor, 252-255 son las ubicaciones
+  especiales de los objetos: dentro de un contenedor, puesto, en ninguna parte
+  y llevado) y el de objetos, 255.
+- **Más de 251 verbos o de 253 nombres distintos se perdían sin avisar.** Van
+  numerados con un byte, y pasarse hacía que la palabra cayera en un comodín o
+  en otra y dejara de entenderse. Ahora la exportación se para y dice cuántos
+  hay. Los nombres se numeran seguidos (los de los objetos, los del vocabulario
+  y TODO); antes el de cada objeto era su número de objeto, TODO el 95 y los
+  demás desde el 100.
+- **El manual decía «65.535 palabras de vocabulario».** Era el tamaño del
+  contador de entradas, no un tope de palabras: ahora explica los topes de
+  verbos y nombres y que el de sinónimos lo pone la memoria.
 
 ---
 

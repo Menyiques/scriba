@@ -9,6 +9,7 @@ class Ctx:
         self.vars={}; self.locs={}; self.objs={}
         self.verbs={}; self.nouns={}; self.timers={}
         self.strict=False; self.warnings=[]; self.fxlist=[]
+        self.subs={}                     # NOMBRE de subrutina -> numero
     def msg(self,t):
         if t in self.msgmap: return self.msgmap[t]
         i=self.msgbase+len(self.messages); self.messages.append(t); self.msgmap[t]=i; return i
@@ -21,12 +22,28 @@ class Ctx:
         if self.strict: raise KeyError('loc '+n)
         self.locs[n]=len(self.locs); return self.locs[n]
     def obj(self,n):
+        if str(n).upper()=='#DOALL': return DOALL_OBJ
         for k in (n, n.upper(), n.lower()):
             if k in self.objs: return self.objs[k]
         if self.strict: raise KeyError('obj '+n)
         self.objs[n.upper()]=len(self.objs); return self.objs[n.upper()]
 
 CMP={'=':'EQ','==':'EQ','<>':'NE','!=':'NE','<':'LT','>':'GT'}
+# En los operandos de objeto, 255 es #DOALL: el objeto de la vuelta en curso
+# (el motor lo cambia por curobj en getob). Los objetos son 0-254.
+DOALL_OBJ=255
+
+def _palabra_id(ctx, w, tablas):
+    """Id de una palabra del autor (ON, VERB, NOUN1...) como la ve el
+    jugador: '#objeto' vale por su nombre, y una palabra larga por sus 5
+    primeras letras, que es lo que guarda el vocabulario. None si no esta."""
+    u=str(w).upper()
+    if u.startswith('#'): u=getattr(ctx,'objnoun',{}).get(u,u)
+    u=_sx.translit(u).upper()
+    for k in (u,u[:5]):
+        for t in tablas:
+            if k in t: return t[k]
+    return None
 
 def _es_prop(a):
     """('var', '#objeto.propiedad') -> True. paws_lang deja las propiedades de
@@ -44,6 +61,9 @@ def _prop_rpn(name,ctx):
     din={'carried':'CARRIED','worn':'WORN','present':'PRESENT','open':'HASOBJOPEN',
          'lit':'OBJLIT','locked':'OBJLOCK'}
     if p in din: return [(din[p],o)]
+    if o==DOALL_OBJ:
+        raise ValueError('%s: en las maquinas, de #DOALL solo se leen carried, worn, '
+                         'present, open, lit, locked e isat' % name)
     O=getattr(ctx,'objdata',{}).get(base.upper(),{})
     if p in ('fixed',):
         v='fixed' in [str(x).lower() for x in (O.get('attributes') or [])] or bool(O.get('fixed'))
@@ -64,10 +84,17 @@ def expr_rpn(a,ctx):
     t=a[0]
     if t=='num': return [('CONST',a[1])]
     if _es_prop(a): return _prop_rpn(a[1],ctx)
+    # #objeto suelto: su numero, para compararlo con #DOALL (IF #DOALL = #llave)
+    if t=='var' and str(a[1]).startswith('#'):
+        o=ctx.obj(a[1])
+        return [('DOBJ',)] if o==DOALL_OBJ else [('CONST',o)]
     if t=='var': return [('VAR',ctx.var(a[1]))]
     if t=='bin':
-        op={'+':'ADD','-':'SUB'}[a[1]]
+        # * / y MOD llegaron en la 3.0: antes daban un KeyError al exportar
+        op={'+':'ADD','-':'SUB','*':'MUL','/':'DIV','MOD':'MOD'}[a[1]]
         return expr_rpn(a[2],ctx)+expr_rpn(a[3],ctx)+[(op,)]
+    if t=='neg':                       # -x es 0 - x (en un byte, da la vuelta)
+        return [('CONST',0)]+expr_rpn(a[1],ctx)+[('SUB',)]
     raise ValueError('expr no soportada: %r'%(a,))
 
 PREDMAP={'AT':'AT','NOTAT':'NOTAT','ZERO':'ZERO','NOTZERO':'NOTZERO','DARK':'DARK',
@@ -89,6 +116,9 @@ def _isat_rpn(ctx,o,dst):
     # objeto dentro de un contenedor guarda OBJLOC=CONTAINED y el contenedor
     # en OBJIN; por eso lleva su propio opcode (ISIN).
     s=str(dst); u=s.upper()
+    if u in ('AQUI','@AQUI'):          return [('OBJHERE',o)]   # la sala del jugador
+    if u=='#DOALL':
+        raise ValueError('#DOALL no puede ser el destino (el contenedor) en las maquinas')
     if u in ('INVEN','@INVEN'):        return [('ISAT',o,ge.CARRIED)]
     if u in ('PUESTO','WORN','@ONME'): return [('ISAT',o,ge.WORN)]
     if u in ('NADA','NOWHERE','@NOWHERE'): return [('ISAT',o,ge.NOWHERE)]
@@ -109,12 +139,18 @@ def cond_rpn(a,ctx):
         if nm=='CHANCE': return [('CHANCE',int(args[0])&0xFF)]
         if nm=='TIMER': return [('TIMER',ctx.timers.get(str(args[0]).upper(),0),int(args[1])&0xFF)]
         if nm in ('WORN','NOTWORN'): return [(op,ctx.obj(args[0]))]
-        if nm=='VERB':
-            w=str(args[0]); v=255 if w=='*' else ctx.verbs.get(w.upper(),0)
-            return [('VERB',v)]
-        if nm in ('NOUN1','NOUN2'):
+        # '*' cualquiera, '_' ninguna (VERB _: PARSE de una orden sin verbo).
+        # Hasta la 3.0, una palabra larga (VERB EXAMINAR, NOUN1 LINTERNA) no
+        # se encontraba y valia 0: NOUN1 0 es "no hay nombre". Una que no esta
+        # en el vocabulario no se cumple nunca, como en PC.
+        if nm in ('VERB','NOUN1','NOUN2'):
             w=str(args[0])
-            v=255 if w=='*' else (254 if w=='_' else ctx.nouns.get(w.upper(),0))
+            if w in ('*','_'): return [(nm,255 if w=='*' else 254)]
+            v=_palabra_id(ctx,w,(ctx.verbs,) if nm=='VERB' else (ctx.nouns,))
+            if v is None:
+                ctx.warnings.append('%s %s: no esta en el vocabulario; la condicion '
+                                    'no se cumple nunca' % (nm,w))
+                return [('CONST',0)]
             return [(nm,v)]
         return [(op,ctx.obj(args[0]))]              # CARRIED/PRESENT/ABSENT/NOTCARR
     if t=='cmp':
@@ -124,7 +160,7 @@ def cond_rpn(a,ctx):
             if _es_prop(izq) and str(izq[1]).partition('.')[2].lower() in ('isat','loc','location'):
                 dst=str(der[1]) if der[0]=='var' else ''
                 if (op not in ('=','==','<>','!=') or not (dst.startswith(('@','#'))
-                        or dst.upper() in ('INVEN','PUESTO','NADA','WORN','NOWHERE'))):
+                        or dst.upper() in ('INVEN','PUESTO','NADA','WORN','NOWHERE','AQUI'))):
                     raise ValueError('%s solo admite = o <> con un destino' % izq[1])
                 rpn=_isat_rpn(ctx,ctx.obj(str(izq[1]).partition('.')[0]),der[1])
                 return rpn+([('NOT',)] if op in ('<>','!=') else [])
@@ -170,7 +206,8 @@ def _print_rpn(texto, ctx):
     variable como PRVAR. Un nombre que el juego no declara se deja tal cual,
     con sus llaves, que es lo que hacia el motor antes de existir PRVAR.
     """
-    partes = re.split(r'\{([A-Z_][A-Z0-9_]*)\}', texto)
+    # {#objeto} es su nombre (PRNAME): con DOALL, PRINT "Llevas {#DOALL}."
+    partes = re.split(r'\{(#[A-Za-z0-9_]+|[A-Z_][A-Z0-9_]*)\}', texto)
     if len(partes) == 1:
         mi = ctx.msg(texto)
         return bytes([COP['MESSAGE'], mi & 0xFF, (mi >> 8) & 0xFF])
@@ -181,8 +218,21 @@ def _print_rpn(texto, ctx):
         if i % 2 == 0:
             pendiente += p
             continue
-        if p.upper().replace('_', '') not in ctx.vars:
-            pendiente += '{%s}' % p     # variable desconocida: literal
+        es_obj = p.startswith('#')
+        if es_obj:
+            try:
+                ob = ctx.obj(p)
+            except KeyError:
+                ob = None
+            if ob is None or (ob != DOALL_OBJ and p.upper() not in
+                              {str(k).upper() for k in getattr(ctx, 'objdata', {})}):
+                pendiente += '{%s}' % p     # objeto desconocido: literal
+                continue
+        elif (p.upper().replace('_', '') not in ctx.vars and
+              p.upper().replace('_', '') not in ('PUNTOS', 'TURNOS', 'LLEVARMAX', 'PESOACT')):
+            # variable desconocida: literal (las cuatro del sistema valen siempre,
+            # como en PC, aunque el juego no las declare)
+            pendiente += '{%s}' % p
             continue
         if pendiente:
             mi = ctx.msg(pendiente)
@@ -192,7 +242,10 @@ def _print_rpn(texto, ctx):
         elif primero:
             out += bytes([COP['NEWLINE']])
         primero = False
-        out += bytes([ge.COP_EXTRA['PRVAR'], ctx.var(p)])
+        if es_obj:
+            out += bytes([ge.COP_EXTRA['PRNAME'], ob & 0xFF])
+        else:
+            out += bytes([ge.COP_EXTRA['PRVAR'], ctx.var(p)])
     if pendiente or primero:
         mi = ctx.msg(pendiente)
         out += bytes([COP['MESSAGE'] if primero else COP['MES'],
@@ -201,6 +254,18 @@ def _print_rpn(texto, ctx):
 
 
 def compile_stmt(ln, up, ctx):
+    # Subrutinas: CALL nombre salta al cuerpo de SUB nombre ... ENDSUB y
+    # RETURN sale de el antes de su final (ver paws_lang.separa_subs)
+    _pal=up.split()
+    if _pal and _pal[0]=='CALL':
+        if len(_pal)<2: raise ValueError('CALL sin nombre de subrutina')
+        if _pal[1] not in ctx.subs: raise ValueError('CALL: no hay ninguna SUB %s' % ln.split()[1])
+        return bytes([ge.COP_EXTRA['CALL'], ctx.subs[_pal[1]] & 0xFF])
+    if up=='RETURN':
+        return bytes([ge.COP_EXTRA['RETURN']])
+    # PARSE: la orden del jugador (JUAN, COGE LA LLAVE) pasa a ser la frase
+    if up=='PARSE':
+        return bytes([ge.COP_EXTRA['PARSE']])
     if up.startswith('PRINT'):
         return _print_rpn(translit(_string(ln)), ctx)
     if up.startswith('LET'):
@@ -226,6 +291,8 @@ def compile_stmt(ln, up, ctx):
         # destino se ignoraba y "CREATE #credencial INVEN" dejaba la
         # credencial en el suelo de la trastienda.
         a=ln.split()
+        if len(a)>=3 and a[2].upper() in ('AQUI','@AQUI'):
+            return bytes([COP['CREATE'],ctx.obj(a[1])])
         if len(a)>=3:
             return bytes([COP['PLACE'],ctx.obj(a[1]),_destval(ctx,a[2])&0xFF])
         return bytes([COP['CREATE' if up.startswith('CREATE') else 'DROP'],ctx.obj(a[1])])
@@ -340,12 +407,43 @@ def compile_stmt(ln, up, ctx):
         return bytes([CX['PLAY'], idx & 0xFF])
     raise ValueError('sentencia no soportada: '+ln.split()[0])
 
+def gather_doall(lines,i):
+    """Las lineas del cuerpo de un DOALL hasta su ENDDOALL (con los DOALL de
+    dentro), y el indice detras del ENDDOALL."""
+    depth=0; cuerpo=[]
+    while i<len(lines):
+        w=(lines[i].strip().split() or [''])[0].upper()
+        if w=='DOALL': depth+=1
+        elif w=='ENDDOALL':
+            if depth==0: return cuerpo,i+1
+            depth-=1
+        cuerpo.append(lines[i]); i+=1
+    return cuerpo,i
+
 def compile_lines(lines,ctx):
     out=bytearray(); i=0
     while i<len(lines):
         ln=lines[i].strip()
         if not ln or ln.upper()=='REM' or ln.upper().startswith('REM '): i+=1; continue
         up=ln.upper()
+        _w=up.split()[0]
+        if _w=='DOALL':
+            # DOALL destino ... ENDDOALL (ver c_doall en el motor)
+            i+=1
+            cuerpo,i=gather_doall(lines,i)
+            _a=ln.split()
+            try:
+                if len(_a)<2: raise ValueError('DOALL sin destino')
+                ce=ge.enc_expr(_isat_rpn(ctx,DOALL_OBJ,_a[1]))
+            except Exception as ex:
+                ctx.warnings.append('DOALL %r: %s'%(ln[5:].strip()[:30],ex)); continue
+            cb=compile_lines(cuerpo,ctx)
+            if len(cb)>255:
+                raise ValueError('DOALL %s: el cuerpo compila a %d bytes y el motor admite '
+                                 '255: pasa una parte a una SUB' % (_a[1],len(cb)))
+            out+=bytes([ge.COP_EXTRA['DOALL'],len(ce)])+ce+bytes([len(cb)])+cb+bytes([ge.COP_EXTRA['DNEXT']])
+            continue
+        if _w=='ENDDOALL': i+=1; continue
         if up.startswith('IF'):
             i+=1
             cond=ln[2:].strip()
@@ -356,8 +454,16 @@ def compile_lines(lines,ctx):
                 ce=ge.enc_expr(cond_rpn(pl.parse_condition(cond),ctx))
             except Exception as ex:
                 ctx.warnings.append('IF %r: %s'%(cond[:40],ex)); continue
-            if el is not None:
-                eb=compile_lines(el,ctx); body=tb+bytes([28,len(eb)])
+            # el salto del IF y el del ELSE son de un byte: un cuerpo mas largo
+            # hacia fallar la exportacion con 'bytes must be in range(0, 256)'
+            eb=compile_lines(el,ctx) if el is not None else None
+            body=tb+bytes([28,len(eb)]) if eb is not None and len(eb)<256 else tb
+            for _parte,_que in ((body,'IF'),(eb or b'','ELSE')):
+                if len(_parte)>255:
+                    raise ValueError('IF %s: el bloque %s compila a %d bytes y el motor '
+                                     'admite 255: pasa una parte a una SUB'
+                                     % (cond[:30],_que,len(_parte)))
+            if eb is not None:
                 out+=bytes([27,len(body)])+ce+body+eb
             else:
                 out+=bytes([27,len(tb)])+ce+tb
@@ -406,12 +512,23 @@ def compile_responses(text, ctx, vocab_id):
         def _ranura(w):
             if w=='_': return 254        # hueco vacio
             if w=='*': return 255        # cualquier palabra o ninguna
-            return vocab_id(w)
+            return vocab_id(w,'noun')
         for v in verbs:
             for n in nouns:
                 for n2 in nouns2:
-                    vid=0 if v in ('_','*') else vocab_id(v)
-                    entries.append((vid,_ranura(n),_ranura(n2),bc))
+                    vid=0 if v in ('_','*') else vocab_id(v,'verb')
+                    r1=_ranura(n); r2=_ranura(n2)
+                    # Una palabra que no esta en el vocabulario no casa nunca
+                    # (como en PC): la entrada sobra. Antes valia 0, que en un
+                    # hueco de nombre es "la regla no pide nada" y casaba con
+                    # cualquier cosa.
+                    if None in (vid,r1,r2):
+                        ctx.warnings.append('ON %s: %s no esta en el vocabulario; '
+                                            'la regla no casara nunca'
+                                            % (ln[3:].strip()[:40],
+                                               [w for w,x in ((v,vid),(n,r1),(n2,r2)) if x is None][0]))
+                        continue
+                    entries.append((vid,r1,r2,bc))
     return entries
 
 import spectrum_export as _sx
@@ -513,13 +630,38 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj
         op=1 if (is_cont and O.get('open')) else 0
         lk=1 if (is_cont and O.get('locked')) else 0
         wt=int(O.get('weight',0) or 0)&0xFF
+        # PONERSE, ABRIR y METER (los verbos de serie, como en el interprete)
+        attr=((1 if O.get('wearable') else 0) | (2 if O.get('openable') else 0)
+              | (4 if O.get('container') else 0))
+        _key=O.get('key')
+        key=c.objidx.get(_key,0) if _key else 0    # la llave + 1 (0 = no tiene)
+        try: cap=max(0,int(O.get('capacity',0) or 0))
+        except (TypeError,ValueError): cap=0
         objects.append({'name':ni,'init':ii,'desc':di,'noun':noun,'loc':loc,'fixed':fixed,
                         'light':light,'lit':lit,'open':op,'locked':lk,'incont':incont,
-                        'weight':wt})
+                        'weight':wt,'attr':attr,'key':key,'cap':cap})
     # contexto con indices de recolecta
-    if len(c.vars)>ge.NRAM:
-        raise ValueError('el motor nativo admite %d variables como mucho '
-                         '(FLAGS), y el juego declara %d'%(ge.NRAM,len(c.vars)))
+    if len(c.vars)>ge.NVAR_MAX:
+        raise ValueError('las maquinas admiten %d variables como mucho, y el juego '
+                         'declara %d (contando las del sistema)'%(ge.NVAR_MAX,len(c.vars)))
+    # Verbos y nombres van numerados con un byte. Verbos: 1-254 (el 255 cierra
+    # la tabla de respuestas y es el comodin *). Nombres: 1-253 (254 y 255 son
+    # los comodines _ y *). Pasarse no daba error: el numero se salia del byte,
+    # caia en un comodin u otra palabra y esa palabra dejaba de entenderse.
+    # (recolecta numera las direcciones 1-6 y el resto desde el 10: el 7, el 8
+    # y el 9 no se usan, asi que caben 251 verbos distintos)
+    _nverb=len(set(c.verbid.values()))
+    if c.verbid and max(c.verbid.values())>254:
+        raise ValueError('las maquinas admiten 251 verbos distintos como mucho '
+                         '(contando las 6 direcciones y los de serie), y el juego '
+                         'tiene %d. Junta como sinonimos los verbos que hagan lo '
+                         'mismo.'%_nverb)
+    _nnoun=len(set(c.nounid.values()))
+    if c.nounid and max(c.nounid.values())>253:
+        raise ValueError('las maquinas admiten 253 nombres distintos como mucho '
+                         '(los de los objetos, los del vocabulario y TODO), y el '
+                         'juego tiene %d. Junta como sinonimos los nombres que '
+                         'signifiquen lo mismo.'%_nnoun)
     ctx=Ctx(msgbase=len(messages)); ctx.strict=True
     ctx.msgmap.update(_vistos)          # un PRINT igual que un texto fijo, lo reusa
     ctx.vars={k.upper().replace('_',''):i for i,k in enumerate(c.vars.keys())}
@@ -554,27 +696,46 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj
     # cabeceras 'ON SALIR' son las de ACABAR, no las de SALIDAS.
     _legado_salir=any(str(k)[:5].upper()=='SALIR'
                       for k in ((g.get('vocabulary') or {}).get('verbs') or {}))
-    def vocab_id(word):
-        u=word.upper()
-        if _legado_salir and u=='SALIR' and c.verbid.get('ACABA'): return c.verbid['ACABA']
-        if u in c.verbalias: return c.verbalias[u]
-        if u in c.nounalias: return c.nounalias[u]
-        return 0
-    responses=compile_responses(cd.get('responses','') or '', ctx, vocab_id)
-    before=compile_lines((cd.get('before_turn','') or '').split('\n'), ctx)
-    after=compile_lines((cd.get('after_turn','') or '').split('\n'), ctx)
-    # on_enter de cada localizacion. El motor nativo no tiene tabla de procs por
-    # sala -- eso obligaria a tocar el formato de la base de datos, que comparten
-    # las cuatro maquinas -- asi que se sintetizan aqui, al final de after_turn,
-    # con el predicado ENTERED delante: "si he cambiado de sala en este turno y
-    # estoy en @x, corre el on_enter de @x".
+    ctx.objnoun={str(k).upper(): str((v or {}).get('noun') or '')
+                 for k,v in (g.get('objects') or {}).items()}
+    def vocab_id(word, tipo='verb'):
+        # Igual que el interprete de PC (_canon_slot): '#objeto' vale por su
+        # nombre ('ON cavar #arena' = 'ON cavar arena') y una palabra larga
+        # por sus 5 primeras letras, que es lo que guarda el vocabulario. Hasta
+        # la 3.0, 'ON COGER LINTERNA' daba 0 en las maquinas: la regla no
+        # casaba nunca (verbo) o casaba con cualquier nombre.
+        if _legado_salir and _sx.translit(word).upper()[:5]=='SALIR' and c.verbid.get('ACABA'):
+            return c.verbid['ACABA']
+        tablas=(c.verbalias,c.nounalias) if tipo=='verb' else (c.nounalias,c.verbalias)
+        return _palabra_id(ctx, word, tablas)
+    # Subrutinas: se sacan de todas las secciones antes de compilar nada, para
+    # que CALL conozca los nombres aunque la SUB venga despues. Cada seccion
+    # se compila luego sin sus bloques SUB.
+    _secs={}; _subs={}
+    for _k,_v in cd.items():
+        if isinstance(_v,(list,tuple)) and _v and not isinstance(_v[0],str):
+            continue
+        _secs[_k],_ss=pl.separa_subs(_v or '')
+        for _n,_cu in _ss.items(): _subs.setdefault(_n,_cu)
+    if len(_subs)>pl.SUB_MAX:
+        raise ValueError('las maquinas admiten %d subrutinas como mucho, y el '
+                         'juego trae %d' % (pl.SUB_MAX, len(_subs)))
+    ctx.subs={_n:_i for _i,_n in enumerate(_subs)}
+    subs=[compile_lines(_cu, ctx) for _cu in _subs.values()]
+    def _sec(k): return '\n'.join(_secs.get(k) or [])
+    responses=compile_responses(_sec('responses'), ctx, vocab_id)
+    before=compile_lines(_sec('before_turn').split('\n'), ctx)
+    after=compile_lines(_sec('after_turn').split('\n'), ctx)
+    # on_enter de cada localizacion: un solo bloque, "IF AT @x THEN <on_enter de
+    # @x> ENDIF" por cada sala que lo tenga, que el motor corre al andar (tras
+    # describir), al empezar (la sala inicial) y en cada GOTO, en el sitio:
+    # cuando lo hace el interprete de PC.
     #
-    # Hasta la v2.53 on_enter NO se compilaba: lo miraban el interprete de PC y
-    # el camino BASIC, y en las cuatro maquinas nativas no se ejecutaba nunca.
-    # Un juego que lo usara se comportaba distinto en PC sin decir nada.
-    #
-    # Diferencia que queda con el interprete: alli el on_enter corre DURANTE el
-    # movimiento y aqui al cerrar el turno, o sea despues del resto de after_turn.
+    # Hasta la v2.53 on_enter NO se compilaba, y hasta la 3.0 iba al final de
+    # after_turn con el predicado ENTERED delante, o sea al cerrar el turno: tras
+    # los temporizadores y lo demas, y el de la sala inicial despues de la
+    # primera orden.
+    onenter=b''
     for _nom, _lid in loc_by_id:
         _oe = (g['locations'][_nom] or {}).get('on_enter')
         if isinstance(_oe, (list, tuple)):
@@ -584,11 +745,14 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj
         _cuerpo = compile_lines(str(_oe).split(chr(10)), ctx)
         if not _cuerpo:
             continue
-        _cond = ge.enc_expr([('ENTERED',), ('AT', _lid - 1), ('AND',)])
+        if len(_cuerpo) > 255:
+            raise ValueError('el on_enter de %s compila a %d bytes y el motor admite 255: '
+                             'pasa una parte a una SUB' % (_nom, len(_cuerpo)))
+        _cond = ge.enc_expr([('AT', _lid - 1)])
         # mismo formato que emite compile_lines para un IF: [27, len(cuerpo)]
         # + condicion + cuerpo
-        after += bytes([ge.COP_EXTRA['IF'], len(_cuerpo)]) + _cond + _cuerpo
-    onstart=compile_lines((cd.get('on_start','') or '').split('\n'), ctx)
+        onenter += bytes([ge.COP_EXTRA['IF'], len(_cuerpo)]) + _cond + _cuerpo
+    onstart=compile_lines(_sec('on_start').split('\n'), ctx)
     # Inicializa las variables a su valor inicial al arrancar. El motor pone todos
     # los flags a 0, pero el juego espera valores como HORA_H=3 o LLEVAR_MAX=100.
     # Se prepone un LET (flag,valor) por cada variable con valor inicial != 0, igual
@@ -688,6 +852,8 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj
                        'loop':1 if T.get('loop') else 0,
                        'active':1 if T.get('active') else 0,
                        'expire':bytes(exp)})
+    # PONERSE, QUITARSE, ABRIR, CERRAR, METER, SACAR y EXAMINAR: sus mensajes
+    plantillas=_plantillas(g, ctx)
     messages=messages+ctx.messages
     # verbos de sistema
     def vid_of(*names):
@@ -696,7 +862,10 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj
         return 0
     sysverbs={'look':vid_of('MIRAR','M'),'quit':vid_of('FIN','ACABA','SALIR'),
               'get':vid_of('COGER'),'drop':vid_of('DEJAR'),
-              'inven':vid_of('INVEN','I'),'exam':vid_of('EXAMI','EXAM')}
+              'inven':vid_of('INVEN','I'),'exam':vid_of('EXAMI','EXAM'),
+              'say':vid_of('DECIR'),
+              'poner':vid_of('PONER'),'quita':vid_of('QUITA'),'abrir':vid_of('ABRIR'),
+              'cerra':vid_of('CERRA'),'meter':vid_of('METER'),'sacar':vid_of('SACAR')}
     # nombre que significa "todo" (para COGER/DEJAR TODO)
     vall=0
     for w in ('TODO','TODOS','TODAS','TODA','ALL'):
@@ -718,13 +887,69 @@ def compile_game(c, sysm, width=40, filas=0, ficha=None, imagen_intro=False, obj
     info=dict(nmsg=len(messages),nloc=len(locations),nobj=len(objects),
               nvocab=len(vocab),nresp=len(responses),
               before=len(before),after=len(after),onstart=len(onstart),
+              subs=sum(len(x)+2 for x in subs),
               warnings=ctx.warnings)
     return dict(messages=messages,locations=locations,vocab=vocab,objects=objects,
                 responses=responses,startloc=startloc,sysverbs=sysverbs,width=width,
                 proc_before=before,proc_after=after,proc_onstart=onstart,vall=vall,
+                proc_onenter=onenter,
+                subs=subs,plantillas=plantillas,
                 font_acc=_font_block(),timers=timers,
-                llevarmax=ctx.vars.get('LLEVARMAX',255),
+                # indice de LLEVAR_MAX + 1 (0 = no hay): con 256 variables, el
+                # 255 es una variable mas y no puede ser la marca de "no hay"
+                llevarmax=(ctx.vars['LLEVARMAX']+1) if 'LLEVARMAX' in ctx.vars else 0,
+                # PESO_ACT la calcula el motor al leerla (var_lee), como el PC
+                pesoact=(ctx.vars['PESOACT']+1) if 'PESOACT' in ctx.vars else 0,
+                # las que quedan al FINAL, con las que se haya inventado algun
+                # condact: el motor reserva FLAGS a este tamano (tamanos_equ)
+                nvars=_nvars_final(ctx),
                 pantallas=list(ctx.scrlist)), info
+
+
+def _plantillas(g, ctx):
+    """Las plantillas de game_engine.PLANTILLAS, con el mismo texto que el
+    interprete de PC (PAWSInterpreter._t): el del autor en metadata.mensajes y,
+    si no, el de interpreter.MSGS en el idioma del juego. Cada una, en bytes:
+    5 + mensaje (trozo de texto), 1 / 2 / 4 (un nombre de objeto), 3 + mensaje
+    (la lista de lo que hay dentro, con ese separador) y 0 al final."""
+    from interpreter import MSGS
+    meta=(g.get('metadata') or {})
+    ov=meta.get('mensajes') or {}
+    lng=str(meta.get('language') or 'es').strip().lower()
+    idx=(2 if lng.startswith(('pt','por')) else 1 if lng.startswith('en')
+         else 3 if lng.startswith('ca') else 4 if lng.startswith('fr') else 0)
+    out=[]
+    for _nombre,mid,huecos in ge.PLANTILLAS:
+        txt=ov.get(mid)
+        if not txt:
+            row=MSGS.get(mid) or ('',)
+            txt=row[idx] if idx<len(row) else row[0]
+        if mid=='contiene_inline':
+            txt=' '+str(txt)        # va detras del nombre: "  - un saco (contiene: ...)"
+        h=dict(ge.PLANTILLA_HUECOS); h.update(huecos or {})
+        b=bytearray()
+        for trozo in re.split(r'(\{[a-z]+\})',translit(str(txt))):
+            m=re.fullmatch(r'\{([a-z]+)\}',trozo)
+            if m and m.group(1) in h:
+                if h[m.group(1)]==3:
+                    sep=ctx.msg(', ')
+                    b+=bytes([3,sep&0xFF,(sep>>8)&0xFF])
+                else:
+                    b.append(h[m.group(1)])
+            elif trozo:
+                mi=ctx.msg(trozo)
+                b+=bytes([5,mi&0xFF,(mi>>8)&0xFF])
+        b.append(0)
+        out.append(bytes(b))
+    return out
+
+def _nvars_final(ctx):
+    n=len(ctx.vars)
+    if n>ge.NVAR_MAX:
+        raise ValueError('las maquinas admiten %d variables como mucho, y el juego '
+                         'usa %d (contando las del sistema y las que los condacts '
+                         'usan sin declarar)'%(ge.NVAR_MAX,n))
+    return n
 
 def _font_block():
     # 16 glifos de acento (224-239) extraidos del font 8x8 (cpc_font), con trazo de

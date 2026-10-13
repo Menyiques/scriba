@@ -48,7 +48,7 @@ def construir(game):
             spec['messages'], spec['locations'], spec['vocab'], spec['objects'],
             spec['responses'], spec['startloc'], spec['sysverbs'], spec['width'],
             load=dbaddr, proc_before=spec['proc_before'], proc_after=spec['proc_after'],
-            proc_onstart=spec['proc_onstart'], hdrbuf=0, imgbuf=0,
+            proc_onstart=spec['proc_onstart'], subs=spec.get('subs', ()), plantillas=spec.get('plantillas', ()), proc_onenter=spec.get('proc_onenter', b''), pesoact=spec.get('pesoact', 0), hdrbuf=0, imgbuf=0,
             loc_slot=bytes([255] * len(spec['locations'])), vall=spec['vall'],
             font_acc=spec['font_acc'], timers=spec['timers'],
             llevarmax=spec['llevarmax'])[0]
@@ -85,6 +85,13 @@ class Teclado:
     def __init__(self, cpu, mem, sym):
         self.puertos = [mem[sym['nxkport'] + i] for i in range(8)]
         self.tabla = [mem[sym['nxktab'] + i] for i in range(40)]
+        # simbolo -> tecla con SYMBOL SHIFT (NXSYMT: la coma y las comillas
+        # de las ordenes a personajes)
+        self.simbolos = {}
+        i = sym.get('nxsymt')
+        while i is not None and mem[i]:
+            self.simbolos[mem[i + 1]] = mem[i]
+            i += 2
         self.pulsadas = []
         cpu.hook_in[0xFE] = self._leer
 
@@ -93,7 +100,11 @@ class Teclado:
         return divmod(self.tabla.index(cod), 5)
 
     def pulsa(self, ch):
-        self.pulsadas = [self._pos(ch)]
+        cod = ord(ch) if isinstance(ch, str) else ch
+        if cod in self.simbolos:          # SYMBOL SHIFT (fila 7, bit 1) + tecla
+            self.pulsadas = [(7, 1), self._pos(self.simbolos[cod])]
+        else:
+            self.pulsadas = [self._pos(ch)]
 
     def pulsa_con_caps(self, ch):
         """CAPS SHIFT (fila 0, bit 0) mas otra tecla: asi se escribe el borrado."""
@@ -421,8 +432,8 @@ def verificar(game):
         chk('TIMER_RESET', mem[TCUR] == antes)
         cond([CX['TSTOP'], 0])
         chk('TIMER_STOP', mem[TACT] == 0)
-    lm = spec['llevarmax']
-    if lm != 255:
+    lm = spec['llevarmax'] - 1    # va como indice + 1 (0 = no hay LLEVAR_MAX)
+    if lm >= 0:
         oi = 0
         mem[OBJLOC + oi] = cur
         mem[objw + oi] = 50

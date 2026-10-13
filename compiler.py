@@ -97,8 +97,9 @@ _OBJ_CMDS = {'GET', 'DROP', 'LIT', 'UNLIT', 'OPEN', 'CLOSE', 'LOCK', 'UNLOCK',
 
 
 def _resolves_to_object(arg: str, objects: dict) -> bool:
-    """¿arg es un id de objeto o coincide con el noun (5 letras) de alguno?"""
-    if arg in objects:
+    """¿arg es un id de objeto o coincide con el noun (5 letras) de alguno?
+    #DOALL es el objeto de la vuelta de un DOALL."""
+    if arg in objects or arg.upper() == '#DOALL':
         return True
     a5 = arg[:5].upper()
     return any((o.get("noun") or "")[:5].upper() == a5 for o in objects.values())
@@ -124,6 +125,13 @@ def validate_script(name: str, script, game: dict, errors: list, warnings: list)
     timers    = game.get("timers", {})
     if_depth = on_depth = 0
     prev_was_on = False
+    # Subrutinas: SUB nombre ... ENDSUB solo al nivel de arriba de una seccion
+    # de condacts; CALL tiene que nombrar una que exista; RETURN, dentro de una
+    subs = paws_lang.subs_del_juego(game) if paws_lang else {}
+    en_condacts = name.startswith('condacts.')
+    en_sub = None
+    doall_depth = 0
+    aviso_doall = False
 
     for raw in lines:
         code = raw.strip()
@@ -138,7 +146,54 @@ def validate_script(name: str, script, game: dict, errors: list, warnings: list)
         cmd = tokens[0].upper()
         up  = code.upper()
 
-        if cmd == 'IF' and ' THEN' in up:
+        if paws_lang and paws_lang.es_sub(code):
+            nom = paws_lang.es_sub(code)
+            if not en_condacts:
+                errors.append(f"{name}: SUB {tokens[1]}: las subrutinas se escriben "
+                              f"en los condacts (respuestas, before_turn...), no aquí")
+            elif en_sub or if_depth or on_depth:
+                errors.append(f"{name}: SUB {tokens[1]} dentro de otro bloque: las "
+                              f"subrutinas van fuera de los ON, los IF y otras SUB")
+            en_sub = nom
+            sub_if = if_depth
+        elif cmd == 'SUB':
+            errors.append(f"{name}: '{code}': SUB lleva un nombre de letras, "
+                          f"números y _ (SUB abre_puerta)")
+        elif cmd == 'ENDSUB':
+            if not en_sub:
+                errors.append(f"{name}: ENDSUB sin SUB")
+            elif if_depth != sub_if:
+                errors.append(f"{name}: SUB {en_sub}: algún IF sin ENDIF")
+                if_depth = sub_if
+            en_sub = None
+        elif cmd == 'CALL':
+            if len(tokens) < 2:
+                errors.append(f"{name}: CALL sin nombre de subrutina")
+            elif tokens[1].upper() not in subs:
+                errors.append(f"{name}: CALL {tokens[1]}: no hay ninguna SUB {tokens[1]}")
+        elif cmd == 'RETURN':
+            if not en_sub:
+                errors.append(f"{name}: RETURN fuera de una subrutina (SUB ... ENDSUB)")
+        elif cmd == 'DOALL':
+            doall_depth += 1
+            dest = tokens[1] if len(tokens) > 1 else ''
+            if not dest:
+                errors.append(f"{name}: DOALL sin destino (DOALL @sala, INVEN, PUESTO, "
+                              f"AQUI o #contenedor)")
+            elif dest.upper() == '#DOALL':
+                errors.append(f"{name}: DOALL #DOALL: el destino no puede ser el objeto de "
+                              f"otro DOALL")
+            elif dest not in locations and dest not in objects \
+                    and dest.upper() not in ("@INVEN", "@ONME", "@NOWHERE", "INVEN",
+                                             "PUESTO", "NADA", "AQUI", "@AQUI"):
+                errors.append(f"{name}: DOALL {dest}: no es una localización, INVEN, "
+                              f"PUESTO, NADA, AQUI ni un objeto")
+        elif cmd == 'ENDDOALL':
+            doall_depth -= 1
+            if doall_depth < 0:
+                errors.append(f"{name}: ENDDOALL sin DOALL")
+                doall_depth = 0
+        elif cmd == 'IF' and ' THEN' in up:
             if_depth += 1
             # Validar la sintaxis de la condición con el parser compartido
             cond = code[2:up.rfind(' THEN')].strip()
@@ -183,7 +238,7 @@ def validate_script(name: str, script, game: dict, errors: list, warnings: list)
             dest = tokens[2]
             if dest not in locations \
                and dest.upper() not in ("@INVEN", "@ONME", "@NOWHERE",
-                                        "INVEN", "PUESTO", "NADA") \
+                                        "INVEN", "PUESTO", "NADA", "AQUI", "@AQUI") \
                and dest not in objects:
                 errors.append(f"{name}: destino '{dest}' de {cmd} no existe")
         elif cmd in ('PUTIN', 'TAKEOUT') and len(tokens) > 2:
@@ -192,7 +247,15 @@ def validate_script(name: str, script, game: dict, errors: list, warnings: list)
                     warnings.append(f"{name}: {cmd} '{a}' no es un objeto conocido")
 
         prev_was_on = (cmd == 'ON')
+        if '#DOALL' in up and doall_depth == 0 and not en_sub and cmd != 'DOALL' \
+                and not aviso_doall:
+            warnings.append(f"{name}: #DOALL fuera de un DOALL: no es ningún objeto")
+            aviso_doall = True
 
+    if doall_depth:
+        errors.append(f"{name}: {doall_depth} DOALL sin ENDDOALL")
+    if en_sub:
+        errors.append(f"{name}: SUB {en_sub} sin ENDSUB")
     if if_depth:
         errors.append(f"{name}: {if_depth} IF sin ENDIF")
     if on_depth:
@@ -293,6 +356,21 @@ def validate_scripts(game: dict) -> tuple:
                         game, errors, warnings)
 
     check_predicates(game, errors)
+
+    # Dos SUB con el mismo nombre: valdría la primera y la otra no se llamaría
+    if paws_lang:
+        vistos = {}
+        for sec, script in (game.get("condacts") or {}).items():
+            for ln in paws_lang._codigo_lineas(script):
+                nom = paws_lang.es_sub(ln)
+                if nom and nom in vistos:
+                    errors.append(f"condacts.{sec}: SUB {nom} repetida (ya está en "
+                                  f"condacts.{vistos[nom]}); vale la primera")
+                elif nom:
+                    vistos[nom] = sec
+        if len(vistos) > paws_lang.SUB_MAX:
+            errors.append(f"condacts: {len(vistos)} subrutinas; las máquinas "
+                          f"admiten {paws_lang.SUB_MAX}")
 
     # Nouns duplicados entre objetos: el parser solo distingue las primeras
     # 5 letras, así que dos objetos con el mismo noun son ambiguos

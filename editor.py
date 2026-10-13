@@ -1368,7 +1368,9 @@ class ScribaEditor:
 
     # Vocabulario del mini-BASIC para resaltado y autocompletado
     BASIC_KEYWORDS = ["IF", "THEN", "ELSE", "ENDIF", "ON", "ENDON",
-                      "AND", "OR", "NOT", "MATCH"]
+                      "AND", "OR", "NOT", "MATCH",
+                      "SUB", "ENDSUB", "CALL", "RETURN", "PARSE",
+                      "DOALL", "ENDDOALL"]
     BASIC_COMMANDS = ["PRINT", "PRINTLN", "LET", "ADDSCORE", "GOTO", "DESC",
                       "SCORE", "END", "QUIT", "NEWLINE", "GET", "DROP", "LIT",
                       "UNLIT", "OPEN", "CLOSE", "LOCK", "UNLOCK", "DESTROY",
@@ -1414,6 +1416,7 @@ class ScribaEditor:
     _COND_KEYWORDS = frozenset({
         # estructura / lógica / operador
         "ON", "ENDON", "IF", "THEN", "ELSE", "ENDIF", "AND", "OR", "NOT", "MOD",
+        "SUB", "ENDSUB", "CALL", "RETURN", "PARSE", "DOALL", "ENDDOALL",
         # sentencias
         "PRINT", "PRINTLN", "LET", "ADDSCORE", "GOTO", "DESC", "SCORE", "END",
         "QUIT", "NEWLINE", "BEEP", "BORDER", "PAUSE", "INK", "PAPER", "BRIGHT",
@@ -1454,8 +1457,8 @@ class ScribaEditor:
     @classmethod
     def _pretty_condact(cls, text, step="  "):
         """Reindenta un script de condacts en escalones según su anidamiento
-        (ON/ENDON e IF...THEN/ELSE/ENDIF abren y cierran nivel; las cabeceras ON
-        consecutivas comparten nivel) y pone en MAYÚS las palabras clave. No toca
+        (ON/ENDON, IF...THEN/ELSE/ENDIF y SUB/ENDSUB abren y cierran nivel; las
+        cabeceras ON consecutivas comparten nivel) y pone en MAYÚS las palabras clave. No toca
         identificadores, texto entre comillas ni comentarios."""
         lineas = text.split("\n")
         out = []
@@ -1467,13 +1470,15 @@ class ScribaEditor:
                 continue
             u = s.upper()
             # cierres: reducen ANTES de imprimir
-            if u in ("ENDON", "ENDIF", "ELSE"):
+            if u in ("ENDON", "ENDIF", "ELSE", "ENDSUB", "ENDDOALL"):
                 depth = max(0, depth - 1)
             out.append(step * depth + cls._up_keywords(s))
             # aperturas: aumentan DESPUÉS
             if u == "ELSE":
                 depth += 1
             elif u.startswith("IF ") and u.endswith("THEN"):
+                depth += 1
+            elif u.startswith("SUB ") or u.startswith("DOALL ") or u == "DOALL":
                 depth += 1
             elif u.startswith("ON ") or u == "ON":
                 # cabeceras ON apiladas: solo abre nivel la última del grupo
@@ -5340,8 +5345,8 @@ class ScribaEditor:
     # IF…ENDIF y por ON…ENDON: así, al filtrar, solo se muestran los bloques
     # que realmente mencionan la entidad (y no todo un condact entero porque
     # la mencione en una línea suelta lejana).
-    _CS_OPEN  = {'ON', 'IF'}
-    _CS_CLOSE = {'ENDON', 'ENDIF'}
+    _CS_OPEN  = {'ON', 'IF', 'SUB', 'DOALL'}
+    _CS_CLOSE = {'ENDON', 'ENDIF', 'ENDSUB', 'ENDDOALL'}
 
     @staticmethod
     def _crossref_segments(text):
@@ -7983,16 +7988,19 @@ class InterpreterWindow:
         if text:
             i.last_command = text
         i.turns += 1
+        # la orden se analiza antes de before_turn, que ya ve sus palabras
+        # (como el interprete y las maquinas)
+        verb, noun1, noun2 = i.parse(text)
+        i._palabras = (verb, noun1, noun2)
         run_section_blocks('before_turn', i.condacts.get('before_turn', []))
         if not alive():
             return
         if not i.running:
             return self.editor.root.after(0, self._end)
-        verb, noun1, noun2 = i.parse(text)
         if not text:
-            self._write((i._t('linea_vacia') or 'No entiendo eso.') + chr(10), 'warn')
+            self._write((i._t('linea_vacia') or i._no_entiendo()) + chr(10), 'warn')
         elif not verb:
-            self._write('No entiendo eso.' + chr(10), 'warn')
+            self._write(i._no_entiendo() + chr(10), 'warn')
             # El turno cuenta igualmente: timers y after_turn corren abajo
             # (paridad con el CLI; antes el reloj se congelaba).
         else:
@@ -8011,7 +8019,7 @@ class InterpreterWindow:
                 if not handled:
                     handled = i.handle_builtin(verb, noun1, noun2)
                 if not handled:
-                    print('No puedes hacer eso.')
+                    print(i._t('no_hacer'))
             self._write(buf.getvalue())
             leave_section()
         if not alive():

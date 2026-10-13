@@ -79,6 +79,13 @@ VERBS = {
     'RECUP': {'es': ['recuperar', 'recupera', 'cargar', 'restaurar', 'load'],
               'en': ['load', 'restore'],
               'pt': ['recuperar', 'recupera', 'carregar', 'restaurar', 'load']},
+    # DECIR: hablar a un personaje. Con una orden entre comillas (DECIR A JUAN
+    # "COGE LA LLAVE") o con una coma (JUAN, COGE LA LLAVE), la orden queda
+    # aparte y PARSE la analiza en la respuesta del autor. El verbo no hace nada
+    # por su cuenta: sin respuesta, sale el mensaje de siempre.
+    'DECIR': {'es': ['decir', 'di', 'dile'],
+              'en': ['say', 'tell'],
+              'pt': ['dizer', 'diz', 'diga']},
 }
 
 # Direcciones: CANÓNICO corto (N/S/E/O/U/D) -> {idioma: [palabras]}.
@@ -151,6 +158,8 @@ _CA_FR_VERBS = {
               ['sauver', 'sauvegarder', 'enregistrer', 'save']),
     'RECUP': (['recuperar', 'carregar', 'restaurar', 'load'],
               ['restaurer', 'charger', 'recuperer', 'load']),
+    'DECIR': (['dir', 'digues'],
+              ['dire', 'dis']),
 }
 _CA_FR_DIRS = {
     'N': (['nord', 'n'], ['nord', 'n']),
@@ -206,6 +215,7 @@ LABELS = {
     'QUITA': 'Quitarse', 'METER': 'Meter', 'SACAR': 'Sacar', 'INVEN': 'Inventario',
     'PUNT': 'Puntuación', 'SALID': 'Salidas', 'ACABA': 'Acabar', 'ABRIR': 'Abrir',
     'CERRA': 'Cerrar', 'GRABA': 'Grabar partida', 'RECUP': 'Recuperar partida',
+    'DECIR': 'Decir (órdenes)',
     'N': 'Norte', 'S': 'Sur', 'E': 'Este', 'O': 'Oeste', 'U': 'Arriba', 'D': 'Abajo',
     'EN': 'en / in', 'CON': 'con / with', 'A': 'a / to', 'DE': 'de / from',
     'SOBRE': 'sobre / on', 'BAJO': 'bajo / under', 'PARA': 'para / for',
